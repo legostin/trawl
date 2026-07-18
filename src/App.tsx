@@ -1,50 +1,65 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
+import { TrafficList } from "./components/TrafficList";
+import { FlowDetail } from "./components/FlowDetail";
+import { useFlows } from "./store";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const init = useFlows((s) => s.init);
+  const startProxy = useFlows((s) => s.startProxy);
+  const stopProxy = useFlows((s) => s.stopProxy);
+  const [running, setRunning] = useState(false);
+  const [addr, setAddr] = useState<string>("");
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    init().then((c) => (cleanup = c));
+    return () => cleanup?.();
+  }, [init]);
+
+  const toggle = async () => {
+    if (running) {
+      await stopProxy();
+      setRunning(false);
+      setAddr("");
+    } else {
+      const a = await startProxy(8888);
+      setRunning(true);
+      setAddr(a);
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        color: "#ddd",
+        background: "#1e1e1e",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: 8,
+          borderBottom: "1px solid #333",
         }}
       >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+        <button onClick={toggle}>{running ? "Stop" : "Start"} proxy</button>
+        {addr && <span>Proxy: {addr}</span>}
+      </div>
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <div style={{ width: "45%", borderRight: "1px solid #333" }}>
+          <TrafficList />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <FlowDetail />
+        </div>
+      </div>
+    </div>
   );
 }
 
