@@ -1,4 +1,6 @@
+mod ca;
 mod model;
+mod proxy;
 mod store;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
