@@ -24,6 +24,19 @@ export function SetupPanel() {
     <div style={{ padding: 16, overflow: "auto", height: "100%", fontSize: 13, lineHeight: 1.5 }}>
       <h2 style={{ marginTop: 0 }}>Настройка перехвата трафика телефона</h2>
 
+      <div
+        style={{
+          marginBottom: 12,
+          padding: 10,
+          borderRadius: 6,
+          background: "#3a2a1e",
+          border: "1px solid #6a4a2a",
+        }}
+      >
+        <b>Сначала нажмите «Start proxy»</b> в шапке — до этого прокси не запущен и телефон
+        не сможет подключиться.
+      </div>
+
       <ol style={{ paddingLeft: 20 }}>
         <li>
           Телефон и этот Mac должны быть в одной Wi-Fi-сети. Адрес прокси:{" "}
