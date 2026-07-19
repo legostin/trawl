@@ -54,6 +54,13 @@ declare const request: HttpCatchRequest;
 /** Ярлык для ctx.response (в фазе response). */
 declare const response: HttpCatchResponse;
 
+/**
+ * Переменные окружения активного проекта. Можно читать и писать —
+ * записанные значения сохраняются в проект и доступны следующим запросам.
+ * Пример: env.token = JSON.parse(response.body).token;
+ */
+declare const env: Record<string, string>;
+
 // ── handler-режим (фаза "handler") ──
 
 /**

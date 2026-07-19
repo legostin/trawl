@@ -2,11 +2,17 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useFlows } from "./store";
 
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   includeHosts: string[];
   excludeHosts: string[];
+  env: EnvVar[];
 }
 
 interface ProjectsFile {
