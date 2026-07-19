@@ -4,7 +4,7 @@ import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
 import { FilterBar } from "./FilterBar";
-import { TrafficList } from "./TrafficList";
+import { TrafficTable } from "./TrafficTable";
 import { FlowDetail } from "./FlowDetail";
 import { ResizableGroup, ResizablePanel, ResizableHandle } from "./ui/resizable";
 
@@ -30,7 +30,7 @@ export function AppShell() {
             <ResizablePanel defaultSize={45} minSize={25} className="flex min-h-0 flex-col">
               <FilterBar />
               <div className="min-h-0 flex-1">
-                <TrafficList />
+                <TrafficTable />
               </div>
             </ResizablePanel>
             <ResizableHandle />
