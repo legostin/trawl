@@ -8,6 +8,13 @@ use crate::rules::glob_to_regex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EnvVar {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -15,6 +22,9 @@ pub struct Project {
     pub include_hosts: Vec<String>,
     /// Хосты-исключения (приоритетнее include).
     pub exclude_hosts: Vec<String>,
+    /// Переменные окружения проекта, доступные в скриптах как env.KEY.
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
 }
 
 /// Матч хоста: голый домен ловит сам домен и поддомены; с `*` — как glob.
@@ -38,6 +48,44 @@ impl Project {
         }
         self.include_hosts.iter().any(|e| host_matches(e, host))
     }
+
+    /// env как JSON-объект для инъекции в скрипт (`env.KEY`).
+    pub fn env_object(&self) -> serde_json::Value {
+        let mut m = serde_json::Map::new();
+        for e in &self.env {
+            if !e.key.is_empty() {
+                m.insert(e.key.clone(), serde_json::Value::String(e.value.clone()));
+            }
+        }
+        serde_json::Value::Object(m)
+    }
+}
+
+/// Преобразует JSON-объект env обратно в упорядоченный Vec<EnvVar>.
+pub fn env_from_object(v: &serde_json::Value) -> Vec<EnvVar> {
+    match v.as_object() {
+        Some(obj) => obj
+            .iter()
+            .map(|(k, val)| EnvVar {
+                key: k.clone(),
+                value: match val {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                },
+            })
+            .collect(),
+        None => vec![],
+    }
+}
+
+/// Обновляет env указанного проекта на диске.
+pub fn update_project_env(dir: &Path, project_id: &str, env: Vec<EnvVar>) -> Result<()> {
+    let mut file = load_projects(dir)?;
+    if let Some(p) = file.projects.iter_mut().find(|p| p.id == project_id) {
+        p.env = env;
+        save_projects(dir, &file)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -73,7 +121,35 @@ mod tests {
             name: "test".into(),
             include_hosts: include.iter().map(|s| s.to_string()).collect(),
             exclude_hosts: exclude.iter().map(|s| s.to_string()).collect(),
+            env: vec![],
         }
+    }
+
+    #[test]
+    fn env_object_and_back() {
+        let mut p = proj(&[], &[]);
+        p.env = vec![
+            EnvVar { key: "TOKEN".into(), value: "abc".into() },
+            EnvVar { key: "".into(), value: "skip".into() },
+        ];
+        let obj = p.env_object();
+        assert_eq!(obj["TOKEN"], "abc");
+        assert!(obj.get("").is_none(), "пустой ключ пропускается");
+
+        let back = env_from_object(&serde_json::json!({ "A": "1", "B": "2" }));
+        assert_eq!(back.len(), 2);
+    }
+
+    #[test]
+    fn update_env_persists() {
+        let tmp = std::env::temp_dir().join(format!("httpcatch-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let file = ProjectsFile { projects: vec![proj(&["x"], &[])], active_id: Some("p1".into()) };
+        save_projects(&tmp, &file).unwrap();
+        update_project_env(&tmp, "p1", vec![EnvVar { key: "K".into(), value: "V".into() }]).unwrap();
+        let back = load_projects(&tmp).unwrap();
+        assert_eq!(back.projects[0].env[0].value, "V");
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 use crate::ca::load_or_create_ca;
 use crate::model::{Flow, FlowState, HttpMessage, ResponseMessage, UrlParts};
-use crate::projects::Project;
+use crate::projects::{env_from_object, update_project_env, Project};
 use crate::rules::{Phase, Rule};
 use crate::scripting::ScriptClient;
 use crate::store::FlowStore;
@@ -39,6 +39,7 @@ struct CaptureHandler {
     rules: SharedRules,
     library: SharedLibrary,
     active_project: SharedProject,
+    data_dir: PathBuf,
 }
 
 fn headers_to_json(headers: &[(String, String)]) -> Value {
@@ -150,6 +151,33 @@ impl CaptureHandler {
     /// Область правил: активный проект → только его правила; иначе — глобальные.
     fn active_scope(&self) -> Option<String> {
         self.active_project.read().unwrap().as_ref().map(|p| p.id.clone())
+    }
+
+    /// env активного проекта как JSON-объект (или {}).
+    fn active_env(&self) -> Value {
+        self.active_project
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.env_object())
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
+    }
+
+    /// Записывает изменённый скриптом env обратно в активный проект (память + диск).
+    fn apply_env(&self, new_env: &Value) {
+        let mut guard = self.active_project.write().unwrap();
+        if let Some(proj) = guard.as_ref() {
+            if proj.env_object() == *new_env {
+                return; // без изменений — не пишем
+            }
+            let id = proj.id.clone();
+            let env = env_from_object(new_env);
+            let mut updated = proj.clone();
+            updated.env = env.clone();
+            *guard = Some(updated);
+            drop(guard);
+            let _ = update_project_env(&self.data_dir, &id, env);
+        }
     }
 
     /// Правило совпадает, если его паттерн матчит любой из кандидатов
@@ -366,7 +394,8 @@ impl HttpHandler for CaptureHandler {
                     "path": url.path,
                     "headers": headers_to_json(&orig_headers),
                     "body": text_of(&display_body, is_text),
-                }
+                },
+                "env": self.active_env(),
             })
             .to_string();
             let prelude = self.library.read().unwrap().clone();
@@ -381,6 +410,9 @@ impl HttpHandler for CaptureHandler {
             })
             .await
             .unwrap_or_else(|_| crate::scripting::ScriptResult::error("handler panicked"));
+            if let Some(e) = &res.env {
+                self.apply_env(e);
+            }
 
             let mut flow = Flow::new_request(
                 id,
@@ -432,6 +464,7 @@ impl HttpHandler for CaptureHandler {
         let mut applied: Vec<String> = Vec::new();
         let mut directive = Directive::Continue;
         let mut script_error: Option<String> = None;
+        let mut env = self.active_env();
         if !rules.is_empty() {
             let prelude = self.library.read().unwrap().clone();
             for rule in &rules {
@@ -443,10 +476,14 @@ impl HttpHandler for CaptureHandler {
                         "path": url.path,
                         "headers": headers_to_json(&work_headers),
                         "body": work_body,
-                    }
+                    },
+                    "env": env,
                 })
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
+                if let Some(e) = res.env.clone() {
+                    env = e;
+                }
                 match res.action.as_str() {
                     "continue" => {
                         if let Some(rv) = &res.request {
@@ -474,6 +511,7 @@ impl HttpHandler for CaptureHandler {
                     _ => script_error = res.error,
                 }
             }
+            self.apply_env(&env);
         }
 
         let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
@@ -555,6 +593,7 @@ impl HttpHandler for CaptureHandler {
         let mut work_body = text_of(&display_body, is_text);
         let mut applied: Vec<String> = Vec::new();
         let mut script_error: Option<String> = None;
+        let mut env = self.active_env();
         if !rules.is_empty() {
             let prelude = self.library.read().unwrap().clone();
             for rule in &rules {
@@ -564,10 +603,14 @@ impl HttpHandler for CaptureHandler {
                         "status": work_status,
                         "headers": headers_to_json(&work_headers),
                         "body": work_body,
-                    }
+                    },
+                    "env": env,
                 })
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
+                if let Some(e) = res.env.clone() {
+                    env = e;
+                }
                 match res.action.as_str() {
                     "continue" => {
                         if let Some(rv) = &res.response {
@@ -586,6 +629,7 @@ impl HttpHandler for CaptureHandler {
                     _ => script_error = res.error,
                 }
             }
+            self.apply_env(&env);
         }
 
         let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
@@ -645,6 +689,7 @@ pub async fn start(
     rules: SharedRules,
     library: SharedLibrary,
     active_project: SharedProject,
+    data_dir: PathBuf,
 ) -> Result<ProxyHandle> {
     let ca = load_or_create_ca(&ca_dir)?;
     let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
@@ -663,6 +708,7 @@ pub async fn start(
         rules,
         library,
         active_project,
+        data_dir,
     };
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -772,7 +818,7 @@ mod tests {
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -807,7 +853,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -862,7 +908,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -899,7 +945,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -980,7 +1026,7 @@ mod tests {
         )];
         let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1021,7 +1067,7 @@ mod tests {
         )];
         let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1067,7 +1113,7 @@ mod tests {
         )];
         let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1128,7 +1174,7 @@ mod tests {
         )];
         let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1188,6 +1234,7 @@ mod tests {
             name: id.into(),
             include_hosts: include.iter().map(|s| s.to_string()).collect(),
             exclude_hosts: vec![],
+            env: vec![],
         }
     }
 
@@ -1200,7 +1247,7 @@ mod tests {
         let (s, r, l, p) = scripting(vec![]);
         *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1237,7 +1284,7 @@ mod tests {
         let (s, r, l, p) = scripting(vec![proj_rule, global_rule]);
         *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1302,7 +1349,7 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let (s, r, l, p) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone())
             .await
             .unwrap();
         let bound = handle.local_addr();

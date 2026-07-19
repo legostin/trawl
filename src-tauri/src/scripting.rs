@@ -21,6 +21,9 @@ pub struct ScriptResult {
     pub reason: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Изменённый скриптом env (пишется обратно в проект).
+    #[serde(default)]
+    pub env: Option<serde_json::Value>,
 }
 
 impl ScriptResult {
@@ -32,6 +35,7 @@ impl ScriptResult {
             mock: None,
             reason: None,
             error: Some(msg.into()),
+            env: None,
         }
     }
 }
@@ -116,8 +120,10 @@ fn build_source(prelude: &str, script: &str) -> String {
     ctx.__action = "continue";
     ctx.mock = function(resp) {{ ctx.__action = "mock"; ctx.__mock = resp; }};
     ctx.abort = function(reason) {{ ctx.__action = "abort"; ctx.__reason = reason || "aborted"; }};
+    if (!ctx.env) ctx.env = {{}};
     const request = ctx.request;
     const response = ctx.response;
+    const env = ctx.env;
     /* ── library ── */
     {prelude}
     /* ── rule script ── */
@@ -127,7 +133,8 @@ fn build_source(prelude: &str, script: &str) -> String {
       request: ctx.request,
       response: ctx.response,
       mock: ctx.__mock || null,
-      reason: ctx.__reason || null
+      reason: ctx.__reason || null,
+      env: ctx.env
     }});
   }} catch (e) {{
     return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
@@ -212,15 +219,17 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
 (function() {{
   try {{
     const ctx = JSON.parse(__input);
+    if (!ctx.env) ctx.env = {{}};
     const request = ctx.request;
+    const env = ctx.env;
     function send(req) {{ return JSON.parse(__native_send(JSON.stringify(req || request))); }}
     function sleep(ms) {{ __native_sleep(ms); }}
     {prelude}
     const __out = (function() {{ {script} }})();
     if (__out === undefined || __out === null) {{
-      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)" }});
+      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env }});
     }}
-    return JSON.stringify({{ action: "respond", response: __out }});
+    return JSON.stringify({{ action: "respond", response: __out, env: ctx.env }});
   }} catch (e) {{
     return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
   }}
@@ -388,6 +397,18 @@ mod tests {
         .unwrap();
         assert_eq!(res.action, "respond");
         assert_eq!(res.response.unwrap()["status"], 201);
+    }
+
+    #[tokio::test]
+    async fn script_reads_and_writes_env() {
+        let res = run(
+            "env.NEW = env.SEED + '!';",
+            r#"{"request":{"headers":{}},"env":{"SEED":"hi"}}"#,
+        )
+        .await;
+        let env = res.env.unwrap();
+        assert_eq!(env["SEED"], "hi", "env читается");
+        assert_eq!(env["NEW"], "hi!", "env пишется и возвращается");
     }
 
     #[tokio::test]
