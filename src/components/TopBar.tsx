@@ -1,8 +1,10 @@
-import { Antenna, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
+import { Antenna, FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
 import { useFlows } from "../store";
+import { useProjects } from "../projects";
 import { useTheme } from "./ThemeProvider";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import { Segmented } from "./ui/segmented";
 import type { View } from "../store";
 
@@ -15,6 +17,10 @@ export function TopBar() {
   const query = useFlows((s) => s.filter.query);
   const setFilter = useFlows((s) => s.setFilter);
   const clearFlows = useFlows((s) => s.clearFlows);
+  const projects = useProjects((s) => s.projects);
+  const activeId = useProjects((s) => s.activeId);
+  const setActive = useProjects((s) => s.setActive);
+  const openEditor = useProjects((s) => s.openEditor);
   const { theme, toggle } = useTheme();
 
   return (
@@ -56,6 +62,22 @@ export function TopBar() {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-1" title="Активный проект">
+          <Select
+            value={activeId ?? ""}
+            onChange={(e) => void setActive(e.target.value || null)}
+          >
+            <option value="">Все домены</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+          <Button variant="ghost" size="iconSm" title="Проекты" onClick={openEditor}>
+            <FolderCog />
+          </Button>
+        </div>
         <Button variant="ghost" size="iconSm" title="Очистить список" onClick={() => clearFlows()}>
           <Trash2 />
         </Button>

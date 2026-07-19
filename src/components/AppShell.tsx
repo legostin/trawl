@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useFlows } from "../store";
+import { useProjects } from "../projects";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
@@ -8,19 +9,22 @@ import { RulesView } from "./RulesView";
 import { FilterBar } from "./FilterBar";
 import { ListPanel } from "./ListPanel";
 import { FlowDetail } from "./FlowDetail";
+import { ProjectEditor } from "./ProjectEditor";
 import { ResizableGroup, ResizablePanel, ResizableHandle } from "./ui/resizable";
 
 export function AppShell() {
   const init = useFlows((s) => s.init);
   const view = useFlows((s) => s.view);
   const detailCollapsed = useFlows((s) => s.detailCollapsed);
+  const loadProjects = useProjects((s) => s.load);
   useKeyboardShortcuts();
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     init().then((c) => (cleanup = c));
+    void loadProjects();
     return () => cleanup?.();
-  }, [init]);
+  }, [init, loadProjects]);
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
@@ -56,6 +60,7 @@ export function AppShell() {
       </main>
 
       <StatusBar />
+      <ProjectEditor />
     </div>
   );
 }
