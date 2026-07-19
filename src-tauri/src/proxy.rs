@@ -47,6 +47,49 @@ fn looks_textual(headers: &[(String, String)]) -> bool {
     })
 }
 
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// Распаковывает тело по Content-Encoding для отображения. При любой ошибке
+/// возвращает исходные байты (лучше показать сырое, чем потерять данные).
+fn decode_body(raw: &[u8], encoding: Option<&str>) -> Vec<u8> {
+    use std::io::Read;
+    let enc = match encoding {
+        Some(e) => e.trim().to_ascii_lowercase(),
+        None => return raw.to_vec(),
+    };
+    if enc.contains("gzip") || enc.contains("x-gzip") {
+        let mut out = Vec::new();
+        let mut dec = flate2::read::MultiGzDecoder::new(raw);
+        if dec.read_to_end(&mut out).is_ok() {
+            return out;
+        }
+    } else if enc.contains("br") {
+        let mut out = Vec::new();
+        let mut dec = brotli::Decompressor::new(raw, 4096);
+        if dec.read_to_end(&mut out).is_ok() {
+            return out;
+        }
+    } else if enc.contains("deflate") {
+        let mut out = Vec::new();
+        let mut dec = flate2::read::ZlibDecoder::new(raw);
+        if dec.read_to_end(&mut out).is_ok() {
+            return out;
+        }
+        // deflate иногда без zlib-обёртки (raw DEFLATE)
+        let mut out2 = Vec::new();
+        let mut dec2 = flate2::read::DeflateDecoder::new(raw);
+        if dec2.read_to_end(&mut out2).is_ok() {
+            return out2;
+        }
+    }
+    raw.to_vec()
+}
+
 impl HttpHandler for CaptureHandler {
     async fn handle_request(
         &mut self,
@@ -86,11 +129,12 @@ impl HttpHandler for CaptureHandler {
         };
         let id = self.store.next_id();
         let is_text = looks_textual(&headers);
+        let display_body = decode_body(&bytes, header_value(&headers, "content-encoding"));
         let flow = Flow::new_request(
             id,
             parts.method.to_string(),
             url,
-            HttpMessage { headers, body: bytes.clone(), body_is_text: is_text },
+            HttpMessage { headers, body: display_body, body_is_text: is_text },
         );
         self.store.insert(flow.clone());
         (self.emit)("flow-added", &flow);
@@ -113,12 +157,14 @@ impl HttpHandler for CaptureHandler {
         let headers = headers_to_vec(&parts.headers);
         let is_text = looks_textual(&headers);
         let status = parts.status.as_u16();
+        // Для отображения храним распакованное тело; клиенту ниже уходят исходные байты.
+        let display_body = decode_body(&bytes, header_value(&headers, "content-encoding"));
         if let Some(id) = self.current_id {
             self.store.update(id, |f| {
                 f.response = Some(ResponseMessage {
                     status,
                     headers: headers.clone(),
-                    body: bytes.clone(),
+                    body: display_body.clone(),
                     body_is_text: is_text,
                 });
                 f.state = FlowState::Completed;
@@ -189,8 +235,33 @@ pub async fn start(
 mod tests {
     use super::*;
     use crate::store::FlowStore;
+    use std::io::Write;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn decode_body_gunzips_gzip_content() {
+        let original = b"{\"hello\":\"world\"}";
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(original).unwrap();
+        let gz = enc.finish().unwrap();
+        assert_ne!(gz, original, "sanity: gzip-байты отличаются от исходных");
+
+        let decoded = decode_body(&gz, Some("gzip"));
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn decode_body_passes_through_when_no_encoding() {
+        let raw = b"plain text";
+        assert_eq!(decode_body(raw, None), raw);
+    }
+
+    #[test]
+    fn decode_body_returns_raw_on_bad_gzip() {
+        let not_gzip = b"not actually gzipped";
+        assert_eq!(decode_body(not_gzip, Some("gzip")), not_gzip);
+    }
 
     // Поднимает простой upstream HTTP-сервер, гоняет запрос через прокси,
     // проверяет, что Flow собрался со статусом ответа.
@@ -267,6 +338,68 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let text = resp.text().await.unwrap();
         assert!(text.contains("BEGIN CERTIFICATE"), "got: {text}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Локальный upstream отдаёт gzip-тело; проверяем, что в сторе оно распаковано.
+    #[tokio::test]
+    async fn decompresses_gzip_response_body() {
+        let payload = b"{\"gzipped\": true, \"msg\": \"hello\"}";
+        let mut enc =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(payload).unwrap();
+        let gz = enc.finish().unwrap();
+
+        // upstream: HTTP/1.1 200 с Content-Encoding: gzip и сжатым телом
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let gz_for_task = gz.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                let gz = gz_for_task.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                        gz.len()
+                    );
+                    let mut out = header.into_bytes();
+                    out.extend_from_slice(&gz);
+                    let _ = sock.write_all(&out).await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ca_dir);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone())
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("http://{upstream_addr}/gzip"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let flows = store.all();
+        let flow = flows.iter().find(|f| f.url.path.contains("/gzip")).unwrap();
+        let body = flow.response.as_ref().unwrap().body.clone();
+        assert_eq!(body, payload, "тело ответа должно быть распаковано в сторе");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
