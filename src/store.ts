@@ -2,12 +2,16 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Flow } from "./types";
+import { flowMatches, emptyFilter, type FlowFilter } from "./filter";
 
 interface FlowsState {
   flows: Flow[];
   selectedId: number | null;
+  filter: FlowFilter;
   select: (id: number) => void;
   upsert: (flow: Flow) => void;
+  setFilter: (patch: Partial<FlowFilter>) => void;
+  filteredFlows: () => Flow[];
   init: () => Promise<() => void>;
   startProxy: (port: number) => Promise<string>;
   stopProxy: () => Promise<void>;
@@ -16,7 +20,13 @@ interface FlowsState {
 export const useFlows = create<FlowsState>((set, get) => ({
   flows: [],
   selectedId: null,
+  filter: emptyFilter,
   select: (id) => set({ selectedId: id }),
+  setFilter: (patch) => set((s) => ({ filter: { ...s.filter, ...patch } })),
+  filteredFlows: () => {
+    const { flows, filter } = get();
+    return flows.filter((f) => flowMatches(f, filter));
+  },
   upsert: (flow) =>
     set((s) => {
       const idx = s.flows.findIndex((f) => f.id === flow.id);
