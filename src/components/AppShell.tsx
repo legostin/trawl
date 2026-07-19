@@ -10,6 +10,7 @@ import { FilterBar } from "./FilterBar";
 import { ListPanel } from "./ListPanel";
 import { FlowDetail } from "./FlowDetail";
 import { ProjectEditor } from "./ProjectEditor";
+import { Toast } from "./Toast";
 import { ResizableGroup, ResizablePanel, ResizableHandle } from "./ui/resizable";
 
 export function AppShell() {
@@ -61,6 +62,7 @@ export function AppShell() {
 
       <StatusBar />
       <ProjectEditor />
+      <Toast />
     </div>
   );
 }

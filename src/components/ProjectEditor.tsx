@@ -103,6 +103,7 @@ function ProjectForm({
 }) {
   const [draft, setDraft] = useState<Project>(project);
   const patch = (p: Partial<Project>) => setDraft((d) => ({ ...d, ...p }));
+  const closeEditor = useProjects((s) => s.closeEditor);
 
   return (
     <div className="flex h-full flex-col">
@@ -114,7 +115,13 @@ function ProjectForm({
           placeholder="Project name"
         />
         <div className="ml-auto flex items-center gap-1">
-          <Button size="sm" onClick={() => void onSave(draft)}>
+          <Button
+            size="sm"
+            onClick={async () => {
+              await onSave(draft);
+              closeEditor();
+            }}
+          >
             Save
           </Button>
           <Button size="iconSm" variant="ghost" title="Delete project" onClick={onDelete}>
@@ -178,6 +185,7 @@ function HostList({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
+          onBlur={add}
           placeholder="example.com"
           className="h-7 font-mono"
         />

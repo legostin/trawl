@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useFlows } from "./store";
+import { useToast } from "./toast";
 
 export interface EnvVar {
   key: string;
@@ -50,6 +51,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   upsert: async (project) => {
     const f = await invoke<ProjectsFile>("save_project", { project });
     set({ projects: f.projects, activeId: f.activeId });
+    useToast.getState().show("Project saved");
   },
   remove: async (id) => {
     const f = await invoke<ProjectsFile>("delete_project", { id });
