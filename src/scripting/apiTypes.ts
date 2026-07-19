@@ -53,4 +53,19 @@ declare const ctx: HttpCatchCtx;
 declare const request: HttpCatchRequest;
 /** Ярлык для ctx.response (в фазе response). */
 declare const response: HttpCatchResponse;
+
+// ── handler-режим (фаза "handler") ──
+
+/**
+ * Синхронно выполняет реальный HTTP-запрос и возвращает ответ.
+ * Доступно только в фазе handler. Без аргумента шлёт текущий request.
+ * Пример ретрая:
+ *   let r = send(request);
+ *   while (r.status === 429) { sleep(1000); r = send(request); }
+ *   return r;
+ */
+declare function send(req?: HttpCatchRequest): HttpCatchResponse;
+
+/** Блокирующая пауза (мс), для ретраев/поллинга в фазе handler. */
+declare function sleep(ms: number): void;
 `;
