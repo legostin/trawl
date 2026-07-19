@@ -42,7 +42,7 @@ function ruleFromFlow(flow: Flow): Rule {
     enabled: true,
     pattern: patternFromFlow(flow),
     phase: "handler",
-    script: "let response = send(request);\n// правьте request/response по вкусу\nreturn response;\n",
+    script: "let response = send(request);\n// modify request/response as needed\nreturn response;\n",
     projectId: null,
   };
 }
@@ -86,8 +86,8 @@ export function FlowDetail() {
     return (
       <EmptyState
         icon={<MousePointerClick className="size-8" />}
-        title="Выберите запрос"
-        hint="Кликните строку в списке или узел дерева, чтобы увидеть детали."
+        title="Select a request"
+        hint="Click a row in the list or a tree node to see details."
       />
     );
   }
@@ -107,7 +107,7 @@ export function FlowDetail() {
             <MethodBadge method={flow.method} className="text-xs" />
             <StatusBadge status={flow.response?.status} className="text-xs" />
             {flow.state === "error" && (
-              <span className="text-xs text-http-red">{flow.error ?? "ошибка"}</span>
+              <span className="text-xs text-http-red">{flow.error ?? "error"}</span>
             )}
           </div>
           <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{url}</div>
@@ -117,35 +117,35 @@ export function FlowDetail() {
             <Button
               variant="outline"
               size="sm"
-              title="Добавить хост в активный проект"
+              title="Add host to the active project"
               onClick={() => void addHost(activeId, flow.url.host)}
             >
-              <FolderPlus />В проект
+              <FolderPlus />To project
             </Button>
           )}
           <Button
             variant="outline"
             size="sm"
-            title="Создать правило из этого запроса"
+            title="Create a rule from this request"
             onClick={() => void createRule(ruleFromFlow(flow))}
           >
             <FileCode2 />
-            Правило
+            Rule
           </Button>
           <Button
             variant="outline"
             size="sm"
-            title="Создать мок из этого ответа"
+            title="Create a mock from this response"
             disabled={!flow.response}
             onClick={() => void createRule(mockRuleFromFlow(flow))}
           >
             <FlaskConical />
-            Мок
+            Mock
           </Button>
           <Button
             variant="outline"
             size="sm"
-            title="Скопировать как cURL"
+            title="Copy as cURL"
             onClick={() => void navigator.clipboard.writeText(buildCurl(flow))}
           >
             <TerminalSquare />
@@ -154,7 +154,7 @@ export function FlowDetail() {
           <Button
             variant="ghost"
             size="iconSm"
-            title="Скопировать URL"
+            title="Copy URL"
             onClick={() => void navigator.clipboard.writeText(url)}
           >
             <Copy />
@@ -176,11 +176,11 @@ export function FlowDetail() {
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === "overview" && (
           <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 text-xs">
-            <dt className="text-muted-foreground">Метод</dt>
+            <dt className="text-muted-foreground">Method</dt>
             <dd>
               <MethodBadge method={flow.method} />
             </dd>
-            <dt className="text-muted-foreground">Статус</dt>
+            <dt className="text-muted-foreground">Status</dt>
             <dd>
               <StatusBadge status={flow.response?.status} />
             </dd>
@@ -188,35 +188,35 @@ export function FlowDetail() {
             <dd className="font-mono break-all">{host}</dd>
             <dt className="text-muted-foreground">Path</dt>
             <dd className="font-mono break-all">{path}</dd>
-            <dt className="text-muted-foreground">Время</dt>
+            <dt className="text-muted-foreground">Time</dt>
             <dd className="font-mono">{formatClock(flow.timestamp)}</dd>
-            <dt className="text-muted-foreground">Размер запроса</dt>
+            <dt className="text-muted-foreground">Request size</dt>
             <dd className="font-mono">{formatBytes(reqSize)}</dd>
-            <dt className="text-muted-foreground">Размер ответа</dt>
+            <dt className="text-muted-foreground">Response size</dt>
             <dd className="font-mono">{formatBytes(resSize)}</dd>
-            <dt className="text-muted-foreground">Длительность</dt>
+            <dt className="text-muted-foreground">Duration</dt>
             <dd className="font-mono">{formatDuration(dur)}</dd>
           </dl>
         )}
 
         {tab === "request" && (
           <div>
-            <SectionTitle>Заголовки</SectionTitle>
+            <SectionTitle>Headers</SectionTitle>
             <div className="px-3">
               <HeadersTable headers={flow.request.headers} />
             </div>
-            <SectionTitle>Тело</SectionTitle>
+            <SectionTitle>Body</SectionTitle>
             <BodyViewer msg={flow.request} />
           </div>
         )}
 
         {tab === "response" && (
           <div>
-            <SectionTitle>Заголовки</SectionTitle>
+            <SectionTitle>Headers</SectionTitle>
             <div className="px-3">
               <HeadersTable headers={flow.response?.headers ?? []} />
             </div>
-            <SectionTitle>Тело</SectionTitle>
+            <SectionTitle>Body</SectionTitle>
             <BodyViewer msg={flow.response} />
           </div>
         )}
@@ -229,7 +229,7 @@ export function FlowDetail() {
             <dd>{flow.timings.ttfb ?? "—"}</dd>
             <dt className="text-muted-foreground">done</dt>
             <dd>{flow.timings.done ?? "—"}</dd>
-            <dt className="text-muted-foreground">длительность</dt>
+            <dt className="text-muted-foreground">duration</dt>
             <dd>{formatDuration(dur)}</dd>
           </dl>
         )}

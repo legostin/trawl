@@ -1,30 +1,30 @@
-/** TypeScript-декларации API скриптов — подаются в Monaco для автокомплита. */
+/** TypeScript declarations for the script API — fed into Monaco for autocomplete. */
 export const API_DTS = `
-/** HTTP-запрос, доступный в правиле. Мутируйте поля напрямую. */
+/** HTTP request available in a rule. Mutate fields directly. */
 interface HttpCatchRequest {
-  /** Метод: GET, POST, … */
+  /** Method: GET, POST, … */
   method: string;
-  /** Полный URL запроса. */
+  /** Full request URL. */
   url: string;
-  /** Хост, напр. "api.example.com". */
+  /** Host, e.g. "api.example.com". */
   host: string;
-  /** Путь с query, напр. "/v1/users?page=1". */
+  /** Path with query, e.g. "/v1/users?page=1". */
   path: string;
   /**
-   * Заголовки как объект. Пример:
+   * Headers as an object. Example:
    *   request.headers['Authorization'] = 'Bearer ' + token;
    */
   headers: Record<string, string>;
-  /** Тело как строка (текстовое). Для JSON: JSON.parse(request.body). */
+  /** Body as text. For JSON: JSON.parse(request.body). */
   body: string;
 }
 
-/** HTTP-ответ, доступный в фазе response. */
+/** HTTP response available in the response phase. */
 interface HttpCatchResponse {
-  /** Код статуса, напр. 200. */
+  /** Status code, e.g. 200. */
   status: number;
   headers: Record<string, string>;
-  /** Тело как строка. */
+  /** Body as text. */
   body: string;
 }
 
@@ -36,43 +36,43 @@ interface HttpCatchMock {
 
 interface HttpCatchCtx {
   request: HttpCatchRequest;
-  /** Есть только в фазе response. */
+  /** Present only in the response phase. */
   response?: HttpCatchResponse;
   /**
-   * Немедленно вернуть синтетический ответ (мок), не обращаясь к серверу.
-   * Пример: ctx.mock({ status: 200, body: JSON.stringify({ ok: true }) });
+   * Immediately return a synthetic response (mock) without hitting the server.
+   * Example: ctx.mock({ status: 200, body: JSON.stringify({ ok: true }) });
    */
   mock(response: HttpCatchMock): void;
-  /** Оборвать запрос с ошибкой 502. */
+  /** Abort the request with a 502 error. */
   abort(reason?: string): void;
 }
 
-/** Контекст текущего потока. */
+/** Context of the current flow. */
 declare const ctx: HttpCatchCtx;
-/** Ярлык для ctx.request. */
+/** Shortcut for ctx.request. */
 declare const request: HttpCatchRequest;
-/** Ярлык для ctx.response (в фазе response). */
+/** Shortcut for ctx.response (in the response phase). */
 declare const response: HttpCatchResponse;
 
 /**
- * Переменные окружения активного проекта. Можно читать и писать —
- * записанные значения сохраняются в проект и доступны следующим запросам.
- * Пример: env.token = JSON.parse(response.body).token;
+ * Environment variables of the active project. Read and write —
+ * written values are persisted to the project and available to later requests.
+ * Example: env.token = JSON.parse(response.body).token;
  */
 declare const env: Record<string, string>;
 
-// ── handler-режим (фаза "handler") ──
+// ── handler phase ──
 
 /**
- * Синхронно выполняет реальный HTTP-запрос и возвращает ответ.
- * Доступно только в фазе handler. Без аргумента шлёт текущий request.
- * Пример ретрая:
+ * Synchronously performs the real HTTP request and returns the response.
+ * Available only in the handler phase. Without an argument it sends the current request.
+ * Retry example:
  *   let r = send(request);
  *   while (r.status === 429) { sleep(1000); r = send(request); }
  *   return r;
  */
 declare function send(req?: HttpCatchRequest): HttpCatchResponse;
 
-/** Блокирующая пауза (мс), для ретраев/поллинга в фазе handler. */
+/** Blocking pause (ms), for retries/polling in the handler phase. */
 declare function sleep(ms: number): void;
 `;

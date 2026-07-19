@@ -56,29 +56,29 @@ export function TopBar() {
           data-search-input
           value={query}
           onChange={(e) => setFilter({ query: e.target.value })}
-          placeholder="Поиск по host / URL…"
+          placeholder="Search host / URL…"
           className="pl-7"
         />
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="flex items-center gap-1" title="Активный проект">
+        <div className="flex items-center gap-1" title="Active project">
           <Select
             value={activeId ?? ""}
             onChange={(e) => void setActive(e.target.value || null)}
           >
-            <option value="">Все домены</option>
+            <option value="">All domains</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
             ))}
           </Select>
-          <Button variant="ghost" size="iconSm" title="Проекты" onClick={openEditor}>
+          <Button variant="ghost" size="iconSm" title="Projects" onClick={openEditor}>
             <FolderCog />
           </Button>
         </div>
-        <Button variant="ghost" size="iconSm" title="Очистить список" onClick={() => clearFlows()}>
+        <Button variant="ghost" size="iconSm" title="Clear list" onClick={() => clearFlows()}>
           <Trash2 />
         </Button>
         <Segmented<View>
@@ -90,7 +90,7 @@ export function TopBar() {
             { value: "setup", label: "Setup" },
           ]}
         />
-        <Button variant="ghost" size="iconSm" title="Тема" onClick={toggle}>
+        <Button variant="ghost" size="iconSm" title="Theme" onClick={toggle}>
           {theme === "dark" ? <Sun /> : <Moon />}
         </Button>
       </div>

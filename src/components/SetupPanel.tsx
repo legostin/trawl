@@ -28,14 +28,14 @@ export function SetupPanel() {
       .catch(() => setQr(""));
   }, []);
 
-  const ip = info?.lanIp ?? "<нет сети>";
+  const ip = info?.lanIp ?? "<no network>";
   const port = info?.port ?? 8888;
 
   return (
     <div className="mx-auto h-full max-w-2xl overflow-auto p-6">
-      <h2 className="mb-1 text-lg font-semibold">Перехват трафика телефона</h2>
+      <h2 className="mb-1 text-lg font-semibold">Capture phone traffic</h2>
       <p className="mb-4 text-sm text-muted-foreground">
-        Четыре шага — и HTTPS-трафик устройства появится во вкладке Traffic.
+        Four steps and the device’s HTTPS traffic shows up in the Traffic tab.
       </p>
 
       <div
@@ -52,32 +52,32 @@ export function SetupPanel() {
           <AlertTriangle className="size-4 text-http-amber" />
         )}
         {running ? (
-          <span>Прокси запущен на {info ? `${ip}:${port}` : `порту ${port}`}.</span>
+          <span>Proxy running on {info ? `${ip}:${port}` : `port ${port}`}.</span>
         ) : (
           <span>
-            Сначала нажмите <b>Start</b> в шапке — иначе прокси не запущен и телефон не подключится.
+            Press <b>Start</b> in the top bar first — otherwise the proxy is not running and the phone cannot connect.
           </span>
         )}
       </div>
 
-      <Step n={1} icon={<Wifi className="size-4" />} title="Одна Wi-Fi-сеть + адрес прокси">
-        <p>Телефон и этот Mac должны быть в одной сети. Адрес прокси:</p>
+      <Step n={1} icon={<Wifi className="size-4" />} title="Same Wi-Fi network + proxy address">
+        <p>The phone and this Mac must be on the same network. Proxy address:</p>
         <div className="mt-2 inline-block rounded-md bg-secondary px-3 py-1.5 font-mono text-base font-semibold">
           {ip}:{port}
         </div>
       </Step>
 
-      <Step n={2} icon={<Settings className="size-4" />} title="Настроить прокси на телефоне">
+      <Step n={2} icon={<Settings className="size-4" />} title="Configure the proxy on the phone">
         <p>
-          Wi-Fi → настройки сети → HTTP-прокси <b>вручную</b> → впишите IP <code>{ip}</code> и порт{" "}
+          Wi-Fi → network settings → HTTP proxy <b>manual</b> → enter IP <code>{ip}</code> and port{" "}
           <code>{port}</code>.
         </p>
       </Step>
 
-      <Step n={3} icon={<Download className="size-4" />} title="Скачать CA-сертификат">
+      <Step n={3} icon={<Download className="size-4" />} title="Download the CA certificate">
         <p>
-          На телефоне откройте <code>http://http-catch/</code> (отсканируйте QR) — сертификат
-          скачается. На iOS открывайте <b>именно в Safari</b>.
+          On the phone open <code>http://http-catch/</code> (scan the QR) — the certificate
+          downloads. On iOS open it <b>in Safari specifically</b>.
         </p>
         {qr && (
           <img
@@ -90,21 +90,21 @@ export function SetupPanel() {
         )}
         {certPath && (
           <p className="mt-2 text-xs text-muted-foreground">
-            Файл на диске: <code className="break-all">{certPath}</code>
+            File on disk: <code className="break-all">{certPath}</code>
           </p>
         )}
       </Step>
 
-      <Step n={4} icon={<ShieldCheck className="size-4" />} title="Установить и доверить">
-        <p className="font-medium">iOS — три отдельных шага:</p>
+      <Step n={4} icon={<ShieldCheck className="size-4" />} title="Install and trust">
+        <p className="font-medium">iOS — three separate steps:</p>
         <ol className="mt-1 list-decimal space-y-0.5 pl-5">
-          <li>В Safari нажмите «Allow» на загрузку профиля.</li>
+          <li>In Safari tap “Allow” to download the profile.</li>
           <li>
-            Settings → General → <b>VPN &amp; Device Management</b> → профиль <b>http-catch CA</b> →{" "}
+            Settings → General → <b>VPN &amp; Device Management</b> → the <b>http-catch CA</b> profile →{" "}
             <b>Install</b>.
           </li>
           <li>
-            Settings → General → About → <b>Certificate Trust Settings</b> → включите тумблер.
+            Settings → General → About → <b>Certificate Trust Settings</b> → enable the toggle.
           </li>
         </ol>
         <p className="mt-2 font-medium">Android:</p>
@@ -125,8 +125,8 @@ export function SetupPanel() {
           <Loader2 className="size-4 animate-spin" />
         )}
         {httpsSeen
-          ? "HTTPS-трафик расшифровывается — всё работает."
-          : "Ожидание первого расшифрованного HTTPS-запроса…"}
+          ? "HTTPS traffic is being decrypted — all set."
+          : "Waiting for the first decrypted HTTPS request…"}
       </div>
     </div>
   );

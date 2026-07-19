@@ -20,7 +20,7 @@ export function FilterBar() {
       <Select value={filter.method} onChange={(e) => setFilter({ method: e.target.value })}>
         {METHODS.map((m) => (
           <option key={m} value={m}>
-            {m === "" ? "метод: любой" : m}
+            {m === "" ? "method: any" : m}
           </option>
         ))}
       </Select>
@@ -30,14 +30,14 @@ export function FilterBar() {
       >
         {STATUS_CLASSES.map((c) => (
           <option key={c} value={c}>
-            {c === "any" ? "статус: любой" : c}
+            {c === "any" ? "status: any" : c}
           </option>
         ))}
       </Select>
       {active && (
         <Button variant="ghost" size="sm" className="ml-auto" onClick={clearFilter}>
           <X />
-          Сброс
+          Reset
         </Button>
       )}
     </div>

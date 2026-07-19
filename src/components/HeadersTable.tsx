@@ -2,7 +2,7 @@ import type { Header } from "@/types";
 
 export function HeadersTable({ headers }: { headers: Header[] }) {
   if (headers.length === 0) {
-    return <div className="p-3 text-xs text-muted-foreground">Нет заголовков</div>;
+    return <div className="p-3 text-xs text-muted-foreground">No headers</div>;
   }
   return (
     <table className="w-full border-collapse text-xs">

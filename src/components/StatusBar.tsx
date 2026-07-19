@@ -43,7 +43,7 @@ export function StatusBar() {
         <span>
           shown <span className="text-foreground">{shown}</span>
         </span>
-        <span className="opacity-60">↑↓ навигация · / поиск</span>
+        <span className="opacity-60">↑↓ navigate · / search</span>
       </div>
     </footer>
   );
