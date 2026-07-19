@@ -6,6 +6,7 @@ mod projects;
 mod proxy;
 mod rules;
 mod scripting;
+mod setup_actions;
 mod store;
 
 use commands::AppState;
@@ -32,6 +33,12 @@ pub fn run() {
             commands::delete_project,
             commands::set_active_project,
             commands::get_active_project,
+            setup_actions::reveal_ca_cert,
+            setup_actions::trust_ca_macos,
+            setup_actions::set_system_proxy,
+            setup_actions::system_proxy_enabled,
+            setup_actions::install_ca_ios_simulator,
+            setup_actions::launch_chrome_proxy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
