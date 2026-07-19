@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { Filter, X } from "lucide-react";
 import { useFlows } from "../store";
-import { flowMatches, type StatusClass } from "../filter";
+import type { StatusClass } from "../filter";
+import { Select } from "./ui/select";
+import { Button } from "./ui/button";
 
 const METHODS = ["", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 const STATUS_CLASSES: StatusClass[] = ["any", "2xx", "3xx", "4xx", "5xx"];
@@ -8,61 +10,36 @@ const STATUS_CLASSES: StatusClass[] = ["any", "2xx", "3xx", "4xx", "5xx"];
 export function FilterBar() {
   const filter = useFlows((s) => s.filter);
   const setFilter = useFlows((s) => s.setFilter);
-  const flows = useFlows((s) => s.flows);
-  const total = flows.length;
-  const shown = useMemo(
-    () => flows.filter((f) => flowMatches(f, filter)).length,
-    [flows, filter],
-  );
+  const clearFilter = useFlows((s) => s.clearFilter);
+
+  const active = filter.method !== "" || filter.statusClass !== "any" || filter.query !== "";
 
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 8px",
-        borderBottom: "1px solid #333",
-        fontSize: 12,
-      }}
-    >
-      <input
-        value={filter.query}
-        onChange={(e) => setFilter({ query: e.target.value })}
-        placeholder="Поиск по host/URL…"
-        style={{
-          flex: 1,
-          background: "#2a2a2a",
-          color: "#ddd",
-          border: "1px solid #444",
-          padding: "3px 6px",
-        }}
-      />
-      <select
-        value={filter.method}
-        onChange={(e) => setFilter({ method: e.target.value })}
-        style={{ background: "#2a2a2a", color: "#ddd" }}
-      >
+    <div className="flex items-center gap-2 border-b border-border bg-card/50 px-2 py-1.5">
+      <Filter className="size-3.5 text-muted-foreground" />
+      <Select value={filter.method} onChange={(e) => setFilter({ method: e.target.value })}>
         {METHODS.map((m) => (
           <option key={m} value={m}>
             {m === "" ? "метод: любой" : m}
           </option>
         ))}
-      </select>
-      <select
+      </Select>
+      <Select
         value={filter.statusClass}
         onChange={(e) => setFilter({ statusClass: e.target.value as StatusClass })}
-        style={{ background: "#2a2a2a", color: "#ddd" }}
       >
         {STATUS_CLASSES.map((c) => (
           <option key={c} value={c}>
             {c === "any" ? "статус: любой" : c}
           </option>
         ))}
-      </select>
-      <span style={{ opacity: 0.7, whiteSpace: "nowrap" }}>
-        {shown} / {total}
-      </span>
+      </Select>
+      {active && (
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={clearFilter}>
+          <X />
+          Сброс
+        </Button>
+      )}
     </div>
   );
 }
