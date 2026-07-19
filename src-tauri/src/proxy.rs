@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -10,7 +11,7 @@ use hudsucker::{
 };
 use tokio::sync::oneshot;
 
-use crate::ca::generate_ephemeral_ca;
+use crate::ca::load_or_create_ca;
 use crate::model::{Flow, FlowState, HttpMessage, ResponseMessage, UrlParts};
 use crate::store::FlowStore;
 
@@ -21,6 +22,7 @@ struct CaptureHandler {
     store: FlowStore,
     emit: EmitFn,
     current_id: Option<u64>,
+    ca_pem: String,
 }
 
 fn headers_to_vec(headers: &HeaderMap) -> Vec<(String, String)> {
@@ -51,6 +53,21 @@ impl HttpHandler for CaptureHandler {
         _ctx: &HttpContext,
         req: Request<Body>,
     ) -> RequestOrResponse {
+        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://http-catch/
+        if req.uri().host() == Some("http-catch") {
+            let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
+            let resp = Response::builder()
+                .status(200)
+                .header("content-type", "application/x-x509-ca-cert")
+                .header(
+                    "content-disposition",
+                    "attachment; filename=\"http-catch-ca.pem\"",
+                )
+                .body(body)
+                .expect("build cert response");
+            return RequestOrResponse::Response(resp);
+        }
+
         let (parts, body) = req.into_parts();
         let bytes = match body.collect().await {
             Ok(c) => c.to_bytes().to_vec(),
@@ -130,15 +147,25 @@ impl ProxyHandle {
     }
 }
 
-pub async fn start(addr: SocketAddr, store: FlowStore, emit: EmitFn) -> Result<ProxyHandle> {
-    let (ca_key, ca_cert) = generate_ephemeral_ca()?;
-    let authority = RcgenAuthority::new(ca_key, ca_cert, 1_000);
+pub async fn start(
+    addr: SocketAddr,
+    store: FlowStore,
+    emit: EmitFn,
+    ca_dir: PathBuf,
+) -> Result<ProxyHandle> {
+    let ca = load_or_create_ca(&ca_dir)?;
+    let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
 
     // забиндиться заранее, чтобы узнать реальный порт при :0
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
 
-    let handler = CaptureHandler { store, emit, current_id: None };
+    let handler = CaptureHandler {
+        store,
+        emit,
+        current_id: None,
+        ca_pem: ca.cert_pem,
+    };
     let (tx, rx) = oneshot::channel::<()>();
 
     let proxy = Proxy::builder()
@@ -193,7 +220,12 @@ mod tests {
             seen2.lock().unwrap().push(flow.id);
         });
         let proxy_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let handle = start(proxy_addr, store.clone(), emit).await.unwrap();
+        let ca_dir =
+            std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ca_dir);
+        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone())
+            .await
+            .unwrap();
         let bound = handle.local_addr();
 
         // 3. запрос через прокси на upstream
@@ -213,5 +245,30 @@ mod tests {
         assert!(!seen.lock().unwrap().is_empty());
 
         handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    #[tokio::test]
+    async fn serves_ca_pem_on_magic_host() {
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ca_dir);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone())
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let resp = client.get("http://http-catch/").send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let text = resp.text().await.unwrap();
+        assert!(text.contains("BEGIN CERTIFICATE"), "got: {text}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
     }
 }
