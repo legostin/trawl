@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::ca::load_or_create_ca;
 use crate::model::Flow;
 use crate::net::lan_ip;
+use crate::projects::{self, Project, ProjectsFile};
 use crate::proxy::{self, ProxyHandle};
 use crate::rules::{self, Rule};
 use crate::store::FlowStore;
@@ -18,6 +19,8 @@ pub struct AppState {
     pub rules: Arc<RwLock<Vec<Rule>>>,
     /// Live library-prelude, разделяемый с прокси-хендлером.
     pub library: Arc<RwLock<String>>,
+    /// Активный проект (None = пишем всё). Разделяется с прокси-хендлером.
+    pub active_project: Arc<RwLock<Option<Project>>>,
     pub scripts: crate::scripting::ScriptClient,
 }
 
@@ -28,9 +31,14 @@ impl AppState {
             proxy: Mutex::new(None),
             rules: Arc::new(RwLock::new(Vec::new())),
             library: Arc::new(RwLock::new(String::new())),
+            active_project: Arc::new(RwLock::new(None)),
             scripts: crate::scripting::spawn_engine(std::time::Duration::from_secs(1)),
         }
     }
+}
+
+fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 fn ca_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -176,4 +184,70 @@ pub fn save_library(app: AppHandle, source: String, state: State<'_, AppState>) 
     rules::save_library(&rules_dir(&app)?, &source).map_err(|e| e.to_string())?;
     *state.library.write().unwrap() = source;
     Ok(())
+}
+
+// ── Проекты ──
+
+#[tauri::command]
+pub fn list_projects(app: AppHandle) -> Result<ProjectsFile, String> {
+    projects::load_projects(&data_dir(&app)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_project(
+    app: AppHandle,
+    project: Project,
+    state: State<'_, AppState>,
+) -> Result<ProjectsFile, String> {
+    let dir = data_dir(&app)?;
+    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
+    if let Some(existing) = file.projects.iter_mut().find(|p| p.id == project.id) {
+        *existing = project.clone();
+    } else {
+        file.projects.push(project.clone());
+    }
+    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
+    // если правим активный проект — обновить общую ячейку
+    let mut active = state.active_project.write().unwrap();
+    if active.as_ref().map(|p| &p.id) == Some(&project.id) {
+        *active = Some(project);
+    }
+    Ok(file)
+}
+
+#[tauri::command]
+pub fn delete_project(
+    app: AppHandle,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<ProjectsFile, String> {
+    let dir = data_dir(&app)?;
+    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
+    file.projects.retain(|p| p.id != id);
+    if file.active_id.as_deref() == Some(&id) {
+        file.active_id = None;
+        *state.active_project.write().unwrap() = None;
+    }
+    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+#[tauri::command]
+pub fn set_active_project(
+    app: AppHandle,
+    id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
+    file.active_id = id.clone();
+    let resolved = id.and_then(|i| file.projects.iter().find(|p| p.id == i).cloned());
+    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
+    *state.active_project.write().unwrap() = resolved;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_active_project(state: State<'_, AppState>) -> Option<Project> {
+    state.active_project.read().unwrap().clone()
 }

@@ -2,6 +2,7 @@ mod ca;
 mod commands;
 mod model;
 mod net;
+mod projects;
 mod proxy;
 mod rules;
 mod scripting;
@@ -26,6 +27,11 @@ pub fn run() {
             commands::delete_rule,
             commands::get_library,
             commands::save_library,
+            commands::list_projects,
+            commands::save_project,
+            commands::delete_project,
+            commands::set_active_project,
+            commands::get_active_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

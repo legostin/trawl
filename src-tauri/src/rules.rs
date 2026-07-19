@@ -25,6 +25,9 @@ pub struct Rule {
     pub pattern: String,
     pub phase: Phase,
     pub script: String,
+    /// Проект, которому принадлежит правило. None = глобальное.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl Rule {
@@ -110,6 +113,7 @@ mod tests {
             pattern: pattern.into(),
             phase,
             script: String::new(),
+            project_id: None,
         }
     }
 
