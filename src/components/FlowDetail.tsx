@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Copy, MousePointerClick, TerminalSquare } from "lucide-react";
+import { Copy, FileCode2, FlaskConical, MousePointerClick, TerminalSquare } from "lucide-react";
 import { useFlows } from "../store";
+import { useRules, type Rule } from "../rules";
 import { MethodBadge, StatusBadge } from "./badges";
 import { HeadersTable } from "./HeadersTable";
 import { BodyViewer } from "./BodyViewer";
@@ -8,13 +9,60 @@ import { EmptyState } from "./EmptyState";
 import { TabBar } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
+import { bodyToText } from "@/lib/body";
 import { bodyLength, formatBytes, durationMs, formatDuration, formatClock } from "@/lib/format";
+import type { Flow } from "@/types";
 
 type Tab = "overview" | "request" | "response" | "timing";
 
+function headerValue(headers: [string, string][], name: string): string | undefined {
+  return headers.find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
+}
+
+/** Правило-handler, повторяющее запрос (заготовка для правки). */
+function ruleFromFlow(flow: Flow): Rule {
+  const path = flow.url.path.split("?")[0];
+  return {
+    id: crypto.randomUUID(),
+    name: `${flow.method} ${path}`.slice(0, 40),
+    enabled: true,
+    pattern: `${flow.url.host}${path}`,
+    phase: "handler",
+    script: "let response = send(request);\n// правьте request/response по вкусу\nreturn response;\n",
+  };
+}
+
+/** Правило-мок, возвращающее пойманный ответ. */
+function mockRuleFromFlow(flow: Flow): Rule {
+  const path = flow.url.path.split("?")[0];
+  const status = flow.response?.status ?? 200;
+  const ct = headerValue(flow.response?.headers ?? [], "content-type") ?? "application/json";
+  const body = bodyToText(flow.response);
+  return {
+    id: crypto.randomUUID(),
+    name: `mock ${path}`.slice(0, 40),
+    enabled: true,
+    pattern: `${flow.url.host}${path}`,
+    phase: "request",
+    script:
+      `ctx.mock({\n` +
+      `  status: ${status},\n` +
+      `  headers: { 'content-type': ${JSON.stringify(ct)} },\n` +
+      `  body: ${JSON.stringify(body)},\n` +
+      `});\n`,
+  };
+}
+
 export function FlowDetail() {
   const flow = useFlows((s) => s.flows.find((f) => f.id === s.selectedId) ?? null);
+  const setView = useFlows((s) => s.setView);
+  const upsertRule = useRules((s) => s.upsert);
   const [tab, setTab] = useState<Tab>("overview");
+
+  const createRule = async (rule: Rule) => {
+    await upsertRule(rule);
+    setView("rules");
+  };
 
   if (!flow) {
     return (
@@ -47,6 +95,25 @@ export function FlowDetail() {
           <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{url}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            title="Создать правило из этого запроса"
+            onClick={() => void createRule(ruleFromFlow(flow))}
+          >
+            <FileCode2 />
+            Правило
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            title="Создать мок из этого ответа"
+            disabled={!flow.response}
+            onClick={() => void createRule(mockRuleFromFlow(flow))}
+          >
+            <FlaskConical />
+            Мок
+          </Button>
           <Button
             variant="outline"
             size="sm"
