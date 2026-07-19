@@ -267,6 +267,13 @@ impl HttpHandler for CaptureHandler {
         _ctx: &HttpContext,
         req: Request<Body>,
     ) -> RequestOrResponse {
+        // CONNECT — это установка HTTPS-туннеля, а не реальный запрос: пропускаем
+        // без захвата и без правил, иначе handler-правило (напр. */*) перехватит
+        // CONNECT и сломает весь туннель.
+        if req.method() == hudsucker::hyper::Method::CONNECT {
+            return req.into();
+        }
+
         // Раздача CA-сертификата: клиент с настроенным прокси открывает http://http-catch/
         if req.uri().host() == Some("http-catch") {
             let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
@@ -1037,6 +1044,69 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
         assert!(flow.applied_rules.contains(&"upper".to_string()));
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Диагностика: handler send(request) должен сохранять путь, query и заголовки.
+    #[tokio::test]
+    async fn handler_send_preserves_path_query_headers() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    // эхо: возвращаем сырой запрос как тело
+                    let echo = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        echo.len(),
+                        echo
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![rule(
+            "echo",
+            &format!("{upstream_addr}/*"),
+            Phase::Handler,
+            "return send(request);",
+        )];
+        let (s, r, l) = scripting(rules);
+        let ca_dir = temp_ca();
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l)
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let echoed = client
+            .get(format!("http://{upstream_addr}/a/b?x=1&y=2"))
+            .header("X-Custom", "hello")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        assert!(echoed.contains("/a/b?x=1&y=2"), "путь+query потеряны: {echoed}");
+        assert!(
+            echoed.to_lowercase().contains("x-custom: hello"),
+            "заголовок потерян: {echoed}"
+        );
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
