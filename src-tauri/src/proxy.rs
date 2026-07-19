@@ -891,6 +891,7 @@ mod tests {
             pattern: pattern.into(),
             phase,
             script: script.into(),
+            project_id: None,
         }
     }
 
