@@ -187,6 +187,13 @@ fn native_send(req_json: &str) -> String {
             let status = resp.status().as_u16();
             let mut headers = serde_json::Map::new();
             for (k, val) in resp.headers().iter() {
+                // тело уже распаковано reqwest — не тащим согласованность-ломающие заголовки
+                if matches!(
+                    k.as_str().to_ascii_lowercase().as_str(),
+                    "content-encoding" | "content-length" | "transfer-encoding"
+                ) {
+                    continue;
+                }
                 headers.insert(
                     k.as_str().to_string(),
                     Value::String(String::from_utf8_lossy(val.as_bytes()).to_string()),

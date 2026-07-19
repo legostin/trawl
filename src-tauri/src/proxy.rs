@@ -63,12 +63,16 @@ fn json_to_headers(v: &Value) -> Vec<(String, String)> {
 }
 
 /// Собирает HeaderMap из пар, выставляя корректный content-length и убирая
-/// конфликтующие с новым телом заголовки.
-fn build_header_map(headers: &[(String, String)], body_len: usize) -> HeaderMap {
+/// конфликтующие с новым телом заголовки. При `strip_encoding` также убирает
+/// content-encoding (когда тело уже распаковано — иначе клиент не декодирует).
+fn build_header_map(headers: &[(String, String)], body_len: usize, strip_encoding: bool) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (k, v) in headers {
         let lk = k.to_ascii_lowercase();
         if lk == "content-length" || lk == "transfer-encoding" {
+            continue;
+        }
+        if strip_encoding && lk == "content-encoding" {
             continue;
         }
         if let (Ok(name), Ok(val)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v))
@@ -108,8 +112,13 @@ fn build_mock_response(spec: &Value) -> Response<Body> {
     let mut has_ct = false;
     if let Some(h) = spec.get("headers").and_then(|h| h.as_object()) {
         for (k, v) in h {
+            let lk = k.to_ascii_lowercase();
+            // тело мока/handler'а — уже готовые байты; не тащим кодировку/длину
+            if matches!(lk.as_str(), "content-encoding" | "content-length" | "transfer-encoding") {
+                continue;
+            }
             if let Some(vs) = v.as_str() {
-                if k.eq_ignore_ascii_case("content-type") {
+                if lk == "content-type" {
                     has_ct = true;
                 }
                 builder = builder.header(k.as_str(), vs);
@@ -452,7 +461,7 @@ impl HttpHandler for CaptureHandler {
             }
             Directive::Continue => {
                 let mut new_parts = parts;
-                new_parts.headers = build_header_map(&work_headers, out_body.len());
+                new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
                 Request::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body)))).into()
             }
         }
@@ -558,7 +567,7 @@ impl HttpHandler for CaptureHandler {
 
         let mut new_parts = parts;
         new_parts.status = hudsucker::hyper::StatusCode::from_u16(work_status).unwrap_or(new_parts.status);
-        new_parts.headers = build_header_map(&work_headers, out_body.len());
+        new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
         Response::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body))))
     }
 }
@@ -1028,6 +1037,66 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
         assert!(flow.applied_rules.contains(&"upper".to_string()));
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Регрессия: gzip-ответ должен дойти до клиента декодируемым (не оставляем
+    // content-encoding при распакованном теле).
+    #[tokio::test]
+    async fn gzip_response_reaches_client_decodable() {
+        let payload = b"{\"gzipped\": true, \"msg\": \"hello world\"}";
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(payload).unwrap();
+        let gz = enc.finish().unwrap();
+
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let gz_task = gz.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                let gz = gz_task.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                        gz.len()
+                    );
+                    let mut out = header.into_bytes();
+                    out.extend_from_slice(&gz);
+                    let _ = sock.write_all(&out).await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l) = scripting(vec![]); // без правил — обычный путь
+        let ca_dir = temp_ca();
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l)
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        // клиент с gzip auto-decode — если прокси оставит content-encoding при
+        // распакованном теле, декодирование сломается.
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let text = client
+            .get(format!("http://{upstream_addr}/api"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(text, String::from_utf8_lossy(payload));
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
