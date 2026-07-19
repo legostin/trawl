@@ -6,6 +6,8 @@ import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
+import { SNIPPETS } from "../scripting/snippets";
+import { setLibraryTypes } from "../monaco-setup";
 import { cn } from "@/lib/utils";
 
 const NEW_SCRIPT = "// request доступен в фазе request, response — в фазе response.\n// request.headers['X-Debug'] = '1';\n";
@@ -17,6 +19,10 @@ export function RulesView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setLibraryTypes(library);
+  }, [library]);
 
   const newRule = () => {
     void upsert({
@@ -139,6 +145,20 @@ function RuleEditor({
             <Trash2 />
           </Button>
         </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
+        <span className="text-[11px] text-muted-foreground">Шаблоны:</span>
+        {SNIPPETS.map((s) => (
+          <Button
+            key={s.label}
+            size="sm"
+            variant="outline"
+            className="h-6 text-[11px]"
+            onClick={() => patch({ script: draft.script + (draft.script.endsWith("\n") ? "" : "\n") + s.code })}
+          >
+            {s.label}
+          </Button>
+        ))}
       </div>
       <div className="min-h-0 flex-1">
         <ScriptEditor value={draft.script} onChange={(script) => patch({ script })} />
