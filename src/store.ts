@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Flow } from "./types";
 import { emptyFilter, type FlowFilter } from "./filter";
 
-export type View = "traffic" | "setup";
+export type View = "traffic" | "rules" | "setup";
 export type ListMode = "sequence" | "structure";
 
 interface FlowsState {
