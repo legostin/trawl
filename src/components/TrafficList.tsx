@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useFlows } from "../store";
 
 export function TrafficList() {
-  const flows = useFlows((s) => s.flows);
+  const flows = useFlows((s) => s.filteredFlows());
   const selectedId = useFlows((s) => s.selectedId);
   const select = useFlows((s) => s.select);
   const parentRef = useRef<HTMLDivElement>(null);
