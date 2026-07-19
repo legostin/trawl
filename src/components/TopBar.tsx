@@ -64,6 +64,7 @@ export function TopBar() {
           onChange={setView}
           options={[
             { value: "traffic", label: "Traffic" },
+            { value: "rules", label: "Rules" },
             { value: "setup", label: "Setup" },
           ]}
         />

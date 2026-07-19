@@ -4,6 +4,7 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
+import { RulesView } from "./RulesView";
 import { FilterBar } from "./FilterBar";
 import { ListPanel } from "./ListPanel";
 import { FlowDetail } from "./FlowDetail";
@@ -28,6 +29,8 @@ export function AppShell() {
       <main className="min-h-0 flex-1">
         {view === "setup" ? (
           <SetupPanel />
+        ) : view === "rules" ? (
+          <RulesView />
         ) : (
           <ResizableGroup direction="horizontal" className="h-full">
             <ResizablePanel
