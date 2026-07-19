@@ -8,6 +8,7 @@ import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { SNIPPETS } from "../scripting/snippets";
 import { setLibraryTypes } from "../monaco-setup";
+import { HintsPanel } from "./HintsPanel";
 import { cn } from "@/lib/utils";
 
 const NEW_SCRIPT = "// request доступен в фазе request, response — в фазе response.\n// request.headers['X-Debug'] = '1';\n";
@@ -160,8 +161,16 @@ function RuleEditor({
           </Button>
         ))}
       </div>
-      <div className="min-h-0 flex-1">
-        <ScriptEditor value={draft.script} onChange={(script) => patch({ script })} />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1">
+          <ScriptEditor value={draft.script} onChange={(script) => patch({ script })} />
+        </div>
+        <HintsPanel
+          pattern={draft.pattern}
+          onInsert={(code) =>
+            patch({ script: draft.script + (draft.script.endsWith("\n") ? "" : "\n") + code + "\n" })
+          }
+        />
       </div>
     </div>
   );
