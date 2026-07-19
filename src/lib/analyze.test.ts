@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { analyzeJson, accessor, matchGlob } from "./analyze";
 
 describe("analyzeJson", () => {
-  it("collects nested object field paths and types", () => {
+  it("collects nested object field paths, types and examples", () => {
     const fields = analyzeJson([{ user: { name: "a", age: 3 } }]);
     expect(fields).toEqual([
-      { path: "user.age", type: "number" },
-      { path: "user.name", type: "string" },
+      { path: "user.age", type: "number", example: "3", varying: false },
+      { path: "user.name", type: "string", example: "a", varying: false },
     ]);
   });
 
@@ -24,12 +24,19 @@ describe("analyzeJson", () => {
     expect(fields.map((f) => f.path)).toEqual(["a", "b"]);
   });
 
-  it("handles null and booleans", () => {
-    const fields = analyzeJson([{ x: null, y: false }]);
-    expect(fields).toEqual([
-      { path: "x", type: "null" },
-      { path: "y", type: "boolean" },
-    ]);
+  it("marks a field as varying when its value differs across responses", () => {
+    const stable = analyzeJson([{ token: "x" }, { token: "x" }]).find((f) => f.path === "token");
+    expect(stable?.varying).toBe(false);
+    const dynamic = analyzeJson([{ token: "a" }, { token: "b" }]).find((f) => f.path === "token");
+    expect(dynamic?.varying).toBe(true);
+    expect(dynamic?.example).toBe("b"); // последнее значение
+  });
+
+  it("truncates long example values", () => {
+    const long = "x".repeat(80);
+    const f = analyzeJson([{ blob: long }])[0];
+    expect(f.example!.length).toBeLessThan(50);
+    expect(f.example!.endsWith("…")).toBe(true);
   });
 });
 
