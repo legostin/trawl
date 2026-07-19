@@ -1,9 +1,12 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useFlows } from "../store";
+import { flowMatches } from "../filter";
 
 export function TrafficList() {
-  const flows = useFlows((s) => s.filteredFlows());
+  const allFlows = useFlows((s) => s.flows);
+  const filter = useFlows((s) => s.filter);
+  const flows = useMemo(() => allFlows.filter((f) => flowMatches(f, filter)), [allFlows, filter]);
   const selectedId = useFlows((s) => s.selectedId);
   const select = useFlows((s) => s.select);
   const parentRef = useRef<HTMLDivElement>(null);

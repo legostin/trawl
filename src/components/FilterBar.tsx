@@ -1,5 +1,6 @@
+import { useMemo } from "react";
 import { useFlows } from "../store";
-import type { StatusClass } from "../filter";
+import { flowMatches, type StatusClass } from "../filter";
 
 const METHODS = ["", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 const STATUS_CLASSES: StatusClass[] = ["any", "2xx", "3xx", "4xx", "5xx"];
@@ -7,8 +8,12 @@ const STATUS_CLASSES: StatusClass[] = ["any", "2xx", "3xx", "4xx", "5xx"];
 export function FilterBar() {
   const filter = useFlows((s) => s.filter);
   const setFilter = useFlows((s) => s.setFilter);
-  const total = useFlows((s) => s.flows.length);
-  const shown = useFlows((s) => s.filteredFlows().length);
+  const flows = useFlows((s) => s.flows);
+  const total = flows.length;
+  const shown = useMemo(
+    () => flows.filter((f) => flowMatches(f, filter)).length,
+    [flows, filter],
+  );
 
   return (
     <div
