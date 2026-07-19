@@ -93,6 +93,7 @@ pub async fn start_proxy(
         state.rules.clone(),
         state.library.clone(),
         state.active_project.clone(),
+        data_dir(&app)?,
     )
     .await
     .map_err(|e| e.to_string())?;
