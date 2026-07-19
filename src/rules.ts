@@ -10,6 +10,8 @@ export interface Rule {
   pattern: string;
   phase: Phase;
   script: string;
+  /** Проект правила; null = глобальное. */
+  projectId: string | null;
 }
 
 interface RulesState {
