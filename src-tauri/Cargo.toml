@@ -31,6 +31,8 @@ http = "1"
 http-body-util = "0.1"
 flate2 = "1"
 brotli = "7"
+regex = "1"
+rquickjs = "0.9"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
