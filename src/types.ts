@@ -39,4 +39,5 @@ export interface Flow {
   timings: Timings;
   state: FlowState;
   error: string | null;
+  appliedRules: string[];
 }

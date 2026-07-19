@@ -15,6 +15,7 @@ function make(partial: Partial<Flow> & { host?: string; path?: string; status?: 
     timings: { sent: null, ttfb: null, done: null },
     state: "completed",
     error: null,
+    appliedRules: [],
     ...rest,
   };
 }

@@ -61,6 +61,8 @@ pub struct Flow {
     pub state: FlowState,
     /// Заполняется при state == Error.
     pub error: Option<String>,
+    /// Имена сработавших правил-скриптов (индикатор «изменён»).
+    pub applied_rules: Vec<String>,
 }
 
 impl Flow {
@@ -75,6 +77,7 @@ impl Flow {
             timings: Timings { sent: None, ttfb: None, done: None },
             state: FlowState::Pending,
             error: None,
+            applied_rules: Vec::new(),
         }
     }
 }
