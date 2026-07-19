@@ -16,6 +16,9 @@ pub struct AppState {
     pub proxy: Mutex<Option<ProxyHandle>>,
     /// Живой список правил, разделяемый с прокси-хендлером.
     pub rules: Arc<RwLock<Vec<Rule>>>,
+    /// Live library-prelude, разделяемый с прокси-хендлером.
+    pub library: Arc<RwLock<String>>,
+    pub scripts: crate::scripting::ScriptClient,
 }
 
 impl AppState {
@@ -24,6 +27,8 @@ impl AppState {
             store: FlowStore::new(5000),
             proxy: Mutex::new(None),
             rules: Arc::new(RwLock::new(Vec::new())),
+            library: Arc::new(RwLock::new(String::new())),
+            scripts: crate::scripting::spawn_engine(std::time::Duration::from_secs(1)),
         }
     }
 }
@@ -60,9 +65,24 @@ pub async fn start_proxy(
     let emit: proxy::EmitFn = std::sync::Arc::new(move |event: &str, flow: &Flow| {
         let _ = app_for_emit.emit(event, flow.clone());
     });
-    let handle = proxy::start(addr, state.store.clone(), emit, ca_dir(&app)?)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Подтянуть актуальные правила и библиотеку в общие ячейки перед стартом.
+    let rdir = rules_dir(&app)?;
+    let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
+    let loaded_library = rules::load_library(&rdir).map_err(|e| e.to_string())?;
+    *state.rules.write().unwrap() = loaded_rules;
+    *state.library.write().unwrap() = loaded_library;
+
+    let handle = proxy::start(
+        addr,
+        state.store.clone(),
+        emit,
+        ca_dir(&app)?,
+        state.scripts.clone(),
+        state.rules.clone(),
+        state.library.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     *state.proxy.lock().unwrap() = Some(handle);
     Ok(format!("0.0.0.0:{port}"))
 }
@@ -145,11 +165,15 @@ pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-pub fn get_library(app: AppHandle) -> Result<String, String> {
-    rules::load_library(&rules_dir(&app)?).map_err(|e| e.to_string())
+pub fn get_library(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    let lib = rules::load_library(&rules_dir(&app)?).map_err(|e| e.to_string())?;
+    *state.library.write().unwrap() = lib.clone();
+    Ok(lib)
 }
 
 #[tauri::command]
-pub fn save_library(app: AppHandle, source: String) -> Result<(), String> {
-    rules::save_library(&rules_dir(&app)?, &source).map_err(|e| e.to_string())
+pub fn save_library(app: AppHandle, source: String, state: State<'_, AppState>) -> Result<(), String> {
+    rules::save_library(&rules_dir(&app)?, &source).map_err(|e| e.to_string())?;
+    *state.library.write().unwrap() = source;
+    Ok(())
 }

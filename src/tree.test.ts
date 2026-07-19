@@ -13,6 +13,7 @@ function make(id: number, host: string, path: string, method = "GET", status = 2
     timings: { sent: null, ttfb: null, done: null },
     state: "completed",
     error: null,
+    appliedRules: [],
   };
 }
 

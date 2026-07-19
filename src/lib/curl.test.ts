@@ -13,6 +13,7 @@ function flow(partial: Partial<Flow>): Flow {
     timings: { sent: null, ttfb: null, done: null },
     state: "completed",
     error: null,
+    appliedRules: [],
     ...partial,
   };
 }
