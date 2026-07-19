@@ -1,83 +1,150 @@
 import { useState } from "react";
+import { Copy, MousePointerClick, TerminalSquare } from "lucide-react";
 import { useFlows } from "../store";
-import type { HttpMessage, ResponseMessage } from "../types";
+import { MethodBadge, StatusBadge } from "./badges";
+import { HeadersTable } from "./HeadersTable";
+import { BodyViewer } from "./BodyViewer";
+import { EmptyState } from "./EmptyState";
+import { TabBar } from "./ui/tabs";
+import { Button } from "./ui/button";
+import { buildCurl } from "@/lib/curl";
+import { bodyLength, formatBytes, durationMs, formatDuration } from "@/lib/format";
 
-function bodyToText(msg: HttpMessage | ResponseMessage | null | undefined): string {
-  if (!msg) return "";
-  const b = msg.body;
-  if (typeof b === "string") return b;
-  if (!msg.bodyIsText) return `<binary ${b.length} bytes>`;
-  try {
-    return new TextDecoder().decode(new Uint8Array(b));
-  } catch {
-    return `<binary ${b.length} bytes>`;
-  }
-}
+type Tab = "overview" | "request" | "response" | "timing";
 
 export function FlowDetail() {
   const flow = useFlows((s) => s.flows.find((f) => f.id === s.selectedId) ?? null);
-  const [tab, setTab] = useState<"headers" | "body" | "timing">("headers");
+  const [tab, setTab] = useState<Tab>("overview");
 
-  if (!flow) return <div style={{ padding: 16, opacity: 0.6 }}>Выберите запрос</div>;
+  if (!flow) {
+    return (
+      <EmptyState
+        icon={<MousePointerClick className="size-8" />}
+        title="Выберите запрос"
+        hint="Кликните строку в списке или узел дерева, чтобы увидеть детали."
+      />
+    );
+  }
+
+  const { scheme, host, port, path } = flow.url;
+  const showPort = port !== 80 && port !== 443;
+  const url = `${scheme}://${host}${showPort ? `:${port}` : ""}${path}`;
+  const reqSize = bodyLength(flow.request);
+  const resSize = bodyLength(flow.response);
+  const dur = durationMs(flow.timings.sent, flow.timings.done);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", fontSize: 12 }}>
-      <div style={{ padding: 8, borderBottom: "1px solid #333" }}>
-        <strong>{flow.method}</strong> {flow.url.scheme}://{flow.url.host}:{flow.url.port}
-        {flow.url.path}
-        {flow.error && <div style={{ color: "#f88" }}>Ошибка: {flow.error}</div>}
-      </div>
-      <div style={{ display: "flex", gap: 8, padding: 8 }}>
-        {(["headers", "body", "timing"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{ fontWeight: tab === t ? "bold" : "normal" }}
+    <div className="flex h-full flex-col">
+      <div className="flex items-start gap-2 border-b border-border bg-card px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <MethodBadge method={flow.method} className="text-xs" />
+            <StatusBadge status={flow.response?.status} className="text-xs" />
+            {flow.state === "error" && (
+              <span className="text-xs text-http-red">{flow.error ?? "ошибка"}</span>
+            )}
+          </div>
+          <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{url}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            title="Скопировать как cURL"
+            onClick={() => void navigator.clipboard.writeText(buildCurl(flow))}
           >
-            {t}
-          </button>
-        ))}
+            <TerminalSquare />
+            cURL
+          </Button>
+          <Button
+            variant="ghost"
+            size="iconSm"
+            title="Скопировать URL"
+            onClick={() => void navigator.clipboard.writeText(url)}
+          >
+            <Copy />
+          </Button>
+        </div>
       </div>
-      <div
-        style={{
-          flex: 1,
-          overflow: "auto",
-          padding: 8,
-          fontFamily: "monospace",
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {tab === "headers" && (
-          <>
-            <div style={{ opacity: 0.6 }}>— Request —</div>
-            {flow.request.headers.map(([k, v], i) => (
-              <div key={`rq${i}`}>
-                {k}: {v}
-              </div>
-            ))}
-            <div style={{ opacity: 0.6, marginTop: 8 }}>— Response —</div>
-            {flow.response?.headers.map(([k, v], i) => (
-              <div key={`rs${i}`}>
-                {k}: {v}
-              </div>
-            ))}
-          </>
+
+      <TabBar<Tab>
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: "overview", label: "Overview" },
+          { value: "request", label: "Request" },
+          { value: "response", label: "Response" },
+          { value: "timing", label: "Timing" },
+        ]}
+      />
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        {tab === "overview" && (
+          <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 text-xs">
+            <dt className="text-muted-foreground">Метод</dt>
+            <dd>
+              <MethodBadge method={flow.method} />
+            </dd>
+            <dt className="text-muted-foreground">Статус</dt>
+            <dd>
+              <StatusBadge status={flow.response?.status} />
+            </dd>
+            <dt className="text-muted-foreground">Host</dt>
+            <dd className="font-mono break-all">{host}</dd>
+            <dt className="text-muted-foreground">Path</dt>
+            <dd className="font-mono break-all">{path}</dd>
+            <dt className="text-muted-foreground">Размер запроса</dt>
+            <dd className="font-mono">{formatBytes(reqSize)}</dd>
+            <dt className="text-muted-foreground">Размер ответа</dt>
+            <dd className="font-mono">{formatBytes(resSize)}</dd>
+            <dt className="text-muted-foreground">Длительность</dt>
+            <dd className="font-mono">{formatDuration(dur)}</dd>
+          </dl>
         )}
-        {tab === "body" && (
-          <>
-            <div style={{ opacity: 0.6 }}>— Request body —</div>
-            <div>{bodyToText(flow.request)}</div>
-            <div style={{ opacity: 0.6, marginTop: 8 }}>— Response body —</div>
-            <div>{bodyToText(flow.response)}</div>
-          </>
-        )}
-        {tab === "timing" && (
+
+        {tab === "request" && (
           <div>
-            sent: {flow.timings.sent ?? "-"} · ttfb: {flow.timings.ttfb ?? "-"} · done:{" "}
-            {flow.timings.done ?? "-"}
+            <SectionTitle>Заголовки</SectionTitle>
+            <div className="px-3">
+              <HeadersTable headers={flow.request.headers} />
+            </div>
+            <SectionTitle>Тело</SectionTitle>
+            <BodyViewer msg={flow.request} />
           </div>
         )}
+
+        {tab === "response" && (
+          <div>
+            <SectionTitle>Заголовки</SectionTitle>
+            <div className="px-3">
+              <HeadersTable headers={flow.response?.headers ?? []} />
+            </div>
+            <SectionTitle>Тело</SectionTitle>
+            <BodyViewer msg={flow.response} />
+          </div>
+        )}
+
+        {tab === "timing" && (
+          <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 font-mono text-xs">
+            <dt className="text-muted-foreground">sent</dt>
+            <dd>{flow.timings.sent ?? "—"}</dd>
+            <dt className="text-muted-foreground">ttfb</dt>
+            <dd>{flow.timings.ttfb ?? "—"}</dd>
+            <dt className="text-muted-foreground">done</dt>
+            <dd>{flow.timings.done ?? "—"}</dd>
+            <dt className="text-muted-foreground">длительность</dt>
+            <dd>{formatDuration(dur)}</dd>
+          </dl>
+        )}
       </div>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
     </div>
   );
 }
