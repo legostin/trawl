@@ -3,6 +3,7 @@ mod commands;
 mod model;
 mod net;
 mod proxy;
+mod rules;
 mod store;
 
 use commands::AppState;
@@ -19,6 +20,11 @@ pub fn run() {
             commands::get_setup_info,
             commands::get_ca_pem,
             commands::ca_cert_path,
+            commands::list_rules,
+            commands::save_rule,
+            commands::delete_rule,
+            commands::get_library,
+            commands::save_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

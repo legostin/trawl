@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -8,16 +8,23 @@ use crate::ca::load_or_create_ca;
 use crate::model::Flow;
 use crate::net::lan_ip;
 use crate::proxy::{self, ProxyHandle};
+use crate::rules::{self, Rule};
 use crate::store::FlowStore;
 
 pub struct AppState {
     pub store: FlowStore,
     pub proxy: Mutex<Option<ProxyHandle>>,
+    /// Живой список правил, разделяемый с прокси-хендлером.
+    pub rules: Arc<RwLock<Vec<Rule>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        AppState { store: FlowStore::new(5000), proxy: Mutex::new(None) }
+        AppState {
+            store: FlowStore::new(5000),
+            proxy: Mutex::new(None),
+            rules: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 }
 
@@ -27,6 +34,14 @@ fn ca_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("ca"))
+}
+
+fn rules_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("scripting"))
 }
 
 #[tauri::command]
@@ -94,4 +109,47 @@ pub fn ca_cert_path(app: AppHandle) -> Result<String, String> {
     // гарантируем, что файл существует
     load_or_create_ca(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("ca.pem").to_string_lossy().to_string())
+}
+
+// ── Правила и библиотека скриптов ──
+
+#[tauri::command]
+pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
+    let loaded = rules::load_rules(&rules_dir(&app)?).map_err(|e| e.to_string())?;
+    *state.rules.write().unwrap() = loaded.clone();
+    Ok(loaded)
+}
+
+#[tauri::command]
+pub fn save_rule(app: AppHandle, rule: Rule, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
+    let dir = rules_dir(&app)?;
+    let mut rules = rules::load_rules(&dir).map_err(|e| e.to_string())?;
+    if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
+        *existing = rule;
+    } else {
+        rules.push(rule);
+    }
+    rules::save_rules(&dir, &rules).map_err(|e| e.to_string())?;
+    *state.rules.write().unwrap() = rules.clone();
+    Ok(rules)
+}
+
+#[tauri::command]
+pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
+    let dir = rules_dir(&app)?;
+    let mut rules = rules::load_rules(&dir).map_err(|e| e.to_string())?;
+    rules.retain(|r| r.id != id);
+    rules::save_rules(&dir, &rules).map_err(|e| e.to_string())?;
+    *state.rules.write().unwrap() = rules.clone();
+    Ok(rules)
+}
+
+#[tauri::command]
+pub fn get_library(app: AppHandle) -> Result<String, String> {
+    rules::load_library(&rules_dir(&app)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_library(app: AppHandle, source: String) -> Result<(), String> {
+    rules::save_library(&rules_dir(&app)?, &source).map_err(|e| e.to_string())
 }
