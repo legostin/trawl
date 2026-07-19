@@ -36,8 +36,9 @@ export function SetupPanel() {
           <code>{ip}</code> и порт <code>{port}</code>.
         </li>
         <li>
-          Установите CA-сертификат. На телефоне откройте <code>http://http-catch/</code>{" "}
-          (отсканируйте QR) — сертификат скачается.
+          Скачайте CA-сертификат. На телефоне откройте <code>http://http-catch/</code>{" "}
+          (отсканируйте QR) — сертификат скачается. На iOS открывайте <b>именно в Safari</b>:
+          другие браузеры (Chrome и пр.) не умеют устанавливать профили.
           <div style={{ marginTop: 8 }}>
             {qr && <img src={qr} width={160} height={160} alt="QR http://http-catch/" />}
           </div>
@@ -46,13 +47,26 @@ export function SetupPanel() {
           </div>
         </li>
         <li>
-          <b>Доверьте</b> сертификат вручную:
-          <ul>
-            <li>
-              iOS: Settings → General → About → Certificate Trust Settings → включить http-catch CA.
-            </li>
-            <li>Android: Settings → Security → Install a certificate → CA certificate.</li>
-          </ul>
+          <b>Установите и доверьте</b> сертификат вручную:
+          <div style={{ marginTop: 4 }}>
+            <b>iOS</b> — три отдельных шага (пропуск любого = сертификат «не виден»):
+            <ol style={{ paddingLeft: 20, marginTop: 2 }}>
+              <li>В Safari нажмите «Allow» на запрос загрузки конфигурационного профиля.</li>
+              <li>
+                Settings → General → <b>VPN &amp; Device Management</b> (на старых iOS — «Profile
+                Downloaded» вверху Settings) → выберите профиль <b>http-catch CA</b> → <b>Install</b>{" "}
+                (введите пасскод).
+              </li>
+              <li>
+                Settings → General → About → <b>Certificate Trust Settings</b> → включите тумблер
+                для http-catch CA.
+              </li>
+            </ol>
+          </div>
+          <div style={{ marginTop: 4 }}>
+            <b>Android</b>: Settings → Security → Encryption &amp; credentials → Install a certificate
+            → <b>CA certificate</b> → выберите скачанный файл.
+          </div>
         </li>
       </ol>
 
