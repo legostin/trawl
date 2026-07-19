@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BookMarked, FileCode2, Plus, Save, Trash2 } from "lucide-react";
 import { useRules, type Phase, type Rule } from "../rules";
+import { useProjects } from "../projects";
 import { ScriptEditor } from "./ScriptEditor";
 import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
@@ -21,6 +22,7 @@ const NEW_SCRIPT =
 export function RulesView() {
   const { rules, selectedId, library, editingLibrary, load, select, editLibrary, upsert, remove, saveLibrary } =
     useRules();
+  const activeId = useProjects((s) => s.activeId);
 
   useEffect(() => {
     void load();
@@ -30,6 +32,9 @@ export function RulesView() {
     setLibraryTypes(library);
   }, [library]);
 
+  // Показываем только правила активного проекта (или глобальные, когда проект off).
+  const scoped = rules.filter((r) => (r.projectId ?? null) === (activeId ?? null));
+
   const newRule = () => {
     void upsert({
       id: crypto.randomUUID(),
@@ -38,10 +43,11 @@ export function RulesView() {
       pattern: "*/*",
       phase: "handler",
       script: NEW_SCRIPT,
+      projectId: activeId ?? null,
     });
   };
 
-  const selected = rules.find((r) => r.id === selectedId) ?? null;
+  const selected = scoped.find((r) => r.id === selectedId) ?? null;
 
   return (
     <div className="flex h-full">
@@ -53,7 +59,7 @@ export function RulesView() {
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
-          {rules.map((r) => (
+          {scoped.map((r) => (
             <button
               key={r.id}
               onClick={() => select(r.id)}
@@ -69,7 +75,7 @@ export function RulesView() {
               </span>
             </button>
           ))}
-          {rules.length === 0 && (
+          {scoped.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground">Правил пока нет — нажмите ＋</div>
           )}
         </div>

@@ -1,7 +1,15 @@
 import { useState } from "react";
-import { Copy, FileCode2, FlaskConical, MousePointerClick, TerminalSquare } from "lucide-react";
+import {
+  Copy,
+  FileCode2,
+  FlaskConical,
+  FolderPlus,
+  MousePointerClick,
+  TerminalSquare,
+} from "lucide-react";
 import { useFlows } from "../store";
 import { useRules, type Rule } from "../rules";
+import { useProjects } from "../projects";
 import { MethodBadge, StatusBadge } from "./badges";
 import { HeadersTable } from "./HeadersTable";
 import { BodyViewer } from "./BodyViewer";
@@ -35,6 +43,7 @@ function ruleFromFlow(flow: Flow): Rule {
     pattern: patternFromFlow(flow),
     phase: "handler",
     script: "let response = send(request);\n// правьте request/response по вкусу\nreturn response;\n",
+    projectId: null,
   };
 }
 
@@ -50,6 +59,7 @@ function mockRuleFromFlow(flow: Flow): Rule {
     enabled: true,
     pattern: patternFromFlow(flow),
     phase: "request",
+    projectId: null,
     script:
       `ctx.mock({\n` +
       `  status: ${status},\n` +
@@ -63,10 +73,12 @@ export function FlowDetail() {
   const flow = useFlows((s) => s.flows.find((f) => f.id === s.selectedId) ?? null);
   const setView = useFlows((s) => s.setView);
   const upsertRule = useRules((s) => s.upsert);
+  const activeId = useProjects((s) => s.activeId);
+  const addHost = useProjects((s) => s.addHost);
   const [tab, setTab] = useState<Tab>("overview");
 
   const createRule = async (rule: Rule) => {
-    await upsertRule(rule);
+    await upsertRule({ ...rule, projectId: activeId ?? null });
     setView("rules");
   };
 
@@ -101,6 +113,16 @@ export function FlowDetail() {
           <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{url}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {activeId && (
+            <Button
+              variant="outline"
+              size="sm"
+              title="Добавить хост в активный проект"
+              onClick={() => void addHost(activeId, flow.url.host)}
+            >
+              <FolderPlus />В проект
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
