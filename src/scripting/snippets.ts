@@ -5,6 +5,25 @@ export interface Snippet {
 
 export const SNIPPETS: Snippet[] = [
   {
+    label: "Handler: send + ретрай",
+    code:
+      "let response = send(request);\n" +
+      "while (response.status === 429) {\n" +
+      "  sleep(1000);\n" +
+      "  response = send(request);\n" +
+      "}\n" +
+      "return response;\n",
+  },
+  {
+    label: "Handler: правка ответа",
+    code:
+      "const response = send(request);\n" +
+      "const data = JSON.parse(response.body || '{}');\n" +
+      "data.patched = true;\n" +
+      "response.body = JSON.stringify(data);\n" +
+      "return response;\n",
+  },
+  {
     label: "Заголовок запроса",
     code: "request.headers['X-Debug'] = '1';\n",
   },

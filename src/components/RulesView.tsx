@@ -11,7 +11,12 @@ import { setLibraryTypes } from "../monaco-setup";
 import { HintsPanel } from "./HintsPanel";
 import { cn } from "@/lib/utils";
 
-const NEW_SCRIPT = "// request доступен в фазе request, response — в фазе response.\n// request.headers['X-Debug'] = '1';\n";
+const NEW_SCRIPT =
+  "// handler: сам выполняете запрос через send() и возвращаете ответ.\n" +
+  "let response = send(request);\n" +
+  "// пример ретрая:\n" +
+  "// while (response.status === 429) { sleep(1000); response = send(request); }\n" +
+  "return response;\n";
 
 export function RulesView() {
   const { rules, selectedId, library, editingLibrary, load, select, editLibrary, upsert, remove, saveLibrary } =
@@ -31,7 +36,7 @@ export function RulesView() {
       name: "Новое правило",
       enabled: true,
       pattern: "*/*",
-      phase: "request",
+      phase: "handler",
       script: NEW_SCRIPT,
     });
   };
@@ -125,6 +130,7 @@ function RuleEditor({
           placeholder="host/path glob, напр. api.example.com/*"
         />
         <Select value={draft.phase} onChange={(e) => patch({ phase: e.target.value as Phase })}>
+          <option value="handler">handler (send сам)</option>
           <option value="request">request</option>
           <option value="response">response</option>
           <option value="both">both</option>

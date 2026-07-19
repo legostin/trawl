@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
-export type Phase = "request" | "response" | "both";
+export type Phase = "request" | "response" | "both" | "handler";
 
 export interface Rule {
   id: string;
