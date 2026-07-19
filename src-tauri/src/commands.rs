@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::model::Flow;
 use crate::proxy::{self, ProxyHandle};
@@ -16,6 +16,14 @@ impl AppState {
     pub fn new() -> Self {
         AppState { store: FlowStore::new(5000), proxy: Mutex::new(None) }
     }
+}
+
+fn ca_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("ca"))
 }
 
 #[tauri::command]
@@ -34,7 +42,7 @@ pub async fn start_proxy(
     let emit: proxy::EmitFn = std::sync::Arc::new(move |event: &str, flow: &Flow| {
         let _ = app_for_emit.emit(event, flow.clone());
     });
-    let handle = proxy::start(addr, state.store.clone(), emit)
+    let handle = proxy::start(addr, state.store.clone(), emit, ca_dir(&app)?)
         .await
         .map_err(|e| e.to_string())?;
     *state.proxy.lock().unwrap() = Some(handle);
