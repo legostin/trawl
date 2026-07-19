@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import { useProjects, type Project } from "../projects";
+import { useProjects, type EnvVar, type Project } from "../projects";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
@@ -22,20 +22,26 @@ export function ProjectEditor() {
   const selected = projects.find((p) => p.id === selId) ?? null;
 
   const newProject = () => {
-    const p: Project = { id: crypto.randomUUID(), name: "Новый проект", includeHosts: [], excludeHosts: [] };
+    const p: Project = {
+      id: crypto.randomUUID(),
+      name: "New project",
+      includeHosts: [],
+      excludeHosts: [],
+      env: [],
+    };
     void upsert(p).then(() => setSelId(p.id));
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6" onClick={closeEditor}>
       <div
-        className="flex h-[70vh] w-[760px] overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+        className="flex h-[72vh] w-[780px] overflow-hidden rounded-lg border border-border bg-background shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex w-52 shrink-0 flex-col border-r border-border">
           <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
-            <span className="text-xs font-semibold text-muted-foreground">Проекты</span>
-            <Button size="iconSm" variant="ghost" className="ml-auto" title="Новый проект" onClick={newProject}>
+            <span className="text-xs font-semibold text-muted-foreground">Projects</span>
+            <Button size="iconSm" variant="ghost" className="ml-auto" title="New project" onClick={newProject}>
               <Plus />
             </Button>
           </div>
@@ -54,17 +60,22 @@ export function ProjectEditor() {
               </button>
             ))}
             {projects.length === 0 && (
-              <div className="p-3 text-xs text-muted-foreground">Нет проектов — нажмите ＋</div>
+              <div className="p-3 text-xs text-muted-foreground">No projects yet — press ＋</div>
             )}
           </div>
         </div>
 
         <div className="min-w-0 flex-1">
           {selected ? (
-            <ProjectForm key={selected.id} project={selected} onSave={upsert} onDelete={() => void remove(selected.id).then(() => setSelId(null))} />
+            <ProjectForm
+              key={selected.id}
+              project={selected}
+              onSave={upsert}
+              onDelete={() => void remove(selected.id).then(() => setSelId(null))}
+            />
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-              Выберите проект или создайте новый. Проект ограничивает захват его хостами.
+              Select a project or create a new one. A project scopes capture to its hosts.
             </div>
           )}
         </div>
@@ -72,7 +83,7 @@ export function ProjectEditor() {
         <button
           className="absolute right-8 top-8 text-muted-foreground hover:text-foreground"
           onClick={closeEditor}
-          title="Закрыть"
+          title="Close"
         >
           <X className="size-4" />
         </button>
@@ -100,30 +111,31 @@ function ProjectForm({
           value={draft.name}
           onChange={(e) => patch({ name: e.target.value })}
           className="h-7 w-56"
-          placeholder="Имя проекта"
+          placeholder="Project name"
         />
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" onClick={() => void onSave(draft)}>
-            Сохранить
+            Save
           </Button>
-          <Button size="iconSm" variant="ghost" title="Удалить проект" onClick={onDelete}>
+          <Button size="iconSm" variant="ghost" title="Delete project" onClick={onDelete}>
             <Trash2 />
           </Button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+      <div className="min-h-0 flex-1 space-y-5 overflow-auto p-4">
         <HostList
-          title="Отслеживать хосты (include)"
-          hint="Голый домен ловит и поддомены; можно *.example.com"
+          title="Tracked hosts (include)"
+          hint="A bare domain also matches subdomains; wildcards like *.example.com work too."
           hosts={draft.includeHosts}
           onChange={(includeHosts) => patch({ includeHosts })}
         />
         <HostList
-          title="Исключения (exclude)"
-          hint="Приоритетнее include"
+          title="Excluded hosts"
+          hint="Takes priority over include."
           hosts={draft.excludeHosts}
           onChange={(excludeHosts) => patch({ excludeHosts })}
         />
+        <EnvList env={draft.env} onChange={(env) => patch({ env })} />
       </div>
     </div>
   );
@@ -159,7 +171,7 @@ function HostList({
             </button>
           </span>
         ))}
-        {hosts.length === 0 && <span className="text-xs text-muted-foreground">пусто</span>}
+        {hosts.length === 0 && <span className="text-xs text-muted-foreground">empty</span>}
       </div>
       <div className="flex gap-1">
         <Input
@@ -173,6 +185,55 @@ function HostList({
           <Plus />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function EnvList({ env, onChange }: { env: EnvVar[]; onChange: (env: EnvVar[]) => void }) {
+  const setAt = (i: number, patch: Partial<EnvVar>) =>
+    onChange(env.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
+  return (
+    <div>
+      <div className="text-xs font-semibold">Environment variables</div>
+      <div className="mb-1.5 text-[11px] text-muted-foreground">
+        Available in scripts as <code className="rounded bg-secondary px-1 font-mono">env.KEY</code>; scripts can
+        also write to them (values persist across requests).
+      </div>
+      <div className="space-y-1">
+        {env.map((e, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <Input
+              value={e.key}
+              onChange={(ev) => setAt(i, { key: ev.target.value })}
+              placeholder="KEY"
+              className="h-7 w-40 font-mono"
+            />
+            <Input
+              value={e.value}
+              onChange={(ev) => setAt(i, { value: ev.target.value })}
+              placeholder="value"
+              className="h-7 flex-1 font-mono"
+            />
+            <Button
+              size="iconSm"
+              variant="ghost"
+              title="Remove"
+              onClick={() => onChange(env.filter((_, idx) => idx !== i))}
+            >
+              <X className="size-3" />
+            </Button>
+          </div>
+        ))}
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="mt-1.5"
+        onClick={() => onChange([...env, { key: "", value: "" }])}
+      >
+        <Plus />
+        Add variable
+      </Button>
     </div>
   );
 }
