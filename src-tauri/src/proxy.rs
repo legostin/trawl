@@ -18,6 +18,7 @@ use tokio::sync::oneshot;
 
 use crate::ca::load_or_create_ca;
 use crate::model::{Flow, FlowState, HttpMessage, ResponseMessage, UrlParts};
+use crate::projects::Project;
 use crate::rules::{Phase, Rule};
 use crate::scripting::ScriptClient;
 use crate::store::FlowStore;
@@ -25,6 +26,7 @@ use crate::store::FlowStore;
 pub type EmitFn = Arc<dyn Fn(&str, &Flow) + Send + Sync>;
 pub type SharedRules = Arc<RwLock<Vec<Rule>>>;
 pub type SharedLibrary = Arc<RwLock<String>>;
+pub type SharedProject = Arc<RwLock<Option<Project>>>;
 
 #[derive(Clone)]
 struct CaptureHandler {
@@ -36,6 +38,7 @@ struct CaptureHandler {
     scripts: ScriptClient,
     rules: SharedRules,
     library: SharedLibrary,
+    active_project: SharedProject,
 }
 
 fn headers_to_json(headers: &[(String, String)]) -> Value {
@@ -144,26 +147,41 @@ fn build_abort_response(reason: &str) -> Response<Body> {
 }
 
 impl CaptureHandler {
+    /// Область правил: активный проект → только его правила; иначе — глобальные.
+    fn active_scope(&self) -> Option<String> {
+        self.active_project.read().unwrap().as_ref().map(|p| p.id.clone())
+    }
+
     /// Правило совпадает, если его паттерн матчит любой из кандидатов
-    /// (`host/path` и `host:port/path`).
+    /// (`host/path` и `host:port/path`) и оно в области активного проекта.
     fn matching(&self, phase: Phase, targets: &[String]) -> Vec<Rule> {
+        let scope = self.active_scope();
         self.rules
             .read()
             .unwrap()
             .iter()
             .filter(|r| {
-                r.enabled && r.runs_in(phase) && targets.iter().any(|t| r.matches_target(t))
+                r.enabled
+                    && r.project_id == scope
+                    && r.runs_in(phase)
+                    && targets.iter().any(|t| r.matches_target(t))
             })
             .cloned()
             .collect()
     }
 
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
+        let scope = self.active_scope();
         self.rules
             .read()
             .unwrap()
             .iter()
-            .find(|r| r.enabled && r.phase == Phase::Handler && targets.iter().any(|t| r.matches_target(t)))
+            .find(|r| {
+                r.enabled
+                    && r.project_id == scope
+                    && r.phase == Phase::Handler
+                    && targets.iter().any(|t| r.matches_target(t))
+            })
             .cloned()
     }
 
@@ -272,6 +290,29 @@ impl HttpHandler for CaptureHandler {
         // CONNECT и сломает весь туннель.
         if req.method() == hudsucker::hyper::Method::CONNECT {
             return req.into();
+        }
+
+        // Активный проект: запросы к нетрекаемым хостам проксируем, но не пишем
+        // (экономия памяти) — без flow, эмита и правил.
+        {
+            let active = self.active_project.read().unwrap();
+            if let Some(proj) = active.as_ref() {
+                let host = req
+                    .uri()
+                    .host()
+                    .map(|h| h.to_string())
+                    .or_else(|| {
+                        req.headers()
+                            .get("host")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.split(':').next().unwrap_or(s).to_string())
+                    })
+                    .unwrap_or_default();
+                if !proj.tracks(&host) {
+                    drop(active);
+                    return req.into();
+                }
+            }
         }
 
         // Раздача CA-сертификата: клиент с настроенным прокси открывает http://http-catch/
@@ -603,6 +644,7 @@ pub async fn start(
     scripts: ScriptClient,
     rules: SharedRules,
     library: SharedLibrary,
+    active_project: SharedProject,
 ) -> Result<ProxyHandle> {
     let ca = load_or_create_ca(&ca_dir)?;
     let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
@@ -620,6 +662,7 @@ pub async fn start(
         scripts,
         rules,
         library,
+        active_project,
     };
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -651,11 +694,12 @@ mod tests {
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::Duration;
 
-    fn scripting(rules: Vec<Rule>) -> (ScriptClient, SharedRules, SharedLibrary) {
+    fn scripting(rules: Vec<Rule>) -> (ScriptClient, SharedRules, SharedLibrary, SharedProject) {
         (
             spawn_engine(Duration::from_millis(500)),
             Arc::new(RwLock::new(rules)),
             Arc::new(RwLock::new(String::new())),
+            Arc::new(RwLock::new(None)),
         )
     }
 
@@ -727,8 +771,8 @@ mod tests {
         let ca_dir =
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l)
+        let (s, r, l, p) = scripting(vec![]);
+        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -762,8 +806,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l)
+        let (s, r, l, p) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -817,8 +861,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+        let (s, r, l, p) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -854,8 +898,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+        let (s, r, l, p) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -934,9 +978,9 @@ mod tests {
             Phase::Request,
             "request.headers['X-Debug'] = 'yes';",
         )];
-        let (s, r, l) = scripting(rules);
+        let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -975,9 +1019,9 @@ mod tests {
             Phase::Request,
             r#"ctx.mock({ status: 201, body: 'mocked!' });"#,
         )];
-        let (s, r, l) = scripting(rules);
+        let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1021,9 +1065,9 @@ mod tests {
             Phase::Handler,
             "const r = send(request); r.body = r.body.toUpperCase(); return r;",
         )];
-        let (s, r, l) = scripting(rules);
+        let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1082,9 +1126,9 @@ mod tests {
             Phase::Handler,
             "return send(request);",
         )];
-        let (s, r, l) = scripting(rules);
+        let (s, r, l, p) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1108,6 +1152,116 @@ mod tests {
             echoed.to_lowercase().contains("x-custom: hello"),
             "заголовок потерян: {echoed}"
         );
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    fn echo_upstream() -> impl std::future::Future<Output = SocketAddr> {
+        async {
+            let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = upstream.local_addr().unwrap();
+            tokio::spawn(async move {
+                loop {
+                    let (mut sock, _) = upstream.accept().await.unwrap();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut buf = vec![0u8; 4096];
+                        let n = sock.read(&mut buf).await.unwrap_or(0);
+                        let echo = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                            echo.len(),
+                            echo
+                        );
+                        let _ = sock.write_all(resp.as_bytes()).await;
+                    });
+                }
+            });
+            addr
+        }
+    }
+
+    fn project(id: &str, include: &[&str]) -> crate::projects::Project {
+        crate::projects::Project {
+            id: id.into(),
+            name: id.into(),
+            include_hosts: include.iter().map(|s| s.to_string()).collect(),
+            exclude_hosts: vec![],
+        }
+    }
+
+    // Активный проект: запрос к нетрекаемому хосту проксируется, но не сохраняется.
+    #[tokio::test]
+    async fn untracked_host_not_stored() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p) = scripting(vec![]);
+        *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
+        let ca_dir = temp_ca();
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let ok = client
+            .get(format!("http://{upstream_addr}/x"))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(ok, 200, "нетрекаемый хост всё равно проксируется");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(store.all().len(), 0, "нетрекаемый хост не должен сохраняться");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Активный проект: трекаемый хост пишется, применяются только правила проекта.
+    #[tokio::test]
+    async fn tracked_host_uses_only_project_rules() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+
+        let mut proj_rule = rule("proj-rule", "127.0.0.1/*", Phase::Request, "request.headers['X-Proj'] = '1';");
+        proj_rule.project_id = Some("proj".into());
+        let global_rule = rule("global-rule", "127.0.0.1/*", Phase::Request, "request.headers['X-Global'] = '1';");
+        let (s, r, l, p) = scripting(vec![proj_rule, global_rule]);
+        *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
+        let ca_dir = temp_ca();
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p)
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let echoed = client
+            .get(format!("http://{upstream_addr}/api"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let low = echoed.to_lowercase();
+        assert!(low.contains("x-proj"), "проектное правило должно примениться: {echoed}");
+        assert!(!low.contains("x-global"), "глобальное правило не должно применяться при активном проекте");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let flow = store.all().into_iter().next().unwrap();
+        assert!(flow.applied_rules.contains(&"proj-rule".to_string()));
+        assert!(!flow.applied_rules.contains(&"global-rule".to_string()));
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
@@ -1146,9 +1300,9 @@ mod tests {
 
         let store = FlowStore::new(10);
         let emit: EmitFn = Arc::new(|_e, _f| {});
-        let (s, r, l) = scripting(vec![]); // без правил — обычный путь
+        let (s, r, l, p) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p)
             .await
             .unwrap();
         let bound = handle.local_addr();

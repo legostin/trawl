@@ -73,12 +73,16 @@ pub async fn start_proxy(
     let emit: proxy::EmitFn = std::sync::Arc::new(move |event: &str, flow: &Flow| {
         let _ = app_for_emit.emit(event, flow.clone());
     });
-    // Подтянуть актуальные правила и библиотеку в общие ячейки перед стартом.
+    // Подтянуть актуальные правила, библиотеку и активный проект перед стартом.
     let rdir = rules_dir(&app)?;
     let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
     let loaded_library = rules::load_library(&rdir).map_err(|e| e.to_string())?;
     *state.rules.write().unwrap() = loaded_rules;
     *state.library.write().unwrap() = loaded_library;
+    let pfile = projects::load_projects(&data_dir(&app)?).map_err(|e| e.to_string())?;
+    *state.active_project.write().unwrap() = pfile
+        .active_id
+        .and_then(|i| pfile.projects.into_iter().find(|p| p.id == i));
 
     let handle = proxy::start(
         addr,
@@ -88,6 +92,7 @@ pub async fn start_proxy(
         state.scripts.clone(),
         state.rules.clone(),
         state.library.clone(),
+        state.active_project.clone(),
     )
     .await
     .map_err(|e| e.to_string())?;
