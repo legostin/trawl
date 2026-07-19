@@ -23,6 +23,15 @@ struct CaptureHandler {
     emit: EmitFn,
     current_id: Option<u64>,
     ca_pem: String,
+    started: std::time::Instant,
+}
+
+fn unix_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn headers_to_vec(headers: &HeaderMap) -> Vec<(String, String)> {
@@ -130,12 +139,14 @@ impl HttpHandler for CaptureHandler {
         let id = self.store.next_id();
         let is_text = looks_textual(&headers);
         let display_body = decode_body(&bytes, header_value(&headers, "content-encoding"));
-        let flow = Flow::new_request(
+        let mut flow = Flow::new_request(
             id,
             parts.method.to_string(),
             url,
             HttpMessage { headers, body: display_body, body_is_text: is_text },
         );
+        flow.timestamp = unix_ms();
+        flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
         self.store.insert(flow.clone());
         (self.emit)("flow-added", &flow);
         self.current_id = Some(id);
@@ -159,6 +170,7 @@ impl HttpHandler for CaptureHandler {
         let status = parts.status.as_u16();
         // Для отображения храним распакованное тело; клиенту ниже уходят исходные байты.
         let display_body = decode_body(&bytes, header_value(&headers, "content-encoding"));
+        let done_ms = self.started.elapsed().as_millis() as u64;
         if let Some(id) = self.current_id {
             self.store.update(id, |f| {
                 f.response = Some(ResponseMessage {
@@ -167,6 +179,8 @@ impl HttpHandler for CaptureHandler {
                     body: display_body.clone(),
                     body_is_text: is_text,
                 });
+                f.timings.ttfb = Some(done_ms);
+                f.timings.done = Some(done_ms);
                 f.state = FlowState::Completed;
             });
             if let Some(updated) = self.store.all().into_iter().find(|f| f.id == id) {
@@ -211,6 +225,7 @@ pub async fn start(
         emit,
         current_id: None,
         ca_pem: ca.cert_pem,
+        started: std::time::Instant::now(),
     };
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -313,6 +328,9 @@ mod tests {
         let flows = store.all();
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].response.as_ref().unwrap().status, 200);
+        assert!(flows[0].timings.sent.is_some(), "timings.sent должен заполниться");
+        assert!(flows[0].timings.done.is_some(), "timings.done должен заполниться");
+        assert!(flows[0].timestamp > 0, "timestamp должен заполниться");
         assert!(!seen.lock().unwrap().is_empty());
 
         handle.stop();
