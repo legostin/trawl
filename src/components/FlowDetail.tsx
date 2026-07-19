@@ -8,7 +8,7 @@ import { EmptyState } from "./EmptyState";
 import { TabBar } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
-import { bodyLength, formatBytes, durationMs, formatDuration } from "@/lib/format";
+import { bodyLength, formatBytes, durationMs, formatDuration, formatClock } from "@/lib/format";
 
 type Tab = "overview" | "request" | "response" | "timing";
 
@@ -93,6 +93,8 @@ export function FlowDetail() {
             <dd className="font-mono break-all">{host}</dd>
             <dt className="text-muted-foreground">Path</dt>
             <dd className="font-mono break-all">{path}</dd>
+            <dt className="text-muted-foreground">Время</dt>
+            <dd className="font-mono">{formatClock(flow.timestamp)}</dd>
             <dt className="text-muted-foreground">Размер запроса</dt>
             <dd className="font-mono">{formatBytes(reqSize)}</dd>
             <dt className="text-muted-foreground">Размер ответа</dt>

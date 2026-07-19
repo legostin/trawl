@@ -17,6 +17,11 @@ function matchesStatusClass(status: number | undefined, cls: StatusClass): boole
   return `${bucket}xx` === cls;
 }
 
+/** Отфильтрованные потоки, новые сверху (по убыванию id). */
+export function visibleFlows(flows: Flow[], filter: FlowFilter): Flow[] {
+  return flows.filter((f) => flowMatches(f, filter)).reverse();
+}
+
 export function flowMatches(flow: Flow, filter: FlowFilter): boolean {
   if (filter.method && flow.method !== filter.method) return false;
 
