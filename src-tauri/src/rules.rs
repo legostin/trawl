@@ -11,6 +11,8 @@ pub enum Phase {
     Request,
     Response,
     Both,
+    /// Полный контроль: скрипт сам выполняет запрос (send) и возвращает ответ.
+    Handler,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

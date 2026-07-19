@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rquickjs::{Context, Ctx, Runtime};
+use rquickjs::{Context, Ctx, Function, Runtime};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +137,149 @@ fn build_source(prelude: &str, script: &str) -> String {
     )
 }
 
+// ── Handler-режим: скрипт сам выполняет запрос через блокирующий send() ──
+
+/// Ленивая инициализация блокирующего клиента. Создаётся при первом вызове
+/// внутри blocking-контекста (не в async-рантайме) — иначе reqwest паникует.
+fn http_client() -> &'static reqwest::blocking::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new())
+    })
+}
+
+/// Выполняет реальный HTTP-запрос (блокирующе) и возвращает {status,headers,body} как JSON.
+fn native_send(req_json: &str) -> String {
+    let client = http_client();
+    let v: Value = match serde_json::from_str(req_json) {
+        Ok(v) => v,
+        Err(e) => return json!({"status":0,"headers":{},"body":"","error":format!("bad request: {e}")}).to_string(),
+    };
+    let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("GET");
+    let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("");
+    let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
+    let mut rb = client.request(m, url);
+    if let Some(h) = v.get("headers").and_then(|h| h.as_object()) {
+        for (k, val) in h {
+            let lk = k.to_ascii_lowercase();
+            if matches!(
+                lk.as_str(),
+                "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
+            ) {
+                continue;
+            }
+            if let Some(vs) = val.as_str() {
+                rb = rb.header(k, vs);
+            }
+        }
+    }
+    if let Some(b) = v.get("body").and_then(|b| b.as_str()) {
+        if !b.is_empty() {
+            rb = rb.body(b.to_string());
+        }
+    }
+    match rb.send() {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let mut headers = serde_json::Map::new();
+            for (k, val) in resp.headers().iter() {
+                headers.insert(
+                    k.as_str().to_string(),
+                    Value::String(String::from_utf8_lossy(val.as_bytes()).to_string()),
+                );
+            }
+            let body = resp.text().unwrap_or_default();
+            json!({ "status": status, "headers": headers, "body": body }).to_string()
+        }
+        Err(e) => json!({"status":0,"headers":{},"body":"","error":e.to_string()}).to_string(),
+    }
+}
+
+fn build_handler_source(prelude: &str, script: &str) -> String {
+    format!(
+        r#"
+(function() {{
+  try {{
+    const ctx = JSON.parse(__input);
+    const request = ctx.request;
+    function send(req) {{ return JSON.parse(__native_send(JSON.stringify(req || request))); }}
+    function sleep(ms) {{ __native_sleep(ms); }}
+    {prelude}
+    const __out = (function() {{ {script} }})();
+    if (__out === undefined || __out === null) {{
+      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)" }});
+    }}
+    return JSON.stringify({{ action: "respond", response: __out }});
+  }} catch (e) {{
+    return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
+  }}
+}})()
+"#
+    )
+}
+
+/// Синхронно исполняет handler-скрипт: он сам делает send()/sleep() и возвращает ответ.
+/// Вызывать вне tokio-рантайма (через spawn_blocking).
+pub fn execute_handler(
+    prelude: &str,
+    script: &str,
+    input_json: &str,
+    js_timeout: Duration,
+) -> ScriptResult {
+    let rt = match Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return ScriptResult::error(format!("runtime: {e}")),
+    };
+    let deadline = Arc::new(Mutex::new(Instant::now() + js_timeout));
+    {
+        let d = deadline.clone();
+        rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= *d.lock().unwrap())));
+    }
+    let ctx = match Context::full(&rt) {
+        Ok(c) => c,
+        Err(e) => return ScriptResult::error(format!("context: {e}")),
+    };
+    ctx.with(|c| {
+        let g = c.globals();
+        if g.set("__input", input_json.to_string()).is_err() {
+            return ScriptResult::error("set input failed");
+        }
+        let send_fn = match Function::new(c.clone(), move |req: String| -> String {
+            native_send(&req)
+        }) {
+            Ok(f) => f,
+            Err(e) => return ScriptResult::error(format!("bind send: {e}")),
+        };
+        let _ = g.set("__native_send", send_fn);
+        let sleep_fn = match Function::new(c.clone(), move |ms: f64| {
+            let ms = ms.clamp(0.0, 10_000.0) as u64;
+            std::thread::sleep(Duration::from_millis(ms));
+        }) {
+            Ok(f) => f,
+            Err(e) => return ScriptResult::error(format!("bind sleep: {e}")),
+        };
+        let _ = g.set("__native_sleep", sleep_fn);
+
+        let src = build_handler_source(prelude, script);
+        match c.eval::<String, _>(src) {
+            Ok(json) => serde_json::from_str(&json)
+                .unwrap_or_else(|e| ScriptResult::error(format!("bad result json: {e}"))),
+            Err(_) => {
+                let caught = c.catch();
+                let msg = match caught.into_exception() {
+                    Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
+                    None => "handler error or timeout".to_string(),
+                };
+                ScriptResult::error(msg)
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +331,65 @@ mod tests {
         let res = client
             .run(String::new(), "while(true){}".into(), r#"{"request":{}}"#.into())
             .await;
+        assert_eq!(res.action, "error");
+    }
+
+    #[tokio::test]
+    async fn handler_send_returns_upstream_response() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 1024];
+                    let _ = s.read(&mut b).await;
+                    let _ = s
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\npong")
+                        .await;
+                });
+            }
+        });
+
+        let input = format!(
+            r#"{{"request":{{"method":"GET","url":"http://{addr}/","headers":{{}},"body":""}}}}"#
+        );
+        let res = tokio::task::spawn_blocking(move || {
+            execute_handler("", "return send(request);", &input, Duration::from_secs(5))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(res.action, "respond");
+        let resp = res.response.unwrap();
+        assert_eq!(resp["status"], 200);
+        assert_eq!(resp["body"], "pong");
+    }
+
+    #[tokio::test]
+    async fn handler_can_return_synthetic_response() {
+        let res = tokio::task::spawn_blocking(|| {
+            execute_handler(
+                "",
+                "return { status: 201, headers: {}, body: 'hi' };",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond");
+        assert_eq!(res.response.unwrap()["status"], 201);
+    }
+
+    #[tokio::test]
+    async fn handler_without_return_is_error() {
+        let res = tokio::task::spawn_blocking(|| {
+            execute_handler("", "const x = 1;", r#"{"request":{}}"#, Duration::from_secs(5))
+        })
+        .await
+        .unwrap();
         assert_eq!(res.action, "error");
     }
 }
