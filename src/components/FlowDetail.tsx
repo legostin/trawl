@@ -19,6 +19,12 @@ function headerValue(headers: [string, string][], name: string): string | undefi
   return headers.find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
 }
 
+/** Паттерн из потока: точный путь + `*`, чтобы ловить query-варианты и подсказки. */
+function patternFromFlow(flow: Flow): string {
+  const path = flow.url.path.split("?")[0];
+  return `${flow.url.host}${path}*`;
+}
+
 /** Правило-handler, повторяющее запрос (заготовка для правки). */
 function ruleFromFlow(flow: Flow): Rule {
   const path = flow.url.path.split("?")[0];
@@ -26,7 +32,7 @@ function ruleFromFlow(flow: Flow): Rule {
     id: crypto.randomUUID(),
     name: `${flow.method} ${path}`.slice(0, 40),
     enabled: true,
-    pattern: `${flow.url.host}${path}`,
+    pattern: patternFromFlow(flow),
     phase: "handler",
     script: "let response = send(request);\n// правьте request/response по вкусу\nreturn response;\n",
   };
@@ -42,7 +48,7 @@ function mockRuleFromFlow(flow: Flow): Rule {
     id: crypto.randomUUID(),
     name: `mock ${path}`.slice(0, 40),
     enabled: true,
-    pattern: `${flow.url.host}${path}`,
+    pattern: patternFromFlow(flow),
     phase: "request",
     script:
       `ctx.mock({\n` +
