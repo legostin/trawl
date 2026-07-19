@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { TrafficList } from "./components/TrafficList";
 import { FlowDetail } from "./components/FlowDetail";
 import { SetupPanel } from "./components/SetupPanel";
+import { FilterBar } from "./components/FilterBar";
 import { useFlows } from "./store";
 import "./App.css";
 
@@ -73,8 +74,19 @@ function App() {
         <SetupPanel />
       ) : (
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          <div style={{ width: "45%", borderRight: "1px solid #333" }}>
-            <TrafficList />
+          <div
+            style={{
+              width: "45%",
+              borderRight: "1px solid #333",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <FilterBar />
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <TrafficList />
+            </div>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <FlowDetail />
