@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::ca::load_or_create_ca;
 use crate::model::Flow;
+use crate::net::lan_ip;
 use crate::proxy::{self, ProxyHandle};
 use crate::store::FlowStore;
 
@@ -60,4 +63,35 @@ pub fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn get_flows(state: State<'_, AppState>) -> Vec<Flow> {
     state.store.all()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupInfo {
+    pub lan_ip: Option<String>,
+    pub port: u16,
+    pub cert_host: String,
+}
+
+#[tauri::command]
+pub fn get_setup_info() -> Result<SetupInfo, String> {
+    Ok(SetupInfo {
+        lan_ip: lan_ip().map(|ip| ip.to_string()),
+        port: 8888,
+        cert_host: "http-catch".into(),
+    })
+}
+
+#[tauri::command]
+pub fn get_ca_pem(app: AppHandle) -> Result<String, String> {
+    let mat = load_or_create_ca(&ca_dir(&app)?).map_err(|e| e.to_string())?;
+    Ok(mat.cert_pem)
+}
+
+#[tauri::command]
+pub fn ca_cert_path(app: AppHandle) -> Result<String, String> {
+    let dir = ca_dir(&app)?;
+    // гарантируем, что файл существует
+    load_or_create_ca(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("ca.pem").to_string_lossy().to_string())
 }

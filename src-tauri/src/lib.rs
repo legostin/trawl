@@ -1,6 +1,7 @@
 mod ca;
 mod commands;
 mod model;
+mod net;
 mod proxy;
 mod store;
 
@@ -15,6 +16,9 @@ pub fn run() {
             commands::start_proxy,
             commands::stop_proxy,
             commands::get_flows,
+            commands::get_setup_info,
+            commands::get_ca_pem,
+            commands::ca_cert_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
