@@ -1,6 +1,6 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Inbox, SearchX } from "lucide-react";
+import { ArrowRight, Inbox, SearchX, Wand2 } from "lucide-react";
 import { useFlows } from "../store";
 import { visibleFlows } from "../filter";
 import { MethodBadge, StatusBadge } from "./badges";
@@ -8,7 +8,7 @@ import { EmptyState } from "./EmptyState";
 import { bodyLength, formatBytes, formatClock } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const COLS = "56px 48px minmax(120px,1.3fr) minmax(120px,2fr) 68px 76px";
+const COLS = "20px 52px 48px minmax(110px,1.3fr) minmax(120px,2fr) 64px 76px";
 
 export function TrafficTable() {
   const allFlows = useFlows((s) => s.flows);
@@ -31,6 +31,7 @@ export function TrafficTable() {
         className="grid items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
         style={{ gridTemplateColumns: COLS }}
       >
+        <span />
         <span>Метод</span>
         <span>Код</span>
         <span>Host</span>
@@ -80,6 +81,15 @@ export function TrafficTable() {
                     gridTemplateColumns: COLS,
                   }}
                 >
+                  {flow.appliedRules.length > 0 ? (
+                    <span title={`Применено правило: ${flow.appliedRules.join(", ")}`}>
+                      <Wand2 className="size-3 text-http-amber" />
+                    </span>
+                  ) : (
+                    <span title="Просто проксирован">
+                      <ArrowRight className="size-3 text-muted-foreground/40" />
+                    </span>
+                  )}
                   <MethodBadge method={flow.method} />
                   <StatusBadge status={flow.response?.status} />
                   <span className="truncate text-foreground">{flow.url.host}</span>
