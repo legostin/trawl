@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useFlows } from "../store";
+import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
@@ -11,6 +12,8 @@ import { ResizableGroup, ResizablePanel, ResizableHandle } from "./ui/resizable"
 export function AppShell() {
   const init = useFlows((s) => s.init);
   const view = useFlows((s) => s.view);
+  const detailCollapsed = useFlows((s) => s.detailCollapsed);
+  useKeyboardShortcuts();
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -27,14 +30,24 @@ export function AppShell() {
           <SetupPanel />
         ) : (
           <ResizableGroup direction="horizontal" className="h-full">
-            <ResizablePanel defaultSize={45} minSize={25} className="flex min-h-0 flex-col">
+            <ResizablePanel
+              id="list"
+              order={1}
+              defaultSize={45}
+              minSize={25}
+              className="flex min-h-0 flex-col"
+            >
               <FilterBar />
               <ListPanel />
             </ResizablePanel>
-            <ResizableHandle />
-            <ResizablePanel minSize={30} className="min-h-0">
-              <FlowDetail />
-            </ResizablePanel>
+            {!detailCollapsed && (
+              <>
+                <ResizableHandle />
+                <ResizablePanel id="detail" order={2} minSize={30} className="min-h-0">
+                  <FlowDetail />
+                </ResizablePanel>
+              </>
+            )}
           </ResizableGroup>
         )}
       </main>

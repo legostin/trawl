@@ -18,7 +18,7 @@ interface FlowsState {
   listMode: ListMode;
   detailCollapsed: boolean;
 
-  select: (id: number) => void;
+  select: (id: number | null) => void;
   upsert: (flow: Flow) => void;
   setFilter: (patch: Partial<FlowFilter>) => void;
   clearFilter: () => void;
