@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { TrafficList } from "./components/TrafficList";
 import { FlowDetail } from "./components/FlowDetail";
+import { SetupPanel } from "./components/SetupPanel";
 import { useFlows } from "./store";
 import "./App.css";
+
+type View = "traffic" | "setup";
 
 function App() {
   const init = useFlows((s) => s.init);
@@ -10,6 +13,7 @@ function App() {
   const stopProxy = useFlows((s) => s.stopProxy);
   const [running, setRunning] = useState(false);
   const [addr, setAddr] = useState<string>("");
+  const [view, setView] = useState<View>("traffic");
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -50,15 +54,33 @@ function App() {
       >
         <button onClick={toggle}>{running ? "Stop" : "Start"} proxy</button>
         {addr && <span>Proxy: {addr}</span>}
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => setView("traffic")}
+          style={{ fontWeight: view === "traffic" ? "bold" : "normal" }}
+        >
+          Traffic
+        </button>
+        <button
+          onClick={() => setView("setup")}
+          style={{ fontWeight: view === "setup" ? "bold" : "normal" }}
+        >
+          Setup
+        </button>
       </div>
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <div style={{ width: "45%", borderRight: "1px solid #333" }}>
-          <TrafficList />
+
+      {view === "setup" ? (
+        <SetupPanel />
+      ) : (
+        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+          <div style={{ width: "45%", borderRight: "1px solid #333" }}>
+            <TrafficList />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <FlowDetail />
+          </div>
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <FlowDetail />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
