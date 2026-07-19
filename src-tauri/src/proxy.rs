@@ -271,4 +271,42 @@ mod tests {
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
+
+    // Сквозной HTTPS-smoke: ходит на реальный сайт через прокси, доверяя нашему CA,
+    // и проверяет, что поток расшифрован (scheme == https, статус 200).
+    // Помечен #[ignore], т.к. требует сети; запускать вручную: cargo test -- --ignored
+    #[tokio::test]
+    #[ignore = "network: hits a real https site to verify MITM decryption"]
+    async fn decrypts_https_through_proxy() {
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ca_dir);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone())
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let ca_pem = std::fs::read(ca_dir.join("ca.pem")).unwrap();
+        let cert = reqwest::Certificate::from_pem(&ca_pem).unwrap();
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{bound}")).unwrap())
+            .add_root_certificate(cert)
+            .build()
+            .unwrap();
+
+        let resp = client.get("https://example.com/").send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let flows = store.all();
+        assert!(
+            flows.iter().any(|f| f.url.scheme == "https"),
+            "ожидали расшифрованный https-поток, потоки: {:?}",
+            flows.iter().map(|f| &f.url.scheme).collect::<Vec<_>>()
+        );
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
 }
