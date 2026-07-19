@@ -1,0 +1,76 @@
+import { Antenna, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
+import { useFlows } from "../store";
+import { useTheme } from "./ThemeProvider";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Segmented } from "./ui/segmented";
+import type { View } from "../store";
+
+export function TopBar() {
+  const running = useFlows((s) => s.running);
+  const proxyAddr = useFlows((s) => s.proxyAddr);
+  const toggleProxy = useFlows((s) => s.toggleProxy);
+  const view = useFlows((s) => s.view);
+  const setView = useFlows((s) => s.setView);
+  const query = useFlows((s) => s.filter.query);
+  const setFilter = useFlows((s) => s.setFilter);
+  const clearFlows = useFlows((s) => s.clearFlows);
+  const { theme, toggle } = useTheme();
+
+  return (
+    <header className="flex h-11 items-center gap-3 border-b border-border bg-card px-3">
+      <div className="flex items-center gap-2 font-semibold">
+        <Antenna className="size-4 text-primary" />
+        <span className="text-sm">http-catch</span>
+      </div>
+
+      <Button
+        variant={running ? "destructive" : "default"}
+        size="sm"
+        onClick={() => void toggleProxy()}
+        className="ml-1"
+      >
+        {running ? <Square className="fill-current" /> : <Play className="fill-current" />}
+        {running ? "Stop" : "Start"}
+      </Button>
+
+      {running && proxyAddr && (
+        <span className="flex items-center gap-1.5 rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">
+          <span className="relative flex size-2">
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-http-green opacity-75" />
+            <span className="relative inline-flex size-2 rounded-full bg-http-green" />
+          </span>
+          {proxyAddr}
+        </span>
+      )}
+
+      <div className="relative ml-2 max-w-xs flex-1">
+        <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          data-search-input
+          value={query}
+          onChange={(e) => setFilter({ query: e.target.value })}
+          placeholder="Поиск по host / URL…"
+          className="pl-7"
+        />
+      </div>
+
+      <div className="ml-auto flex items-center gap-2">
+        <Button variant="ghost" size="iconSm" title="Очистить список" onClick={() => clearFlows()}>
+          <Trash2 />
+        </Button>
+        <Segmented<View>
+          value={view}
+          onChange={setView}
+          options={[
+            { value: "traffic", label: "Traffic" },
+            { value: "setup", label: "Setup" },
+          ]}
+        />
+        <Button variant="ghost" size="iconSm" title="Тема" onClick={toggle}>
+          {theme === "dark" ? <Sun /> : <Moon />}
+        </Button>
+      </div>
+    </header>
+  );
+}
