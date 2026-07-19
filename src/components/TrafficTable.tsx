@@ -32,8 +32,8 @@ export function TrafficTable() {
         style={{ gridTemplateColumns: COLS }}
       >
         <span />
-        <span>Метод</span>
-        <span>Код</span>
+        <span>Method</span>
+        <span>Code</span>
         <span>Host</span>
         <span>Path</span>
         <span className="text-right">Size</span>
@@ -44,14 +44,14 @@ export function TrafficTable() {
         allFlows.length === 0 ? (
           <EmptyState
             icon={<Inbox className="size-8" />}
-            title="Пока нет трафика"
-            hint="Нажмите Start и направьте запросы через прокси 0.0.0.0:8888."
+            title="No traffic yet"
+            hint="Press Start and route requests through the proxy at 0.0.0.0:8888."
           />
         ) : (
           <EmptyState
             icon={<SearchX className="size-8" />}
-            title="Ничего не найдено"
-            hint="Попробуйте изменить поиск или фильтры."
+            title="Nothing found"
+            hint="Try changing the search or filters."
           />
         )
       ) : (
@@ -82,11 +82,11 @@ export function TrafficTable() {
                   }}
                 >
                   {flow.appliedRules.length > 0 ? (
-                    <span title={`Применено правило: ${flow.appliedRules.join(", ")}`}>
+                    <span title={`Rule applied: ${flow.appliedRules.join(", ")}`}>
                       <Wand2 className="size-3 text-http-amber" />
                     </span>
                   ) : (
-                    <span title="Просто проксирован">
+                    <span title="Proxied (no rule)">
                       <ArrowRight className="size-3 text-muted-foreground/40" />
                     </span>
                   )}

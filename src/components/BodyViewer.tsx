@@ -11,7 +11,7 @@ export function BodyViewer({ msg }: { msg: HttpMessage | ResponseMessage | null 
   const [expanded, setExpanded] = useState(false);
   const text = bodyToText(msg);
 
-  if (!text) return <div className="p-3 text-xs text-muted-foreground">Нет тела</div>;
+  if (!text) return <div className="p-3 text-xs text-muted-foreground">No body</div>;
   if (text.startsWith("<binary"))
     return <div className="p-3 font-mono text-xs text-muted-foreground">{text}</div>;
 
@@ -24,16 +24,16 @@ export function BodyViewer({ msg }: { msg: HttpMessage | ResponseMessage | null 
         variant="ghost"
         size="iconSm"
         className="absolute right-1 top-1 z-10"
-        title="Копировать тело"
+        title="Copy body"
         onClick={() => void navigator.clipboard.writeText(text)}
       >
         <Copy />
       </Button>
       {tooBig ? (
         <div className="p-3 text-xs text-muted-foreground">
-          Тело большое ({(text.length / 1024).toFixed(0)} KB).{" "}
+          Body is large ({(text.length / 1024).toFixed(0)} KB).{" "}
           <button className="text-primary underline" onClick={() => setExpanded(true)}>
-            Показать
+            Show
           </button>
         </div>
       ) : json !== null ? (

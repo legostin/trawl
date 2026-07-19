@@ -13,9 +13,9 @@ import { HintsPanel } from "./HintsPanel";
 import { cn } from "@/lib/utils";
 
 const NEW_SCRIPT =
-  "// handler: сам выполняете запрос через send() и возвращаете ответ.\n" +
+  "// handler: you perform the request via send() and return the response.\n" +
   "let response = send(request);\n" +
-  "// пример ретрая:\n" +
+  "// retry example:\n" +
   "// while (response.status === 429) { sleep(1000); response = send(request); }\n" +
   "return response;\n";
 
@@ -38,7 +38,7 @@ export function RulesView() {
   const newRule = () => {
     void upsert({
       id: crypto.randomUUID(),
-      name: "Новое правило",
+      name: "New rule",
       enabled: true,
       pattern: "*/*",
       phase: "handler",
@@ -53,8 +53,8 @@ export function RulesView() {
     <div className="flex h-full">
       <div className="flex w-64 shrink-0 flex-col border-r border-border">
         <div className="flex items-center gap-2 border-b border-border bg-card px-2 py-1.5">
-          <span className="text-xs font-semibold text-muted-foreground">Правила</span>
-          <Button size="iconSm" variant="ghost" className="ml-auto" title="Новое правило" onClick={newRule}>
+          <span className="text-xs font-semibold text-muted-foreground">Rules</span>
+          <Button size="iconSm" variant="ghost" className="ml-auto" title="New rule" onClick={newRule}>
             <Plus />
           </Button>
         </div>
@@ -76,7 +76,7 @@ export function RulesView() {
             </button>
           ))}
           {scoped.length === 0 && (
-            <div className="p-3 text-xs text-muted-foreground">Правил пока нет — нажмите ＋</div>
+            <div className="p-3 text-xs text-muted-foreground">No rules yet — press ＋</div>
           )}
         </div>
         <button
@@ -87,7 +87,7 @@ export function RulesView() {
           )}
         >
           <BookMarked className="size-3.5 text-primary" />
-          Библиотека функций
+          Function library
         </button>
       </div>
 
@@ -99,8 +99,8 @@ export function RulesView() {
         ) : (
           <EmptyState
             icon={<FileCode2 className="size-8" />}
-            title="Выберите правило"
-            hint="Или создайте новое: правило меняет запрос/ответ по URL-паттерну скриптом на JS."
+            title="Select a rule"
+            hint="Or create one: a rule transforms the request/response for a URL pattern via a JS script."
           />
         )}
       </div>
@@ -127,16 +127,16 @@ function RuleEditor({
           value={draft.name}
           onChange={(e) => patch({ name: e.target.value })}
           className="h-7 w-44"
-          placeholder="Имя"
+          placeholder="Name"
         />
         <Input
           value={draft.pattern}
           onChange={(e) => patch({ pattern: e.target.value })}
           className="h-7 w-56 font-mono"
-          placeholder="host/path glob, напр. api.example.com/*"
+          placeholder="host/path glob, e.g. api.example.com/*"
         />
         <Select value={draft.phase} onChange={(e) => patch({ phase: e.target.value as Phase })}>
-          <option value="handler">handler (send сам)</option>
+          <option value="handler">handler (own send)</option>
           <option value="request">request</option>
           <option value="response">response</option>
           <option value="both">both</option>
@@ -152,15 +152,15 @@ function RuleEditor({
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" onClick={() => void onSave(draft)}>
             <Save />
-            Сохранить
+            Save
           </Button>
-          <Button size="iconSm" variant="ghost" title="Удалить" onClick={onDelete}>
+          <Button size="iconSm" variant="ghost" title="Delete" onClick={onDelete}>
             <Trash2 />
           </Button>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
-        <span className="text-[11px] text-muted-foreground">Шаблоны:</span>
+        <span className="text-[11px] text-muted-foreground">Templates:</span>
         {SNIPPETS.map((s) => (
           <Button
             key={s.label}
@@ -194,11 +194,11 @@ function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: strin
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
         <span className="text-xs text-muted-foreground">
-          Функции здесь доступны во всех правилах (prelude).
+          Functions here are available in every rule (prelude).
         </span>
         <Button size="sm" className="ml-auto" onClick={() => void onSave(src)}>
           <Save />
-          Сохранить
+          Save
         </Button>
       </div>
       <div className="min-h-0 flex-1">

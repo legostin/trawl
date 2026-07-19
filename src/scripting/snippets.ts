@@ -5,7 +5,7 @@ export interface Snippet {
 
 export const SNIPPETS: Snippet[] = [
   {
-    label: "Handler: send + ретрай",
+    label: "Handler: send + retry",
     code:
       "let response = send(request);\n" +
       "while (response.status === 429) {\n" +
@@ -15,7 +15,7 @@ export const SNIPPETS: Snippet[] = [
       "return response;\n",
   },
   {
-    label: "Handler: правка ответа",
+    label: "Handler: edit response",
     code:
       "const response = send(request);\n" +
       "const data = JSON.parse(response.body || '{}');\n" +
@@ -24,18 +24,18 @@ export const SNIPPETS: Snippet[] = [
       "return response;\n",
   },
   {
-    label: "Заголовок запроса",
+    label: "Request header",
     code: "request.headers['X-Debug'] = '1';\n",
   },
   {
-    label: "Правка JSON-запроса",
+    label: "Edit JSON request",
     code:
       "const data = JSON.parse(request.body || '{}');\n" +
       "data.injected = true;\n" +
       "request.body = JSON.stringify(data);\n",
   },
   {
-    label: "Мок ответа",
+    label: "Mock response",
     code:
       "ctx.mock({\n" +
       "  status: 200,\n" +
@@ -44,7 +44,7 @@ export const SNIPPETS: Snippet[] = [
       "});\n",
   },
   {
-    label: "Правка JSON-ответа",
+    label: "Edit JSON response",
     code:
       "if (response) {\n" +
       "  const data = JSON.parse(response.body || '{}');\n" +
@@ -53,7 +53,7 @@ export const SNIPPETS: Snippet[] = [
       "}\n",
   },
   {
-    label: "Подмена статуса",
+    label: "Override status",
     code: "if (response) { response.status = 503; }\n",
   },
 ];

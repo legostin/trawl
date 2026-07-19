@@ -26,14 +26,14 @@ export function StructureTree() {
     return allFlows.length === 0 ? (
       <EmptyState
         icon={<Inbox className="size-8" />}
-        title="Пока нет трафика"
-        hint="Нажмите Start и направьте запросы через прокси 0.0.0.0:8888."
+        title="No traffic yet"
+        hint="Press Start and route requests through the proxy at 0.0.0.0:8888."
       />
     ) : (
       <EmptyState
         icon={<SearchX className="size-8" />}
-        title="Ничего не найдено"
-        hint="Попробуйте изменить поиск или фильтры."
+        title="Nothing found"
+        hint="Try changing the search or filters."
       />
     );
   }
