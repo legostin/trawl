@@ -2,18 +2,18 @@ import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Inbox, SearchX } from "lucide-react";
 import { useFlows } from "../store";
-import { flowMatches } from "../filter";
+import { visibleFlows } from "../filter";
 import { MethodBadge, StatusBadge } from "./badges";
 import { EmptyState } from "./EmptyState";
-import { bodyLength, formatBytes, durationMs, formatDuration } from "@/lib/format";
+import { bodyLength, formatBytes, formatClock } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const COLS = "56px 48px minmax(120px,1.3fr) minmax(120px,2fr) 68px 72px";
+const COLS = "56px 48px minmax(120px,1.3fr) minmax(120px,2fr) 68px 76px";
 
 export function TrafficTable() {
   const allFlows = useFlows((s) => s.flows);
   const filter = useFlows((s) => s.filter);
-  const flows = useMemo(() => allFlows.filter((f) => flowMatches(f, filter)), [allFlows, filter]);
+  const flows = useMemo(() => visibleFlows(allFlows, filter), [allFlows, filter]);
   const selectedId = useFlows((s) => s.selectedId);
   const select = useFlows((s) => s.select);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -59,7 +59,6 @@ export function TrafficTable() {
             {rowVirtualizer.getVirtualItems().map((vi) => {
               const flow = flows[vi.index];
               const size = bodyLength(flow.response);
-              const dur = durationMs(flow.timings.sent, flow.timings.done);
               const selected = flow.id === selectedId;
               return (
                 <div
@@ -89,7 +88,7 @@ export function TrafficTable() {
                     {formatBytes(size)}
                   </span>
                   <span className="text-right font-mono text-[11px] text-muted-foreground">
-                    {formatDuration(dur)}
+                    {formatClock(flow.timestamp)}
                   </span>
                 </div>
               );

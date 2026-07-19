@@ -25,3 +25,11 @@ export function formatDuration(ms: number | null): string {
   if (ms < 1000) return `${ms} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
 }
+
+/** Время запроса (локальное) с точностью до секунды: HH:MM:SS. */
+export function formatClock(unixMs: number): string {
+  if (!unixMs) return "—";
+  const d = new Date(unixMs);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}

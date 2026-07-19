@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useFlows } from "../store";
-import { flowMatches } from "../filter";
+import { visibleFlows } from "../filter";
 
 /** Глобальные горячие клавиши: навигация по списку, фокус поиска, деселект, сворачивание деталей. */
 export function useKeyboardShortcuts() {
@@ -51,7 +51,7 @@ export function useKeyboardShortcuts() {
       const isUp = e.key === "ArrowUp" || e.key === "k";
       if (!isDown && !isUp) return;
 
-      const list = flows.filter((f) => flowMatches(f, filter));
+      const list = visibleFlows(flows, filter);
       if (list.length === 0) return;
       e.preventDefault();
       const idx = list.findIndex((f) => f.id === selectedId);
