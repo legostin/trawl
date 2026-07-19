@@ -149,6 +149,15 @@ impl CaptureHandler {
             .collect()
     }
 
+    fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
+        self.rules
+            .read()
+            .unwrap()
+            .iter()
+            .find(|r| r.enabled && r.phase == Phase::Handler && targets.iter().any(|t| r.matches_target(t)))
+            .cloned()
+    }
+
     fn record_mock_response(&self, id: u64, spec: &Value) {
         let status = spec.get("status").and_then(|s| s.as_u64()).unwrap_or(200) as u16;
         let headers = spec.get("headers").map(json_to_headers).unwrap_or_default();
@@ -285,11 +294,81 @@ impl HttpHandler for CaptureHandler {
         let is_text = looks_textual(&orig_headers);
         let display_body = decode_body(&bytes, header_value(&orig_headers, "content-encoding"));
 
-        // ── скрипты фазы запроса ──
         let targets = vec![
             format!("{}{}", url.host, url.path),
             format!("{}:{}{}", url.host, url.port, url.path),
         ];
+
+        // ── handler-режим: скрипт сам выполняет запрос (send) и возвращает ответ ──
+        if let Some(hrule) = self.matching_handler(&targets) {
+            let input = json!({
+                "request": {
+                    "method": parts.method.to_string(),
+                    "url": full_url,
+                    "host": url.host,
+                    "path": url.path,
+                    "headers": headers_to_json(&orig_headers),
+                    "body": text_of(&display_body, is_text),
+                }
+            })
+            .to_string();
+            let prelude = self.library.read().unwrap().clone();
+            let script = hrule.script.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                crate::scripting::execute_handler(
+                    &prelude,
+                    &script,
+                    &input,
+                    std::time::Duration::from_secs(30),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| crate::scripting::ScriptResult::error("handler panicked"));
+
+            let mut flow = Flow::new_request(
+                id,
+                parts.method.to_string(),
+                url,
+                HttpMessage {
+                    headers: orig_headers,
+                    body: display_body,
+                    body_is_text: is_text,
+                },
+            );
+            flow.timestamp = unix_ms();
+            flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
+            flow.applied_rules = vec![hrule.name.clone()];
+            self.current_id = Some(id);
+
+            if res.action == "respond" {
+                if let Some(spec) = res.response {
+                    let status = spec.get("status").and_then(|s| s.as_u64()).unwrap_or(200) as u16;
+                    let headers = spec.get("headers").map(json_to_headers).unwrap_or_default();
+                    let body = spec
+                        .get("body")
+                        .and_then(|b| b.as_str())
+                        .unwrap_or("")
+                        .as_bytes()
+                        .to_vec();
+                    flow.response = Some(ResponseMessage { status, headers, body, body_is_text: true });
+                    flow.timings.done = Some(self.started.elapsed().as_millis() as u64);
+                    flow.state = FlowState::Completed;
+                    self.store.insert(flow.clone());
+                    (self.emit)("flow-added", &flow);
+                    return RequestOrResponse::Response(build_mock_response(&spec));
+                }
+            }
+            // ошибка handler
+            flow.state = FlowState::Error;
+            flow.error = Some(res.error.unwrap_or_else(|| "handler error".into()));
+            self.store.insert(flow.clone());
+            (self.emit)("flow-added", &flow);
+            return RequestOrResponse::Response(build_abort_response(
+                flow.error.as_deref().unwrap_or("handler error"),
+            ));
+        }
+
+        // ── скрипты фазы запроса ──
         let rules = self.matching(Phase::Request, &targets);
         let mut work_headers = orig_headers.clone();
         let mut work_body = text_of(&display_body, is_text);
@@ -893,6 +972,62 @@ mod tests {
         let resp = client.get("http://127.0.0.1:1/x").send().await.unwrap();
         assert_eq!(resp.status(), 201);
         assert_eq!(resp.text().await.unwrap(), "mocked!");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Handler-правило само выполняет запрос через send() и преобразует ответ.
+    #[tokio::test]
+    async fn handler_rule_sends_and_transforms_response() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello")
+                        .await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![rule(
+            "upper",
+            &format!("{upstream_addr}/*"),
+            Phase::Handler,
+            "const r = send(request); r.body = r.body.toUpperCase(); return r;",
+        )];
+        let (s, r, l) = scripting(rules);
+        let ca_dir = temp_ca();
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l)
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let body = client
+            .get(format!("http://{upstream_addr}/data"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(body, "HELLO", "handler должен вернуть преобразованный ответ");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let flow = store.all().into_iter().next().unwrap();
+        assert!(flow.applied_rules.contains(&"upper".to_string()));
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);

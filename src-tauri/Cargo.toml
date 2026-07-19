@@ -33,7 +33,5 @@ flate2 = "1"
 brotli = "7"
 regex = "1"
 rquickjs = "0.9"
-
-[dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip"] }
 
