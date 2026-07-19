@@ -4,6 +4,7 @@ mod model;
 mod net;
 mod proxy;
 mod rules;
+mod scripting;
 mod store;
 
 use commands::AppState;
