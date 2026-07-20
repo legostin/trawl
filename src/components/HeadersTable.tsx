@@ -1,8 +1,14 @@
 import type { Header } from "@/types";
 
-export function HeadersTable({ headers }: { headers: Header[] }) {
+export function HeadersTable({
+  headers,
+  emptyText = "No headers",
+}: {
+  headers: Header[];
+  emptyText?: string;
+}) {
   if (headers.length === 0) {
-    return <div className="p-3 text-xs text-muted-foreground">No headers</div>;
+    return <div className="p-3 text-xs text-muted-foreground">{emptyText}</div>;
   }
   return (
     <table className="w-full border-collapse text-xs">

@@ -21,6 +21,7 @@ import { TabBar } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
 import { bodyToText } from "@/lib/body";
+import { queryParams, formParams, isFormEncoded } from "@/lib/params";
 import { bodyLength, formatBytes, durationMs, formatDuration, formatClock } from "@/lib/format";
 import type { Flow } from "@/types";
 
@@ -190,16 +191,7 @@ export function FlowDetail() {
           </dl>
         )}
 
-        {tab === "request" && (
-          <div>
-            <SectionTitle>Headers</SectionTitle>
-            <div className="px-3">
-              <HeadersTable headers={flow.request.headers} />
-            </div>
-            <SectionTitle>Body</SectionTitle>
-            <BodyViewer msg={flow.request} />
-          </div>
-        )}
+        {tab === "request" && <RequestPanel flow={flow} />}
 
         {tab === "response" && (
           <div>
@@ -225,6 +217,46 @@ export function FlowDetail() {
           </dl>
         )}
       </div>
+    </div>
+  );
+}
+
+type ReqTab = "query" | "form" | "headers" | "body";
+
+function RequestPanel({ flow }: { flow: Flow }) {
+  const query = queryParams(flow.url.path);
+  const form = formParams(flow.request);
+  const hasForm = isFormEncoded(flow.request);
+
+  const tabs: { value: ReqTab; label: string }[] = [];
+  if (query.length > 0) tabs.push({ value: "query", label: `Query (${query.length})` });
+  if (hasForm) tabs.push({ value: "form", label: `Form (${form.length})` });
+  tabs.push({ value: "headers", label: `Headers (${flow.request.headers.length})` });
+  tabs.push({ value: "body", label: "Body" });
+
+  const [tab, setTab] = useState<ReqTab>(tabs[0].value);
+  // Поток мог смениться — держим активную вкладку валидной.
+  const active = tabs.some((t) => t.value === tab) ? tab : tabs[0].value;
+
+  return (
+    <div>
+      <TabBar<ReqTab> value={active} onChange={setTab} tabs={tabs} />
+      {active === "query" && (
+        <div className="px-3 pt-2">
+          <HeadersTable headers={query} emptyText="No query parameters" />
+        </div>
+      )}
+      {active === "form" && (
+        <div className="px-3 pt-2">
+          <HeadersTable headers={form} emptyText="No form parameters" />
+        </div>
+      )}
+      {active === "headers" && (
+        <div className="px-3 pt-2">
+          <HeadersTable headers={flow.request.headers} />
+        </div>
+      )}
+      {active === "body" && <BodyViewer msg={flow.request} />}
     </div>
   );
 }
