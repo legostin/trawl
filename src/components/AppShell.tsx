@@ -3,6 +3,7 @@ import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useUpdater } from "../updater";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
+import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
@@ -31,10 +32,12 @@ export function AppShell() {
   }, [init, loadProjects]);
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      <TopBar />
+    <div className="flex h-full bg-background text-foreground">
+      <Sidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar />
 
-      <main className="min-h-0 flex-1">
+        <main className="min-h-0 flex-1">
         {view === "setup" ? (
           <SetupPanel />
         ) : view === "rules" ? (
@@ -61,9 +64,11 @@ export function AppShell() {
             )}
           </ResizableGroup>
         )}
-      </main>
+        </main>
 
-      <StatusBar />
+        <StatusBar />
+      </div>
+
       <ProjectEditor />
       <Toast />
     </div>
