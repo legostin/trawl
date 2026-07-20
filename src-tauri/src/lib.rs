@@ -38,6 +38,7 @@ pub fn run() {
             setup_actions::set_system_proxy,
             setup_actions::system_proxy_enabled,
             setup_actions::install_ca_ios_simulator,
+            setup_actions::ios_simulator_booted,
             setup_actions::launch_chrome_proxy,
         ])
         .run(tauri::generate_context!())

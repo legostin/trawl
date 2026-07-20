@@ -131,6 +131,16 @@ pub fn system_proxy_enabled() -> bool {
 }
 
 #[tauri::command]
+pub fn ios_simulator_booted() -> bool {
+    Command::new("xcrun")
+        .args(["simctl", "list", "devices", "booted"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("(Booted)"))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 pub fn install_ca_ios_simulator(app: AppHandle) -> Result<(), String> {
     let ca = ca_pem_path(&app)?;
     let mut cmd = Command::new("xcrun");
