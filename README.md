@@ -48,8 +48,8 @@ git push origin v0.1.0
 ```
 
 The workflow builds a universal (`aarch64` + `x86_64`) macOS bundle, signs it with a
-Developer ID Application certificate, notarizes it with Apple, and attaches the DMG to a
-**draft** GitHub Release.
+Developer ID Application certificate, notarizes it with Apple, signs the auto-update
+artifacts, and **publishes** a GitHub Release with the DMG and the `latest.json` update feed.
 
 ### Required repository secrets
 
@@ -63,8 +63,42 @@ Apple Developer account.
 | `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
 | `KEYCHAIN_PASSWORD` | Any random string; used for the temporary CI keychain |
 | `APPLE_ID` | Your Apple ID email (for notarization) |
-| `APPLE_PASSWORD` | An app-specific password ([appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords) |
+| `APPLE_PASSWORD` | An app-specific password ([account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords) |
 | `APPLE_TEAM_ID` | Your 10-character Apple Team ID |
+| `TAURI_SIGNING_PRIVATE_KEY` | The updater signing private key (contents of the file from `tauri signer generate`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for that updater key |
 
-Without these secrets the build still runs but the DMG is unsigned; macOS Gatekeeper
-will warn users until signing is configured.
+Without the Apple secrets the build still runs but the DMG is unsigned; macOS Gatekeeper
+will warn users until signing is configured. Without the `TAURI_SIGNING_*` secrets the
+updater feed is not signed and auto-update won't work.
+
+## Auto-update
+
+The app checks for updates on launch and shows an **Update to vX.Y.Z** button in the top
+bar when a newer release is available; clicking it downloads, installs and relaunches.
+There's also a manual **Check for updates** control. Updates use the Tauri updater plugin;
+the update feed is served from the GitHub Release's `latest.json`.
+
+Updates are cryptographically verified with a **minisign** key that is separate from Apple
+code signing. Generate it once:
+
+```sh
+pnpm tauri signer generate -w ~/.tauri/trawl-updater.key
+```
+
+Put the printed **public key** into `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`),
+and add the private key + its password as the `TAURI_SIGNING_*` secrets above.
+
+### Cutting an update
+
+An update is only offered when the released version is greater than the installed one:
+
+```sh
+# bump "version" in tauri.conf.json and package.json (e.g. 0.1.0 -> 0.1.1)
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The workflow publishes the release with a signed `latest.json`; installed copies pick it up
+on their next launch. Only **published** (non-draft, non-prerelease) releases are seen by
+the updater, which is why the workflow publishes directly.

@@ -2,6 +2,7 @@ import { Antenna, FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "luc
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useTheme } from "./ThemeProvider";
+import { UpdateButton } from "./UpdateButton";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
@@ -90,6 +91,7 @@ export function TopBar() {
             { value: "setup", label: "Setup" },
           ]}
         />
+        <UpdateButton />
         <Button variant="ghost" size="iconSm" title="Theme" onClick={toggle}>
           {theme === "dark" ? <Sun /> : <Moon />}
         </Button>

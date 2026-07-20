@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
+import { useUpdater } from "../updater";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
@@ -24,6 +25,8 @@ export function AppShell() {
     let cleanup: (() => void) | undefined;
     init().then((c) => (cleanup = c));
     void loadProjects();
+    // Silent update check on launch (no-op in dev / when offline).
+    void useUpdater.getState().check(true);
     return () => cleanup?.();
   }, [init, loadProjects]);
 
