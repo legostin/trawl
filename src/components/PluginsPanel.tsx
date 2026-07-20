@@ -13,6 +13,7 @@ export function PluginsPanel() {
   const install = usePlugins((s) => s.install);
   const remove = usePlugins((s) => s.remove);
   const setEnabled = usePlugins((s) => s.setEnabled);
+  const unregisterMode = usePlugins((s) => s.unregisterMode);
   const checkUpdates = usePlugins((s) => s.checkUpdates);
   const update = usePlugins((s) => s.update);
   const show = useToast((s) => s.show);
@@ -38,9 +39,21 @@ export function PluginsPanel() {
   const applyUpdate = async (id: string, name: string) => {
     try {
       await update(id);
-      show(`Updated ${name} — restart to apply`);
+      await loadPlugin(id); // hot-swap the running plugin — no restart
+      show(`Updated ${name}`);
     } catch (e) {
       show(`Update failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const toggleEnabled = async (id: string, name: string, wasEnabled: boolean) => {
+    await setEnabled(id, !wasEnabled);
+    if (wasEnabled) {
+      unregisterMode(id); // hot-disable: drop its mode from the UI
+      show(`Disabled ${name}`);
+    } else {
+      await loadPlugin(id); // hot-enable: load and register now
+      show(`Enabled ${name}`);
     }
   };
 
@@ -134,7 +147,7 @@ export function PluginsPanel() {
                 <Button
                   variant="default"
                   size="sm"
-                  title={`Update to v${updates[p.id]} (applies on restart)`}
+                  title={`Update to v${updates[p.id]}`}
                   onClick={() => void applyUpdate(p.id, p.name)}
                 >
                   <ArrowUpCircle />
@@ -144,8 +157,8 @@ export function PluginsPanel() {
               <Button
                 variant="ghost"
                 size="iconSm"
-                title={p.enabled ? "Disable (takes effect on restart)" : "Enable (takes effect on restart)"}
-                onClick={() => void setEnabled(p.id, !p.enabled)}
+                title={p.enabled ? "Disable" : "Enable"}
+                onClick={() => void toggleEnabled(p.id, p.name, p.enabled)}
               >
                 {p.enabled ? <Power className="text-http-green" /> : <PowerOff />}
               </Button>

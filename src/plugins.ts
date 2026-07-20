@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { useLayout } from "./layout";
 import type { RegisteredMode } from "./plugins/api";
+
+/** If a mode is being removed while it's active, fall back to the traffic mode. */
+function leaveModeIfActive(id: string) {
+  if (useLayout.getState().mode === id) useLayout.getState().setMode("traffic");
+}
 
 export interface Plugin {
   id: string;
@@ -47,6 +53,8 @@ interface PluginsState {
   remove: (id: string) => Promise<void>;
   setEnabled: (id: string, enabled: boolean) => Promise<void>;
   registerMode: (mode: RegisteredMode) => void;
+  /** Remove a plugin's registered mode from the UI (hot disable). */
+  unregisterMode: (id: string) => void;
   /** Fetch each installed plugin's manifest and record newer versions. */
   checkUpdates: () => Promise<void>;
   /** Re-fetch a plugin's bundle at its ref (applies on restart). */
@@ -68,6 +76,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     const installed = await invoke<Plugin[]>("remove_plugin", { id });
     const updates = { ...get().updates };
     delete updates[id];
+    leaveModeIfActive(id);
     set({ installed, updates, modes: get().modes.filter((m) => m.id !== id) });
   },
   setEnabled: async (id, enabled) => {
@@ -80,6 +89,10 @@ export const usePlugins = create<PluginsState>((set, get) => ({
         ? s.modes.map((m) => (m.id === mode.id ? mode : m))
         : [...s.modes, mode],
     })),
+  unregisterMode: (id) => {
+    leaveModeIfActive(id);
+    set((s) => ({ modes: s.modes.filter((m) => m.id !== id) }));
+  },
   checkUpdates: async () => {
     const found: Record<string, string> = {};
     await Promise.all(
