@@ -8,6 +8,7 @@ import {
   listReports,
   queryFlows,
   saveReport,
+  type FlowQuery,
 } from "@/db";
 import { useFlows } from "@/store";
 import { useProjects } from "@/projects";
@@ -16,6 +17,14 @@ import { bus } from "./bus";
 import type { RegisteredMode, TrawlHost } from "./api";
 
 const HOST_VERSION = "1.0.0";
+
+/** Scope a flow query to the active project (matching capture behaviour), unless
+ *  the caller set `projectId` explicitly. Keeps plugin data consistent with the
+ *  traffic list and the active-project selector. */
+function scoped(f: FlowQuery): FlowQuery {
+  const activeId = useProjects.getState().activeId;
+  return activeId && f.projectId === undefined ? { ...f, projectId: activeId } : f;
+}
 
 let installed = false;
 
@@ -33,9 +42,9 @@ export function installHost(): void {
       emit: (t, p) => bus.emit(t, p),
     },
     flows: {
-      query: (f, limit, offset) => queryFlows(f, limit, offset),
-      count: (f) => flowCount(f),
-      aggregate: (f, g, bucket, limit) => aggregateFlows(f, g, bucket, limit),
+      query: (f, limit, offset) => queryFlows(scoped(f), limit, offset),
+      count: (f) => flowCount(scoped(f)),
+      aggregate: (f, g, bucket, limit) => aggregateFlows(scoped(f), g, bucket, limit),
       subscribe: (cb) => {
         const u1 = bus.on("flow:added", cb);
         const u2 = bus.on("flow:updated", cb);
