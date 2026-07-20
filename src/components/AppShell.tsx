@@ -45,12 +45,12 @@ export function AppShell() {
         <TopBar />
 
         <main className="min-h-0 flex-1">
-        {mode === "plugins" ? (
+        {mode === "setup" ? (
+          <SetupPanel />
+        ) : mode === "plugins" ? (
           <PluginsPanel />
         ) : mode !== "traffic" ? (
           <PluginMode modeId={mode} />
-        ) : view === "setup" ? (
-          <SetupPanel />
         ) : view === "rules" ? (
           <RulesView />
         ) : (

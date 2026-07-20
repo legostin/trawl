@@ -3,6 +3,7 @@ import {
   Blocks,
   PanelLeftClose,
   PanelLeftOpen,
+  PlugZap,
   Puzzle,
   Radio,
   type LucideIcon,
@@ -51,7 +52,13 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-border p-2">
+      <div className="flex flex-col gap-1 border-t border-border p-2">
+        <NavItem
+          item={{ id: "setup", label: "Setup", icon: PlugZap }}
+          active={mode === "setup"}
+          collapsed={collapsed}
+          onClick={() => setMode("setup")}
+        />
         <NavItem
           item={{ id: "plugins", label: "Plugins", icon: Blocks }}
           active={mode === "plugins"}
