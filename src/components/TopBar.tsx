@@ -1,4 +1,4 @@
-import { Antenna, FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
+import { FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useTheme } from "./ThemeProvider";
@@ -26,16 +26,10 @@ export function TopBar() {
 
   return (
     <header className="flex h-11 items-center gap-3 border-b border-border bg-card px-3">
-      <div className="flex items-center gap-2 font-semibold">
-        <Antenna className="size-4 text-primary" />
-        <span className="text-sm">Trawl</span>
-      </div>
-
       <Button
         variant={running ? "destructive" : "default"}
         size="sm"
         onClick={() => void toggleProxy()}
-        className="ml-1"
       >
         {running ? <Square className="fill-current" /> : <Play className="fill-current" />}
         {running ? "Stop" : "Start"}
