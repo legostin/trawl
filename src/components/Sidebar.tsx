@@ -28,6 +28,7 @@ export function Sidebar() {
   const collapsed = useLayout((s) => s.sidebarCollapsed);
   const toggle = useLayout((s) => s.toggleSidebar);
   const pluginModes = usePlugins((s) => s.modes);
+  const updateCount = usePlugins((s) => Object.keys(s.updates).length);
 
   const modes: ModeItem[] = [
     ...BUILTIN,
@@ -63,6 +64,7 @@ export function Sidebar() {
           item={{ id: "plugins", label: "Plugins", icon: Blocks }}
           active={mode === "plugins"}
           collapsed={collapsed}
+          badge={updateCount > 0}
           onClick={() => setMode("plugins")}
         />
       </div>
@@ -92,11 +94,13 @@ function NavItem({
   item,
   active,
   collapsed,
+  badge,
   onClick,
 }: {
   item: ModeItem;
   active: boolean;
   collapsed: boolean;
+  badge?: boolean;
   onClick: () => void;
 }) {
   const Icon = item.icon;
@@ -105,15 +109,21 @@ function NavItem({
       onClick={onClick}
       title={collapsed ? item.label : undefined}
       className={cn(
-        "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+        "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
         collapsed && "justify-center px-0",
         active
           ? "bg-accent text-accent-foreground"
           : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
       )}
     >
-      <Icon className="size-4 shrink-0" />
+      <span className="relative shrink-0">
+        <Icon className="size-4" />
+        {badge && (
+          <span className="absolute -right-1 -top-1 size-2 rounded-full bg-http-amber ring-2 ring-card" />
+        )}
+      </span>
       {!collapsed && <span className="truncate">{item.label}</span>}
+      {badge && !collapsed && <span className="ml-auto size-2 rounded-full bg-http-amber" />}
     </button>
   );
 }
