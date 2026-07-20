@@ -49,7 +49,7 @@ export function SetupPanel() {
   useEffect(() => {
     getSetupInfo().then(setInfo).catch(() => {});
     caCertPath().then(setCertPath).catch(() => {});
-    QRCode.toDataURL("http://http-catch/", { margin: 1, width: 320 })
+    QRCode.toDataURL("http://trawl/", { margin: 1, width: 320 })
       .then(setQr)
       .catch(() => setQr(""));
   }, []);
@@ -87,7 +87,7 @@ export function SetupPanel() {
   }, [scenario]);
 
   const ip = info?.lanIp ?? "<no network>";
-  const port = info?.port ?? 8888;
+  const port = info?.port ?? 8729;
 
   return (
     <div className="mx-auto h-full max-w-2xl overflow-auto p-6">
@@ -169,7 +169,7 @@ function ScenarioStatus({
     case "mac":
       tone = proxyOn ? "green" : "amber";
       text = proxyOn
-        ? "System proxy is ON — the Mac is routed through http-catch."
+        ? "System proxy is ON — the Mac is routed through Trawl."
         : "System proxy is OFF — enable it above.";
       break;
     case "chrome":
@@ -249,7 +249,7 @@ function MacSteps({ certPath }: { certPath: string }) {
     <>
       <TrustStep certPath={certPath} />
       <Step n={2} icon={<Settings className="size-4" />} title="Route the Mac through the proxy">
-        <p>Sets the system HTTP/HTTPS proxy to 127.0.0.1:8888. Every app that honors it is captured.</p>
+        <p>Sets the system HTTP/HTTPS proxy to 127.0.0.1:8729. Every app that honors it is captured.</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           <ActionButton icon={<Power />} label="Enable system proxy" run={() => setSystemProxy(true)} done="System proxy on" />
           <ActionButton icon={<PowerOff />} label="Disable" variant="ghost" run={() => setSystemProxy(false)} done="System proxy off" />
@@ -311,13 +311,13 @@ function AndroidSteps() {
       <Step n={1} icon={<Settings className="size-4" />} title="Point the emulator at the proxy">
         <p>
           The emulator reaches the host at <code>10.0.2.2</code>. Launch it with the proxy flag, or set
-          it in the emulator’s Wi-Fi settings (proxy <code>10.0.2.2:8888</code>).
+          it in the emulator’s Wi-Fi settings (proxy <code>10.0.2.2:8729</code>).
         </p>
-        <CopyableCommand cmd="emulator -avd <name> -http-proxy http://10.0.2.2:8888" />
+        <CopyableCommand cmd="emulator -avd <name> -http-proxy http://10.0.2.2:8729" />
       </Step>
       <Step n={2} icon={<Download className="size-4" />} title="Install the CA">
         <p>
-          In the emulator browser open <code>http://http-catch/</code> and install it as a user
+          In the emulator browser open <code>http://trawl/</code> and install it as a user
           certificate.
         </p>
         <p className="mt-1.5 text-http-amber">
@@ -364,11 +364,11 @@ function PhoneSteps({
       </Step>
       <Step n={3} icon={<Download className="size-4" />} title="Download the CA certificate">
         <p>
-          On the phone open <code>http://http-catch/</code> (scan the QR) — the certificate downloads.
+          On the phone open <code>http://trawl/</code> (scan the QR) — the certificate downloads.
           On iOS open it <b>in Safari specifically</b>.
         </p>
         {qr && (
-          <img src={qr} width={150} height={150} alt="QR http://http-catch/" className="mt-3 rounded-md bg-white p-1" />
+          <img src={qr} width={150} height={150} alt="QR http://trawl/" className="mt-3 rounded-md bg-white p-1" />
         )}
         <CertPath certPath={certPath} />
       </Step>
@@ -377,7 +377,7 @@ function PhoneSteps({
         <ol className="mt-1 list-decimal space-y-0.5 pl-5">
           <li>In Safari tap “Allow” to download the profile.</li>
           <li>
-            Settings → General → <b>VPN &amp; Device Management</b> → the <b>http-catch CA</b> profile →{" "}
+            Settings → General → <b>VPN &amp; Device Management</b> → the <b>Trawl CA</b> profile →{" "}
             <b>Install</b>.
           </li>
           <li>

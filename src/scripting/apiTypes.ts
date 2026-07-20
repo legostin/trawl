@@ -1,7 +1,7 @@
 /** TypeScript declarations for the script API — fed into Monaco for autocomplete. */
 export const API_DTS = `
 /** HTTP request available in a rule. Mutate fields directly. */
-interface HttpCatchRequest {
+interface TrawlRequest {
   /** Method: GET, POST, … */
   method: string;
   /** Full request URL. */
@@ -20,7 +20,7 @@ interface HttpCatchRequest {
 }
 
 /** HTTP response available in the response phase. */
-interface HttpCatchResponse {
+interface TrawlResponse {
   /** Status code, e.g. 200. */
   status: number;
   headers: Record<string, string>;
@@ -28,31 +28,31 @@ interface HttpCatchResponse {
   body: string;
 }
 
-interface HttpCatchMock {
+interface TrawlMock {
   status?: number;
   headers?: Record<string, string>;
   body?: string;
 }
 
-interface HttpCatchCtx {
-  request: HttpCatchRequest;
+interface TrawlCtx {
+  request: TrawlRequest;
   /** Present only in the response phase. */
-  response?: HttpCatchResponse;
+  response?: TrawlResponse;
   /**
    * Immediately return a synthetic response (mock) without hitting the server.
    * Example: ctx.mock({ status: 200, body: JSON.stringify({ ok: true }) });
    */
-  mock(response: HttpCatchMock): void;
+  mock(response: TrawlMock): void;
   /** Abort the request with a 502 error. */
   abort(reason?: string): void;
 }
 
 /** Context of the current flow. */
-declare const ctx: HttpCatchCtx;
+declare const ctx: TrawlCtx;
 /** Shortcut for ctx.request. */
-declare const request: HttpCatchRequest;
+declare const request: TrawlRequest;
 /** Shortcut for ctx.response (in the response phase). */
-declare const response: HttpCatchResponse;
+declare const response: TrawlResponse;
 
 /**
  * Environment variables of the active project. Read and write —
@@ -71,7 +71,7 @@ declare const env: Record<string, string>;
  *   while (r.status === 429) { sleep(1000); r = send(request); }
  *   return r;
  */
-declare function send(req?: HttpCatchRequest): HttpCatchResponse;
+declare function send(req?: TrawlRequest): TrawlResponse;
 
 /** Blocking pause (ms), for retries/polling in the handler phase. */
 declare function sleep(ms: number): void;

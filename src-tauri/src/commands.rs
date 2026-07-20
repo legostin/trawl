@@ -126,8 +126,8 @@ pub struct SetupInfo {
 pub fn get_setup_info() -> Result<SetupInfo, String> {
     Ok(SetupInfo {
         lan_ip: lan_ip().map(|ip| ip.to_string()),
-        port: 8888,
-        cert_host: "http-catch".into(),
+        port: 8729,
+        cert_host: "trawl".into(),
     })
 }
 

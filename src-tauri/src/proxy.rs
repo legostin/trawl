@@ -142,7 +142,7 @@ fn build_abort_response(reason: &str) -> Response<Body> {
         .status(502)
         .header("content-type", "text/plain; charset=utf-8")
         .body(Body::from(Full::new(Bytes::from(
-            format!("http-catch aborted: {reason}").into_bytes(),
+            format!("trawl aborted: {reason}").into_bytes(),
         ))))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
@@ -343,15 +343,15 @@ impl HttpHandler for CaptureHandler {
             }
         }
 
-        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://http-catch/
-        if req.uri().host() == Some("http-catch") {
+        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://trawl/
+        if req.uri().host() == Some("trawl") {
             let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
             let resp = Response::builder()
                 .status(200)
                 .header("content-type", "application/x-x509-ca-cert")
                 .header(
                     "content-disposition",
-                    "attachment; filename=\"http-catch-ca.pem\"",
+                    "attachment; filename=\"trawl-ca.pem\"",
                 )
                 .body(body)
                 .expect("build cert response");
@@ -862,7 +862,7 @@ mod tests {
             .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
             .build()
             .unwrap();
-        let resp = client.get("http://http-catch/").send().await.unwrap();
+        let resp = client.get("http://trawl/").send().await.unwrap();
         assert_eq!(resp.status(), 200);
         let text = resp.text().await.unwrap();
         assert!(text.contains("BEGIN CERTIFICATE"), "got: {text}");

@@ -117,8 +117,8 @@ pub fn set_system_proxy(enable: bool) -> Result<(), String> {
     let svc = primary_service();
     let script = if enable {
         format!(
-            "networksetup -setwebproxy '{svc}' 127.0.0.1 8888; \
-             networksetup -setsecurewebproxy '{svc}' 127.0.0.1 8888; \
+            "networksetup -setwebproxy '{svc}' 127.0.0.1 8729; \
+             networksetup -setsecurewebproxy '{svc}' 127.0.0.1 8729; \
              networksetup -setwebproxystate '{svc}' on; \
              networksetup -setsecurewebproxystate '{svc}' on"
         )
@@ -172,7 +172,7 @@ pub fn launch_chrome_proxy(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .join("chrome-proxy");
     let mut cmd = Command::new("open");
-    cmd.args(["-na", "Google Chrome", "--args", "--proxy-server=http://127.0.0.1:8888"])
+    cmd.args(["-na", "Google Chrome", "--args", "--proxy-server=http://127.0.0.1:8729"])
         .arg(format!("--user-data-dir={}", profile.display()));
     run(cmd)
 }

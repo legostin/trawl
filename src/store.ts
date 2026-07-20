@@ -78,7 +78,7 @@ export const useFlows = create<FlowsState>((set, get) => ({
       await stopProxy();
       set({ running: false, proxyAddr: null });
     } else {
-      const addr = await startProxy(8888);
+      const addr = await startProxy(8729);
       set({ running: true, proxyAddr: addr });
     }
   },

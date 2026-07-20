@@ -25,7 +25,7 @@ const jsDefaults = (
 ).typescript.javascriptDefaults;
 
 // Автокомплит по нашему API скриптов.
-jsDefaults.addExtraLib(API_DTS, "ts:http-catch-api.d.ts");
+jsDefaults.addExtraLib(API_DTS, "ts:trawl-api.d.ts");
 jsDefaults.setDiagnosticsOptions({
   noSemanticValidation: true, // не ругаться на "переопределение" глобалей из d.ts
   noSyntaxValidation: false,
@@ -36,7 +36,7 @@ let libDisposable: { dispose: () => void } | null = null;
 /** Обновляет автокомплит функциями из library-prelude. */
 export function setLibraryTypes(source: string) {
   libDisposable?.dispose();
-  libDisposable = jsDefaults.addExtraLib(source, "ts:http-catch-library.js");
+  libDisposable = jsDefaults.addExtraLib(source, "ts:trawl-library.js");
 }
 
 export { monaco };
