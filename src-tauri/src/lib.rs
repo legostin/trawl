@@ -35,6 +35,7 @@ pub fn run() {
             commands::get_active_project,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
+            setup_actions::trust_ca_command,
             setup_actions::set_system_proxy,
             setup_actions::system_proxy_enabled,
             setup_actions::install_ca_ios_simulator,
