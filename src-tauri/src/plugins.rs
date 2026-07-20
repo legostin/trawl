@@ -106,9 +106,12 @@ pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String) 
     (repo, git_ref)
 }
 
-fn raw_url(repo: &str, git_ref: &str, file: &str) -> String {
+/// GitHub Contents API URL. Unlike raw.githubusercontent.com (Fastly-cached ~5min),
+/// the API returns fresh content, so freshly-pushed plugin versions are seen at once.
+/// Files must be ≤ 1 MB (plugin bundles are tiny).
+fn api_content_url(repo: &str, git_ref: &str, file: &str) -> String {
     format!(
-        "https://raw.githubusercontent.com/{repo}/{git_ref}/{}",
+        "https://api.github.com/repos/{repo}/contents/{}?ref={git_ref}",
         file.trim_start_matches('/')
     )
 }
@@ -118,7 +121,11 @@ fn http_get_text(url: &str) -> Result<String, String> {
         .user_agent("trawl-plugin-installer")
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    let resp = client
+        .get(url)
+        .header("Accept", "application/vnd.github.raw")
+        .send()
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {} for {url}", resp.status()));
     }
@@ -126,7 +133,7 @@ fn http_get_text(url: &str) -> Result<String, String> {
 }
 
 fn fetch_manifest_blocking(repo: &str, git_ref: &str) -> Result<PluginManifest, String> {
-    let text = http_get_text(&raw_url(repo, git_ref, "trawl-plugin.json"))?;
+    let text = http_get_text(&api_content_url(repo, git_ref, "trawl-plugin.json"))?;
     serde_json::from_str::<PluginManifest>(&text).map_err(|e| format!("invalid manifest: {e}"))
 }
 
@@ -161,7 +168,7 @@ pub async fn install_plugin(
     let ref_c = git_ref.clone();
     let (manifest, bundle) = tokio::task::spawn_blocking(move || {
         let m = fetch_manifest_blocking(&repo_c, &ref_c)?;
-        let code = http_get_text(&raw_url(&repo_c, &ref_c, &m.entry))?;
+        let code = http_get_text(&api_content_url(&repo_c, &ref_c, &m.entry))?;
         Ok::<_, String>((m, code))
     })
     .await
