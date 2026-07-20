@@ -12,6 +12,7 @@ import {
 import { useFlows } from "../store";
 import { useRules, type Rule } from "../rules";
 import { useProjects, projectTracks, type Project } from "../projects";
+import { usePlugins } from "../plugins";
 import { useToast } from "../toast";
 import { MethodBadge, StatusBadge } from "./badges";
 import { HeadersTable } from "./HeadersTable";
@@ -78,6 +79,7 @@ export function FlowDetail() {
   const setView = useFlows((s) => s.setView);
   const upsertRule = useRules((s) => s.upsert);
   const activeId = useProjects((s) => s.activeId);
+  const flowActions = usePlugins((s) => s.flowActions);
   const [tab, setTab] = useState<Tab>("overview");
 
   const createRule = async (rule: Rule) => {
@@ -112,6 +114,18 @@ export function FlowDetail() {
             <span className="truncate text-xs text-http-red">{flow.error ?? "error"}</span>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
+            {flowActions.map((a) => (
+              <Button
+                key={a.id}
+                variant="outline"
+                size="sm"
+                title={a.label}
+                onClick={() => a.run(flow)}
+              >
+                {a.icon && <a.icon />}
+                {a.label}
+              </Button>
+            ))}
             <ProjectAction host={flow.url.host} />
             <Button
               variant="outline"

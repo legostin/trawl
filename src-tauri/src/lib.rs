@@ -1,6 +1,7 @@
 mod ca;
 mod commands;
 mod db;
+mod httpsend;
 mod model;
 mod net;
 mod plugins;
@@ -51,6 +52,7 @@ pub fn run() {
             commands::save_report,
             commands::list_reports,
             commands::delete_report,
+            commands::send_request,
             plugins::fetch_plugin_manifest,
             plugins::install_plugin,
             plugins::list_plugins,

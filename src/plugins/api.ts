@@ -5,6 +5,8 @@
 
 import type * as React from "react";
 import type { AggBucket, FlowQuery, FlowRow, GroupBy, Report } from "@/db";
+import type { SendRequest, SendResponse } from "@/http";
+import type { Flow, HttpMessage, ResponseMessage } from "@/types";
 
 export interface RegisteredMode {
   id: string;
@@ -13,6 +15,31 @@ export interface RegisteredMode {
   icon?: React.ComponentType<{ className?: string }>;
   /** The panel rendered when this mode is active. */
   component: React.ComponentType;
+}
+
+/** An action button injected into the request-detail toolbar. */
+export interface FlowAction {
+  id: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  run(flow: Flow): void;
+}
+
+/** Reusable host UI components (so plugins render bodies/headers consistently). */
+export interface TrawlUi {
+  BodyViewer: React.ComponentType<{ msg: HttpMessage | ResponseMessage | null }>;
+  HeadersTable: React.ComponentType<{ headers: [string, string][]; emptyText?: string }>;
+  MethodBadge: React.ComponentType<{ method: string; className?: string }>;
+  StatusBadge: React.ComponentType<{ status: number | undefined; className?: string }>;
+}
+
+export interface TrawlUtil {
+  bodyText(msg: HttpMessage | ResponseMessage | null): string;
+  buildCurl(flow: Flow): string;
+}
+
+export interface TrawlHttp {
+  send(req: SendRequest, viaProxy?: boolean): Promise<SendResponse>;
 }
 
 export interface PluginEvents {
@@ -48,7 +75,14 @@ export interface TrawlHost {
   events: PluginEvents;
   flows: PluginFlows;
   reports: PluginReports;
+  http: TrawlHttp;
+  ui: TrawlUi;
+  util: TrawlUtil;
   registerMode(mode: RegisteredMode): void;
+  /** Add an action button to the request-detail toolbar. */
+  registerFlowAction(action: FlowAction): void;
+  /** Switch the active top-level mode (e.g. to open this plugin's mode). */
+  setMode(id: string): void;
   log(...args: unknown[]): void;
 }
 
