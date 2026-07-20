@@ -1,0 +1,36 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5A7CF5"/>
+      <stop offset="1" stop-color="#2A40BE"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="330" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- squircle background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="232" ry="232" fill="url(#glow)"/>
+
+  <!-- signal waves -->
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="40">
+    <!-- left -->
+    <path d="M422.7 220.7 A145 145 0 0 0 422.7 449.3" opacity="1"/>
+    <path d="M367.2 149.8 A235 235 0 0 0 367.2 520.2" opacity="0.78" stroke-width="38"/>
+    <!-- right -->
+    <path d="M601.3 220.7 A145 145 0 0 1 601.3 449.3" opacity="1"/>
+    <path d="M656.8 149.8 A235 235 0 0 1 656.8 520.2" opacity="0.78" stroke-width="38"/>
+  </g>
+
+  <!-- tower -->
+  <g stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke-width="44">
+    <line x1="512" y1="372" x2="512" y2="732"/>
+    <line x1="512" y1="560" x2="430" y2="732"/>
+    <line x1="512" y1="560" x2="594" y2="732"/>
+  </g>
+
+  <!-- emitter -->
+  <circle cx="512" cy="335" r="46" fill="#ffffff"/>
+</svg>
