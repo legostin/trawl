@@ -12,11 +12,18 @@ import {
 } from "@/db";
 import { useFlows } from "@/store";
 import { useProjects } from "@/projects";
+import { useLayout } from "@/layout";
 import { usePlugins } from "@/plugins";
+import { sendRequest } from "@/http";
+import { bodyToText } from "@/lib/body";
+import { buildCurl } from "@/lib/curl";
+import { BodyViewer } from "@/components/BodyViewer";
+import { HeadersTable } from "@/components/HeadersTable";
+import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
-import type { RegisteredMode, TrawlHost } from "./api";
+import type { FlowAction, RegisteredMode, TrawlHost } from "./api";
 
-const HOST_VERSION = "1.0.0";
+const HOST_VERSION = "1.1.0";
 
 /** Scope a flow query to the active project (matching capture behaviour), unless
  *  the caller set `projectId` explicitly. Keeps plugin data consistent with the
@@ -59,7 +66,18 @@ export function installHost(): void {
       list: () => listReports(),
       remove: (id) => deleteReport(id),
     },
+    http: {
+      send: (req, viaProxy) => sendRequest(req, viaProxy),
+    },
+    ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge },
+    util: {
+      bodyText: (msg) => bodyToText(msg),
+      buildCurl: (flow) => buildCurl(flow),
+    },
     registerMode: (mode: RegisteredMode) => usePlugins.getState().registerMode(mode),
+    registerFlowAction: (action: FlowAction) =>
+      usePlugins.getState().registerFlowAction(action),
+    setMode: (id: string) => useLayout.getState().setMode(id),
     log: (...args) => console.log("[plugin]", ...args),
   };
 

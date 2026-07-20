@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useLayout } from "./layout";
-import type { RegisteredMode } from "./plugins/api";
+import type { FlowAction, RegisteredMode } from "./plugins/api";
 
 /** If a mode is being removed while it's active, fall back to the traffic mode. */
 function leaveModeIfActive(id: string) {
@@ -45,6 +45,8 @@ interface PluginsState {
   installed: Plugin[];
   /** Modes registered by loaded plugins at runtime. */
   modes: RegisteredMode[];
+  /** Action buttons registered into the request-detail toolbar. */
+  flowActions: FlowAction[];
   /** pluginId → newer version available in its repo (from the last check). */
   updates: Record<string, string>;
   load: () => Promise<void>;
@@ -53,6 +55,8 @@ interface PluginsState {
   remove: (id: string) => Promise<void>;
   setEnabled: (id: string, enabled: boolean) => Promise<void>;
   registerMode: (mode: RegisteredMode) => void;
+  /** Add/replace an action button in the request-detail toolbar. */
+  registerFlowAction: (action: FlowAction) => void;
   /** Remove a plugin's registered mode from the UI (hot disable). */
   unregisterMode: (id: string) => void;
   /** Fetch each installed plugin's manifest and record newer versions. */
@@ -64,6 +68,7 @@ interface PluginsState {
 export const usePlugins = create<PluginsState>((set, get) => ({
   installed: [],
   modes: [],
+  flowActions: [],
   updates: {},
   load: async () => set({ installed: await invoke<Plugin[]>("list_plugins") }),
   fetchManifest: (repo, reference) =>
@@ -88,6 +93,12 @@ export const usePlugins = create<PluginsState>((set, get) => ({
       modes: s.modes.some((m) => m.id === mode.id)
         ? s.modes.map((m) => (m.id === mode.id ? mode : m))
         : [...s.modes, mode],
+    })),
+  registerFlowAction: (action) =>
+    set((s) => ({
+      flowActions: s.flowActions.some((a) => a.id === action.id)
+        ? s.flowActions.map((a) => (a.id === action.id ? action : a))
+        : [...s.flowActions, action],
     })),
   unregisterMode: (id) => {
     leaveModeIfActive(id);

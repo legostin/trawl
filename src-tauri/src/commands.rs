@@ -324,3 +324,15 @@ pub fn delete_report(id: String, state: State<'_, AppState>) -> Result<(), Strin
     let db = state.db()?.reader().map_err(|e| e.to_string())?;
     db.delete_report(&id).map_err(|e| e.to_string())
 }
+
+// ── HTTP client (one-shot send) ──
+
+#[tauri::command]
+pub async fn send_request(
+    request: crate::httpsend::SendRequest,
+    via_proxy: bool,
+) -> Result<crate::httpsend::SendResponse, String> {
+    tokio::task::spawn_blocking(move || crate::httpsend::send_http(&request, via_proxy))
+        .await
+        .map_err(|e| e.to_string())
+}
