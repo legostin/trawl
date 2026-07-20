@@ -42,8 +42,8 @@ pub fn load_or_create_ca(dir: &Path) -> Result<CaMaterial> {
 fn generate_ca() -> Result<(KeyPair, rcgen::Certificate)> {
     let mut params = CertificateParams::default();
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, "http-catch CA");
-    dn.push(DnType::OrganizationName, "http-catch");
+    dn.push(DnType::CommonName, "Trawl CA");
+    dn.push(DnType::OrganizationName, "Trawl");
     params.distinguished_name = dn;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
 

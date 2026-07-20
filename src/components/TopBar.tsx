@@ -27,7 +27,7 @@ export function TopBar() {
     <header className="flex h-11 items-center gap-3 border-b border-border bg-card px-3">
       <div className="flex items-center gap-2 font-semibold">
         <Antenna className="size-4 text-primary" />
-        <span className="text-sm">http-catch</span>
+        <span className="text-sm">Trawl</span>
       </div>
 
       <Button

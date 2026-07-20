@@ -10,7 +10,7 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY = "http-catch-theme";
+const STORAGE_KEY = "trawl-theme";
 
 function initialTheme(): Theme {
   const stored = localStorage.getItem(STORAGE_KEY);

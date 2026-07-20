@@ -1649,29 +1649,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-catch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "brotli 7.0.0",
- "flate2",
- "http",
- "http-body-util",
- "hudsucker",
- "rcgen",
- "regex",
- "reqwest 0.12.28",
- "rquickjs",
- "serde",
- "serde_bytes",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tokio",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4734,6 +4711,29 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "trawl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "brotli 7.0.0",
+ "flate2",
+ "http",
+ "http-body-util",
+ "hudsucker",
+ "rcgen",
+ "regex",
+ "reqwest 0.12.28",
+ "rquickjs",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tokio",
 ]
 
 [[package]]

@@ -45,7 +45,7 @@ export function TrafficTable() {
           <EmptyState
             icon={<Inbox className="size-8" />}
             title="No traffic yet"
-            hint="Press Start and route requests through the proxy at 0.0.0.0:8888."
+            hint="Press Start and route requests through the proxy at 0.0.0.0:8729."
           />
         ) : (
           <EmptyState
