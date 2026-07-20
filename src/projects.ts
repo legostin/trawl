@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useFlows } from "./store";
 import { useToast } from "./toast";
+import { matchGlob } from "@/lib/analyze";
 
 export interface EnvVar {
   key: string;
@@ -14,6 +15,19 @@ export interface Project {
   includeHosts: string[];
   excludeHosts: string[];
   env: EnvVar[];
+}
+
+/** Mirrors backend host_matches: bare domain also matches subdomains; `*` = glob. */
+export function hostMatches(entry: string, host: string): boolean {
+  const e = entry.trim();
+  if (!e) return false;
+  if (e.includes("*") || e.includes("?")) return matchGlob(e, host);
+  return host === e || host.endsWith(`.${e}`);
+}
+
+export function projectTracks(project: Project, host: string): boolean {
+  if (project.excludeHosts.some((e) => hostMatches(e, host))) return false;
+  return project.includeHosts.some((e) => hostMatches(e, host));
 }
 
 interface ProjectsFile {

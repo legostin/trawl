@@ -1,15 +1,18 @@
 import { useState } from "react";
 import {
+  ChevronDown,
   Copy,
   FileCode2,
   FlaskConical,
   FolderPlus,
   MousePointerClick,
+  Plus,
   TerminalSquare,
 } from "lucide-react";
 import { useFlows } from "../store";
 import { useRules, type Rule } from "../rules";
-import { useProjects } from "../projects";
+import { useProjects, projectTracks, type Project } from "../projects";
+import { useToast } from "../toast";
 import { MethodBadge, StatusBadge } from "./badges";
 import { HeadersTable } from "./HeadersTable";
 import { BodyViewer } from "./BodyViewer";
@@ -74,7 +77,6 @@ export function FlowDetail() {
   const setView = useFlows((s) => s.setView);
   const upsertRule = useRules((s) => s.upsert);
   const activeId = useProjects((s) => s.activeId);
-  const addHost = useProjects((s) => s.addHost);
   const [tab, setTab] = useState<Tab>("overview");
 
   const createRule = async (rule: Rule) => {
@@ -101,65 +103,54 @@ export function FlowDetail() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start gap-2 border-b border-border bg-card px-3 py-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <MethodBadge method={flow.method} className="text-xs" />
-            <StatusBadge status={flow.response?.status} className="text-xs" />
-            {flow.state === "error" && (
-              <span className="text-xs text-http-red">{flow.error ?? "error"}</span>
-            )}
-          </div>
-          <div className="mt-1 break-all font-mono text-xs text-muted-foreground">{url}</div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {activeId && (
+      <div className="border-b border-border bg-card px-3 py-2">
+        <div className="flex items-center gap-2">
+          <MethodBadge method={flow.method} className="text-xs" />
+          <StatusBadge status={flow.response?.status} className="text-xs" />
+          {flow.state === "error" && (
+            <span className="truncate text-xs text-http-red">{flow.error ?? "error"}</span>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <ProjectAction host={flow.url.host} />
             <Button
               variant="outline"
               size="sm"
-              title="Add host to the active project"
-              onClick={() => void addHost(activeId, flow.url.host)}
+              title="Create a rule from this request"
+              onClick={() => void createRule(ruleFromFlow(flow))}
             >
-              <FolderPlus />To project
+              <FileCode2 />
+              Rule
             </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            title="Create a rule from this request"
-            onClick={() => void createRule(ruleFromFlow(flow))}
-          >
-            <FileCode2 />
-            Rule
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            title="Create a mock from this response"
-            disabled={!flow.response}
-            onClick={() => void createRule(mockRuleFromFlow(flow))}
-          >
-            <FlaskConical />
-            Mock
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            title="Copy as cURL"
-            onClick={() => void navigator.clipboard.writeText(buildCurl(flow))}
-          >
-            <TerminalSquare />
-            cURL
-          </Button>
-          <Button
-            variant="ghost"
-            size="iconSm"
-            title="Copy URL"
-            onClick={() => void navigator.clipboard.writeText(url)}
-          >
-            <Copy />
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              title="Create a mock from this response"
+              disabled={!flow.response}
+              onClick={() => void createRule(mockRuleFromFlow(flow))}
+            >
+              <FlaskConical />
+              Mock
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              title="Copy as cURL"
+              onClick={() => void navigator.clipboard.writeText(buildCurl(flow))}
+            >
+              <TerminalSquare />
+              cURL
+            </Button>
+            <Button
+              variant="ghost"
+              size="iconSm"
+              title="Copy URL"
+              onClick={() => void navigator.clipboard.writeText(url)}
+            >
+              <Copy />
+            </Button>
+          </div>
         </div>
+        <div className="mt-1.5 break-all font-mono text-xs text-muted-foreground">{url}</div>
       </div>
 
       <TabBar<Tab>
@@ -234,6 +225,91 @@ export function FlowDetail() {
           </dl>
         )}
       </div>
+    </div>
+  );
+}
+
+function ProjectAction({ host }: { host: string }) {
+  const projects = useProjects((s) => s.projects);
+  const activeId = useProjects((s) => s.activeId);
+  const addHost = useProjects((s) => s.addHost);
+  const upsert = useProjects((s) => s.upsert);
+  const show = useToast((s) => s.show);
+  const [open, setOpen] = useState(false);
+
+  const active = projects.find((p) => p.id === activeId) ?? null;
+
+  // Уже в активном проекте — кнопку не показываем.
+  if (active && projectTracks(active, host)) return null;
+
+  // Есть активный проект — просто добавляем в него.
+  if (active) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        title={`Add ${host} to “${active.name}”`}
+        onClick={() => {
+          void addHost(active.id, host);
+          show(`Added ${host} to ${active.name}`);
+        }}
+      >
+        <FolderPlus />
+        To project
+      </Button>
+    );
+  }
+
+  // Проекта нет — выбор проекта или создание нового прямо отсюда.
+  const addTo = async (id: string, name: string) => {
+    await addHost(id, host);
+    show(`Added ${host} to ${name}`);
+    setOpen(false);
+  };
+  const createNew = async () => {
+    const p: Project = {
+      id: crypto.randomUUID(),
+      name: host,
+      includeHosts: [host],
+      excludeHosts: [],
+      env: [],
+    };
+    await upsert(p);
+    show(`Project “${host}” created`);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <Button variant="outline" size="sm" title="Add host to a project" onClick={() => setOpen((o) => !o)}>
+        <FolderPlus />
+        To project
+        <ChevronDown className="opacity-60" />
+      </Button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-border bg-popover p-1 text-xs shadow-lg">
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => void addTo(p.id, p.name)}
+                className="block w-full truncate rounded px-2 py-1.5 text-left hover:bg-accent"
+              >
+                {p.name}
+              </button>
+            ))}
+            {projects.length > 0 && <div className="my-1 border-t border-border" />}
+            <button
+              onClick={() => void createNew()}
+              className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left hover:bg-accent"
+            >
+              <Plus className="size-3" />
+              New project “{host}”
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
