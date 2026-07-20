@@ -4960,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "trawl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "brotli 7.0.0",
