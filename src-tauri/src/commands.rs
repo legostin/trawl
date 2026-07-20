@@ -1,10 +1,11 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ca::load_or_create_ca;
+use crate::db::{AggBucket, DbHandle, FlowQuery, FlowRow, Report};
 use crate::model::Flow;
 use crate::net::lan_ip;
 use crate::projects::{self, Project, ProjectsFile};
@@ -22,6 +23,8 @@ pub struct AppState {
     /// Активный проект (None = пишем всё). Разделяется с прокси-хендлером.
     pub active_project: Arc<RwLock<Option<Project>>>,
     pub scripts: crate::scripting::ScriptClient,
+    /// Persistent flow DB (SQLite). Initialized once in the Tauri setup hook.
+    pub db: OnceLock<DbHandle>,
 }
 
 impl AppState {
@@ -33,8 +36,21 @@ impl AppState {
             library: Arc::new(RwLock::new(String::new())),
             active_project: Arc::new(RwLock::new(None)),
             scripts: crate::scripting::spawn_engine(std::time::Duration::from_secs(1)),
+            db: OnceLock::new(),
         }
     }
+
+    fn db(&self) -> Result<&DbHandle, String> {
+        self.db.get().ok_or_else(|| "database not initialized".to_string())
+    }
+}
+
+/// Open the flow DB and store the handle in `AppState` (called from the setup hook).
+pub fn init_db(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let path = data_dir(app)?.join("trawl.db");
+    let handle = DbHandle::open(path).map_err(|e| e.to_string())?;
+    let _ = state.db.set(handle);
+    Ok(())
 }
 
 fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -94,6 +110,7 @@ pub async fn start_proxy(
         state.library.clone(),
         state.active_project.clone(),
         data_dir(&app)?,
+        state.db.get().cloned(),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -256,4 +273,54 @@ pub fn set_active_project(
 #[tauri::command]
 pub fn get_active_project(state: State<'_, AppState>) -> Option<Project> {
     state.active_project.read().unwrap().clone()
+}
+
+// ── Persistent flow DB (analytics) ──
+
+#[tauri::command]
+pub fn query_flows(
+    filter: FlowQuery,
+    limit: u32,
+    offset: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<FlowRow>, String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.query(&filter, limit, offset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn flow_count(filter: FlowQuery, state: State<'_, AppState>) -> Result<u64, String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.count(&filter).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn aggregate_flows(
+    filter: FlowQuery,
+    group_by: String,
+    bucket: u64,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<AggBucket>, String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.aggregate(&filter, &group_by, bucket, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_report(report: Report, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.save_report(&report).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_reports(state: State<'_, AppState>) -> Result<Vec<Report>, String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.list_reports().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_report(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db()?.reader().map_err(|e| e.to_string())?;
+    db.delete_report(&id).map_err(|e| e.to_string())
 }

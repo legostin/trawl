@@ -1,5 +1,6 @@
 mod ca;
 mod commands;
+mod db;
 mod model;
 mod net;
 mod projects;
@@ -18,6 +19,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::new())
+        .setup(|app| {
+            use tauri::Manager;
+            let state = app.state::<AppState>();
+            if let Err(e) = commands::init_db(app.handle(), &state) {
+                eprintln!("failed to initialize flow DB: {e}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::start_proxy,
             commands::stop_proxy,
@@ -35,6 +44,12 @@ pub fn run() {
             commands::delete_project,
             commands::set_active_project,
             commands::get_active_project,
+            commands::query_flows,
+            commands::flow_count,
+            commands::aggregate_flows,
+            commands::save_report,
+            commands::list_reports,
+            commands::delete_report,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
             setup_actions::trust_ca_command,
