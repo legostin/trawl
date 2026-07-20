@@ -5,6 +5,8 @@ export interface SendRequest {
   url: string;
   headers: [string, string][];
   body: string;
+  /** Base64 raw body; overrides `body` when set (multipart/binary). */
+  bodyB64?: string | null;
 }
 
 export interface SendResponse {

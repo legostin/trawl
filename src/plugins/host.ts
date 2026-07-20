@@ -10,6 +10,7 @@ import {
   saveReport,
   type FlowQuery,
 } from "@/db";
+import { invoke } from "@tauri-apps/api/core";
 import { useFlows } from "@/store";
 import { useProjects } from "@/projects";
 import { useLayout } from "@/layout";
@@ -21,9 +22,16 @@ import { BodyViewer } from "@/components/BodyViewer";
 import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
-import type { FlowAction, RegisteredMode, TrawlHost } from "./api";
+import type { ActiveProject, EnvVar, FlowAction, RegisteredMode, TrawlHost } from "./api";
 
-const HOST_VERSION = "1.1.0";
+const HOST_VERSION = "1.2.0";
+
+/** Snapshot the active project (id/name/env) from the projects store. */
+function activeProject(): ActiveProject | null {
+  const { projects, activeId } = useProjects.getState();
+  const p = projects.find((x) => x.id === activeId);
+  return p ? { id: p.id, name: p.name, env: p.env } : null;
+}
 
 /** Scope a flow query to the active project (matching capture behaviour), unless
  *  the caller set `projectId` explicitly. Keeps plugin data consistent with the
@@ -68,6 +76,22 @@ export function installHost(): void {
     },
     http: {
       send: (req, viaProxy) => sendRequest(req, viaProxy),
+    },
+    projects: {
+      active: () => activeProject(),
+      setEnv: async (env: EnvVar[]) => {
+        const { projects, activeId, upsert } = useProjects.getState();
+        const p = projects.find((x) => x.id === activeId);
+        if (!p) return;
+        await upsert({ ...p, env });
+      },
+      onChange: (cb: (project: ActiveProject | null) => void) =>
+        bus.on("project:changed", () => cb(activeProject())),
+    },
+    storage: {
+      get: (key: string) => invoke<string | null>("plugin_storage_get", { key }),
+      set: (key: string, value: string) =>
+        invoke<void>("plugin_storage_set", { key, value }),
     },
     ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge },
     util: {
