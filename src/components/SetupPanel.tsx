@@ -220,17 +220,34 @@ function ScenarioStatus({
 
 // ── scenarios ──
 
+function TrustStep({ certPath }: { certPath: string }) {
+  const cmd = certPath
+    ? `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '${certPath}'`
+    : "";
+  return (
+    <Step n={1} icon={<ShieldCheck className="size-4" />} title="Trust the CA in the System keychain">
+      <p>
+        Trusting a root cert needs an interactive prompt, so <b>Trust CA</b> opens Terminal and runs
+        the command — type your password there. Or run it yourself:
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <ActionButton icon={<ShieldCheck />} label="Trust CA (opens Terminal)" run={trustCaMacos} done="Terminal opened" />
+        <RevealButton />
+      </div>
+      {cmd && <CopyableCommand cmd={cmd} />}
+      <p className="mt-1.5 text-[11px]">
+        Alternative: Reveal cert → double-click <code>ca.pem</code> → Keychain Access → get info →
+        Trust → <b>Always Trust</b>.
+      </p>
+      <CertPath certPath={certPath} />
+    </Step>
+  );
+}
+
 function MacSteps({ certPath }: { certPath: string }) {
   return (
     <>
-      <Step n={1} icon={<ShieldCheck className="size-4" />} title="Trust the CA in the System keychain">
-        <p>Adds http-catch’s root certificate as trusted (asks for your password).</p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <ActionButton icon={<ShieldCheck />} label="Trust CA" run={trustCaMacos} done="CA trusted" />
-          <RevealButton />
-        </div>
-        <CertPath certPath={certPath} />
-      </Step>
+      <TrustStep certPath={certPath} />
       <Step n={2} icon={<Settings className="size-4" />} title="Route the Mac through the proxy">
         <p>Sets the system HTTP/HTTPS proxy to 127.0.0.1:8888. Every app that honors it is captured.</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -245,14 +262,7 @@ function MacSteps({ certPath }: { certPath: string }) {
 function ChromeSteps({ certPath, onLaunched }: { certPath: string; onLaunched: () => void }) {
   return (
     <>
-      <Step n={1} icon={<ShieldCheck className="size-4" />} title="Trust the CA">
-        <p>Chrome on macOS uses the system keychain for trust.</p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <ActionButton icon={<ShieldCheck />} label="Trust CA" run={trustCaMacos} done="CA trusted" />
-          <RevealButton />
-        </div>
-        <CertPath certPath={certPath} />
-      </Step>
+      <TrustStep certPath={certPath} />
       <Step n={2} icon={<Globe className="size-4" />} title="Launch Chrome through the proxy">
         <p>Opens a separate Chrome profile pointed at the proxy — your main Chrome stays untouched.</p>
         <div className="mt-2">

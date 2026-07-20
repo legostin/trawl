@@ -13,6 +13,7 @@ export const caCertPath = (): Promise<string> => invoke<string>("ca_cert_path");
 // Setup actions (macOS)
 export const revealCaCert = (): Promise<void> => invoke<void>("reveal_ca_cert");
 export const trustCaMacos = (): Promise<void> => invoke<void>("trust_ca_macos");
+export const trustCaCommand = (): Promise<string> => invoke<string>("trust_ca_command");
 export const setSystemProxy = (enable: boolean): Promise<void> =>
   invoke<void>("set_system_proxy", { enable });
 export const systemProxyEnabled = (): Promise<boolean> => invoke<boolean>("system_proxy_enabled");

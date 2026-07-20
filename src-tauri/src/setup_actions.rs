@@ -87,13 +87,29 @@ pub fn reveal_ca_cert(app: AppHandle) -> Result<(), String> {
     run(cmd)
 }
 
+/// Команда для добавления CA в System keychain (для копирования / Terminal).
+pub fn trust_command(ca: &std::path::Path) -> String {
+    format!(
+        "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '{}'",
+        ca.display()
+    )
+}
+
+#[tauri::command]
+pub fn trust_ca_command(app: AppHandle) -> Result<String, String> {
+    Ok(trust_command(&ca_pem_path(&app)?))
+}
+
+/// Открывает Terminal и запускает sudo-команду доверия. Установка доверенного корня
+/// требует интерактивного сеанса (иначе SecTrustSettings падает «no user interaction»).
 #[tauri::command]
 pub fn trust_ca_macos(app: AppHandle) -> Result<(), String> {
     let ca = ca_pem_path(&app)?;
-    admin_shell(&format!(
-        "security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '{}'",
-        ca.display()
-    ))
+    let cmd = trust_command(&ca).replace('\\', "\\\\").replace('"', "\\\"");
+    let apple = format!("tell application \"Terminal\"\nactivate\ndo script \"{cmd}\"\nend tell");
+    let mut c = Command::new("osascript");
+    c.arg("-e").arg(apple);
+    run(c)
 }
 
 #[tauri::command]
