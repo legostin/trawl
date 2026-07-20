@@ -22,7 +22,9 @@ import {
   revealCaCert,
   trustCaMacos,
   setSystemProxy,
+  systemProxyEnabled,
   installCaIosSimulator,
+  iosSimulatorBooted,
   launchChromeProxy,
   type SetupInfo,
 } from "../setup";
@@ -38,6 +40,9 @@ export function SetupPanel() {
   const [info, setInfo] = useState<SetupInfo | null>(null);
   const [certPath, setCertPath] = useState("");
   const [qr, setQr] = useState("");
+  const [proxyOn, setProxyOn] = useState<boolean | null>(null);
+  const [simBooted, setSimBooted] = useState<boolean | null>(null);
+  const [chromeLaunched, setChromeLaunched] = useState(false);
   const running = useFlows((s) => s.running);
   const httpsSeen = useFlows((s) => s.flows.some((f) => f.url.scheme === "https"));
 
@@ -48,6 +53,38 @@ export function SetupPanel() {
       .then(setQr)
       .catch(() => setQr(""));
   }, []);
+
+  // Живой опрос состояния для сценариев, идущих через системный прокси.
+  useEffect(() => {
+    if (scenario !== "mac" && scenario !== "ios") {
+      setProxyOn(null);
+      setSimBooted(null);
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const on = await systemProxyEnabled();
+        if (alive) setProxyOn(on);
+      } catch {
+        /* not in Tauri */
+      }
+      if (scenario === "ios") {
+        try {
+          const b = await iosSimulatorBooted();
+          if (alive) setSimBooted(b);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 2000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [scenario]);
 
   const ip = info?.lanIp ?? "<no network>";
   const port = info?.port ?? 8888;
@@ -93,28 +130,90 @@ export function SetupPanel() {
       </div>
 
       {scenario === "mac" && <MacSteps certPath={certPath} />}
-      {scenario === "chrome" && <ChromeSteps certPath={certPath} />}
+      {scenario === "chrome" && (
+        <ChromeSteps certPath={certPath} onLaunched={() => setChromeLaunched(true)} />
+      )}
       {scenario === "ios" && <IosSteps certPath={certPath} />}
       {scenario === "android" && <AndroidSteps />}
       {scenario === "phone" && <PhoneSteps ip={ip} port={port} qr={qr} certPath={certPath} />}
 
-      <div
-        className={cn(
-          "mt-4 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm",
-          httpsSeen
-            ? "border-http-green/40 bg-http-green/10"
+      <ScenarioStatus
+        scenario={scenario}
+        proxyOn={proxyOn}
+        simBooted={simBooted}
+        chromeLaunched={chromeLaunched}
+        httpsSeen={httpsSeen}
+      />
+    </div>
+  );
+}
+
+type Tone = "green" | "amber" | "muted";
+
+function ScenarioStatus({
+  scenario,
+  proxyOn,
+  simBooted,
+  chromeLaunched,
+  httpsSeen,
+}: {
+  scenario: Scenario;
+  proxyOn: boolean | null;
+  simBooted: boolean | null;
+  chromeLaunched: boolean;
+  httpsSeen: boolean;
+}) {
+  let tone: Tone = "muted";
+  let text = "";
+  switch (scenario) {
+    case "mac":
+      tone = proxyOn ? "green" : "amber";
+      text = proxyOn
+        ? "System proxy is ON — the Mac is routed through http-catch."
+        : "System proxy is OFF — enable it above.";
+      break;
+    case "chrome":
+      tone = chromeLaunched ? "green" : "muted";
+      text = chromeLaunched
+        ? "Chrome was launched through the proxy."
+        : "Launch Chrome with the button above (separate profile).";
+      break;
+    case "ios":
+      if (simBooted && proxyOn) {
+        tone = "green";
+        text = "Simulator booted and system proxy ON — traffic is routed.";
+      } else {
+        tone = "amber";
+        text = `Simulator booted: ${simBooted ? "yes" : "no"} · System proxy: ${proxyOn ? "on" : "off"}.`;
+      }
+      break;
+    case "android":
+    case "phone":
+      tone = httpsSeen ? "green" : "muted";
+      text = httpsSeen
+        ? "Decrypted HTTPS traffic is arriving — the device is set up."
+        : "Waiting for traffic from the device… finish the steps above.";
+      break;
+  }
+  return (
+    <div
+      className={cn(
+        "mt-4 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm",
+        tone === "green"
+          ? "border-http-green/40 bg-http-green/10"
+          : tone === "amber"
+            ? "border-http-amber/40 bg-http-amber/10"
             : "border-border bg-muted/40 text-muted-foreground",
-        )}
-      >
-        {httpsSeen ? (
-          <CheckCircle2 className="size-4 text-http-green" />
-        ) : (
-          <Loader2 className="size-4 animate-spin" />
-        )}
-        {httpsSeen
-          ? "Decrypting HTTPS — the proxy works (overall status, any target)."
-          : "No decrypted HTTPS yet — finish the steps above for your target."}
-      </div>
+      )}
+    >
+      {tone === "green" ? (
+        <CheckCircle2 className="size-4 text-http-green" />
+      ) : tone === "amber" ? (
+        <AlertTriangle className="size-4 text-http-amber" />
+      ) : (
+        <Loader2 className="size-4 animate-spin" />
+      )}
+      {text}
     </div>
   );
 }
@@ -143,7 +242,7 @@ function MacSteps({ certPath }: { certPath: string }) {
   );
 }
 
-function ChromeSteps({ certPath }: { certPath: string }) {
+function ChromeSteps({ certPath, onLaunched }: { certPath: string; onLaunched: () => void }) {
   return (
     <>
       <Step n={1} icon={<ShieldCheck className="size-4" />} title="Trust the CA">
@@ -157,7 +256,15 @@ function ChromeSteps({ certPath }: { certPath: string }) {
       <Step n={2} icon={<Globe className="size-4" />} title="Launch Chrome through the proxy">
         <p>Opens a separate Chrome profile pointed at the proxy — your main Chrome stays untouched.</p>
         <div className="mt-2">
-          <ActionButton icon={<Globe />} label="Launch Chrome via proxy" run={launchChromeProxy} done="Chrome launched" />
+          <ActionButton
+            icon={<Globe />}
+            label="Launch Chrome via proxy"
+            run={async () => {
+              await launchChromeProxy();
+              onLaunched();
+            }}
+            done="Chrome launched"
+          />
         </div>
       </Step>
     </>

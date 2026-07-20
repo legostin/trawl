@@ -17,4 +17,5 @@ export const setSystemProxy = (enable: boolean): Promise<void> =>
   invoke<void>("set_system_proxy", { enable });
 export const systemProxyEnabled = (): Promise<boolean> => invoke<boolean>("system_proxy_enabled");
 export const installCaIosSimulator = (): Promise<void> => invoke<void>("install_ca_ios_simulator");
+export const iosSimulatorBooted = (): Promise<boolean> => invoke<boolean>("ios_simulator_booted");
 export const launchChromeProxy = (): Promise<void> => invoke<void>("launch_chrome_proxy");
