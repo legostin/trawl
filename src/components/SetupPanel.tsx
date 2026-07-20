@@ -397,19 +397,28 @@ function ActionButton({
   variant?: "outline" | "ghost";
 }) {
   const show = useToast((s) => s.show);
+  const [error, setError] = useState<string | null>(null);
   const onClick = async () => {
+    setError(null);
     try {
       await run();
       show(done);
     } catch (e) {
-      show(`Error: ${String(e)}`);
+      setError(String(e));
     }
   };
   return (
-    <Button size="sm" variant={variant} onClick={onClick}>
-      {icon}
-      {label}
-    </Button>
+    <>
+      <Button size="sm" variant={variant} onClick={onClick}>
+        {icon}
+        {label}
+      </Button>
+      {error && (
+        <span className="w-full whitespace-pre-wrap break-words font-mono text-[11px] text-http-red">
+          {error}
+        </span>
+      )}
+    </>
   );
 }
 
