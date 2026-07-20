@@ -59,6 +59,8 @@ pub fn run() {
             plugins::set_plugin_enabled,
             plugins::remove_plugin,
             plugins::read_plugin_bundle,
+            plugins::plugin_storage_get,
+            plugins::plugin_storage_set,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
             setup_actions::trust_ca_command,

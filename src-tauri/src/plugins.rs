@@ -240,6 +240,38 @@ pub fn read_plugin_bundle(app: AppHandle, id: String) -> Result<String, String> 
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+// ── Plugin key/value storage (JSON blobs) ──
+
+/// Sanitize a storage key into a safe single filename component.
+fn safe_key(key: &str) -> String {
+    let cleaned: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    let trimmed = cleaned.trim_matches('.');
+    if trimmed.is_empty() { "_".to_string() } else { trimmed.to_string() }
+}
+
+fn plugin_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_dir(app)?.join("plugin-data"))
+}
+
+#[tauri::command]
+pub fn plugin_storage_get(app: AppHandle, key: String) -> Result<Option<String>, String> {
+    let path = plugin_data_dir(&app)?.join(format!("{}.json", safe_key(&key)));
+    if !path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(&path).map(Some).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn plugin_storage_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    let dir = plugin_data_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(format!("{}.json", safe_key(&key))), value).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +307,17 @@ mod tests {
             normalize_repo("owner/repo.git@v1", Some("main")),
             ("owner/repo".into(), "main".into())
         );
+    }
+
+    #[test]
+    fn safe_key_sanitizes() {
+        assert_eq!(safe_key("collections.proj-1"), "collections.proj-1");
+        assert_eq!(safe_key("a/b:c"), "a_b_c");
+        assert_eq!(safe_key(""), "_");
+        // No path traversal survives: slashes are neutralized to a single component.
+        let s = safe_key("../../etc/passwd");
+        assert!(!s.contains('/'));
+        assert!(!s.contains("..") || !s.contains('/'));
     }
 
     #[test]

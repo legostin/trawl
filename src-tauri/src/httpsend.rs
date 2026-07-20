@@ -4,6 +4,7 @@
 //! `native_send`) and returns the response. `via_proxy` routes through the local
 //! Trawl proxy so the request also shows up in the capture list.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,9 @@ pub struct SendRequest {
     pub headers: Vec<(String, String)>,
     #[serde(default)]
     pub body: String,
+    /// Base64 raw body; when present it overrides `body` (used for multipart/binary).
+    #[serde(default)]
+    pub body_b64: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,7 +87,12 @@ pub fn send_http(req: &SendRequest, via_proxy: bool) -> SendResponse {
         }
         rb = rb.header(k, v);
     }
-    if !req.body.is_empty() {
+    if let Some(b64) = &req.body_b64 {
+        match base64::engine::general_purpose::STANDARD.decode(b64) {
+            Ok(bytes) => rb = rb.body(bytes),
+            Err(e) => return err_resp(start, format!("bad body base64: {e}")),
+        }
+    } else if !req.body.is_empty() {
         rb = rb.body(req.body.clone());
     }
 
@@ -146,6 +155,7 @@ mod tests {
                 url: "http://".into(),
                 headers: vec![],
                 body: String::new(),
+                body_b64: None,
             },
             false,
         );

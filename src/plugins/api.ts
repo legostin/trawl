@@ -42,6 +42,33 @@ export interface TrawlHttp {
   send(req: SendRequest, viaProxy?: boolean): Promise<SendResponse>;
 }
 
+export interface EnvVar {
+  key: string;
+  value: string;
+}
+
+export interface ActiveProject {
+  id: string;
+  name: string;
+  env: EnvVar[];
+}
+
+/** Access to the active project + its environment variables (shared with capture/scripts). */
+export interface TrawlProjects {
+  /** The active project (or null when capturing all domains). */
+  active(): ActiveProject | null;
+  /** Persist the active project's env vars. No-op if no active project. */
+  setEnv(env: EnvVar[]): Promise<void>;
+  /** Subscribe to active-project changes; returns an unsubscribe fn. */
+  onChange(cb: (project: ActiveProject | null) => void): () => void;
+}
+
+/** Project-scoped JSON key/value storage for plugins (persisted to disk). */
+export interface TrawlStorage {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+}
+
 export interface PluginEvents {
   /** Subscribe to an event; returns an unsubscribe fn. */
   on(type: string, cb: (payload: unknown) => void): () => void;
@@ -76,6 +103,8 @@ export interface TrawlHost {
   flows: PluginFlows;
   reports: PluginReports;
   http: TrawlHttp;
+  projects: TrawlProjects;
+  storage: TrawlStorage;
   ui: TrawlUi;
   util: TrawlUtil;
   registerMode(mode: RegisteredMode): void;
