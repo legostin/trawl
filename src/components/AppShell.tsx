@@ -2,8 +2,12 @@ import { useEffect } from "react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useUpdater } from "../updater";
+import { useLayout } from "../layout";
+import { bootstrapPlugins } from "../plugins/bootstrap";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { Sidebar } from "./Sidebar";
+import { PluginsPanel } from "./PluginsPanel";
+import { PluginMode } from "./PluginMode";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
@@ -20,6 +24,7 @@ export function AppShell() {
   const view = useFlows((s) => s.view);
   const detailCollapsed = useFlows((s) => s.detailCollapsed);
   const loadProjects = useProjects((s) => s.load);
+  const mode = useLayout((s) => s.mode);
   useKeyboardShortcuts();
 
   useEffect(() => {
@@ -28,6 +33,8 @@ export function AppShell() {
     void loadProjects();
     // Silent update check on launch (no-op in dev / when offline).
     void useUpdater.getState().check(true);
+    // Install the plugin host API and load enabled plugins.
+    void bootstrapPlugins();
     return () => cleanup?.();
   }, [init, loadProjects]);
 
@@ -38,7 +45,11 @@ export function AppShell() {
         <TopBar />
 
         <main className="min-h-0 flex-1">
-        {view === "setup" ? (
+        {mode === "plugins" ? (
+          <PluginsPanel />
+        ) : mode !== "traffic" ? (
+          <PluginMode modeId={mode} />
+        ) : view === "setup" ? (
           <SetupPanel />
         ) : view === "rules" ? (
           <RulesView />

@@ -1,6 +1,7 @@
 import { FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
+import { useLayout } from "../layout";
 import { useTheme } from "./ThemeProvider";
 import { UpdateButton } from "./UpdateButton";
 import { Button } from "./ui/button";
@@ -22,7 +23,9 @@ export function TopBar() {
   const activeId = useProjects((s) => s.activeId);
   const setActive = useProjects((s) => s.setActive);
   const openEditor = useProjects((s) => s.openEditor);
+  const mode = useLayout((s) => s.mode);
   const { theme, toggle } = useTheme();
+  const isTraffic = mode === "traffic";
 
   return (
     <header className="flex h-11 items-center gap-3 border-b border-border bg-card px-3">
@@ -45,16 +48,18 @@ export function TopBar() {
         </span>
       )}
 
-      <div className="relative ml-2 max-w-xs flex-1">
-        <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          data-search-input
-          value={query}
-          onChange={(e) => setFilter({ query: e.target.value })}
-          placeholder="Search host / URL…"
-          className="pl-7"
-        />
-      </div>
+      {isTraffic && (
+        <div className="relative ml-2 max-w-xs flex-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            data-search-input
+            value={query}
+            onChange={(e) => setFilter({ query: e.target.value })}
+            placeholder="Search host / URL…"
+            className="pl-7"
+          />
+        </div>
+      )}
 
       <div className="ml-auto flex items-center gap-2">
         <div className="flex items-center gap-1" title="Active project">
@@ -73,18 +78,22 @@ export function TopBar() {
             <FolderCog />
           </Button>
         </div>
-        <Button variant="ghost" size="iconSm" title="Clear list" onClick={() => clearFlows()}>
-          <Trash2 />
-        </Button>
-        <Segmented<View>
-          value={view}
-          onChange={setView}
-          options={[
-            { value: "traffic", label: "Traffic" },
-            { value: "rules", label: "Rules" },
-            { value: "setup", label: "Setup" },
-          ]}
-        />
+        {isTraffic && (
+          <>
+            <Button variant="ghost" size="iconSm" title="Clear list" onClick={() => clearFlows()}>
+              <Trash2 />
+            </Button>
+            <Segmented<View>
+              value={view}
+              onChange={setView}
+              options={[
+                { value: "traffic", label: "Traffic" },
+                { value: "rules", label: "Rules" },
+                { value: "setup", label: "Setup" },
+              ]}
+            />
+          </>
+        )}
         <UpdateButton />
         <Button variant="ghost" size="iconSm" title="Theme" onClick={toggle}>
           {theme === "dark" ? <Sun /> : <Moon />}

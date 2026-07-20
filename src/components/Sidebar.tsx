@@ -1,20 +1,37 @@
-import { Antenna, PanelLeftClose, PanelLeftOpen, Radio, type LucideIcon } from "lucide-react";
+import {
+  Antenna,
+  Blocks,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Puzzle,
+  Radio,
+  type LucideIcon,
+} from "lucide-react";
 import { useLayout, type Mode } from "../layout";
+import { usePlugins } from "../plugins";
 import { cn } from "@/lib/utils";
+
+type IconType = LucideIcon | React.ComponentType<{ className?: string }>;
 
 interface ModeItem {
   id: Mode;
   label: string;
-  icon: LucideIcon;
+  icon: IconType;
 }
 
-const MODES: ModeItem[] = [{ id: "traffic", label: "Traffic capture", icon: Radio }];
+const BUILTIN: ModeItem[] = [{ id: "traffic", label: "Traffic capture", icon: Radio }];
 
 export function Sidebar() {
   const mode = useLayout((s) => s.mode);
   const setMode = useLayout((s) => s.setMode);
   const collapsed = useLayout((s) => s.sidebarCollapsed);
   const toggle = useLayout((s) => s.toggleSidebar);
+  const pluginModes = usePlugins((s) => s.modes);
+
+  const modes: ModeItem[] = [
+    ...BUILTIN,
+    ...pluginModes.map((m) => ({ id: m.id, label: m.label, icon: m.icon ?? Puzzle })),
+  ];
 
   return (
     <aside
@@ -29,27 +46,19 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-1 flex-col gap-1 p-2">
-        {MODES.map(({ id, label, icon: Icon }) => {
-          const active = mode === id;
-          return (
-            <button
-              key={id}
-              onClick={() => setMode(id)}
-              title={collapsed ? label : undefined}
-              className={cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
-                collapsed && "justify-center px-0",
-                active
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              )}
-            >
-              <Icon className="size-4 shrink-0" />
-              {!collapsed && <span className="truncate">{label}</span>}
-            </button>
-          );
-        })}
+        {modes.map((m) => (
+          <NavItem key={m.id} item={m} active={mode === m.id} collapsed={collapsed} onClick={() => setMode(m.id)} />
+        ))}
       </nav>
+
+      <div className="border-t border-border p-2">
+        <NavItem
+          item={{ id: "plugins", label: "Plugins", icon: Blocks }}
+          active={mode === "plugins"}
+          collapsed={collapsed}
+          onClick={() => setMode("plugins")}
+        />
+      </div>
 
       <button
         onClick={toggle}
@@ -69,5 +78,35 @@ export function Sidebar() {
         )}
       </button>
     </aside>
+  );
+}
+
+function NavItem({
+  item,
+  active,
+  collapsed,
+  onClick,
+}: {
+  item: ModeItem;
+  active: boolean;
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  const Icon = item.icon;
+  return (
+    <button
+      onClick={onClick}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
+        collapsed && "justify-center px-0",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+      )}
+    >
+      <Icon className="size-4 shrink-0" />
+      {!collapsed && <span className="truncate">{item.label}</span>}
+    </button>
   );
 }

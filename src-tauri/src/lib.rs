@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod model;
 mod net;
+mod plugins;
 mod projects;
 mod proxy;
 mod rules;
@@ -50,6 +51,12 @@ pub fn run() {
             commands::save_report,
             commands::list_reports,
             commands::delete_report,
+            plugins::fetch_plugin_manifest,
+            plugins::install_plugin,
+            plugins::list_plugins,
+            plugins::set_plugin_enabled,
+            plugins::remove_plugin,
+            plugins::read_plugin_bundle,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
             setup_actions::trust_ca_command,
