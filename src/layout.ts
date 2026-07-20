@@ -1,7 +1,8 @@
 import { create } from "zustand";
 
-/** Top-level app mode selected in the sidebar. Extend as new modes are added. */
-export type Mode = "traffic";
+/** Top-level app mode selected in the sidebar: built-ins ("traffic", "plugins")
+ *  or a plugin-registered mode id. */
+export type Mode = string;
 
 const COLLAPSE_KEY = "trawl-sidebar-collapsed";
 
