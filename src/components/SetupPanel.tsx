@@ -112,8 +112,8 @@ export function SetupPanel() {
           <Loader2 className="size-4 animate-spin" />
         )}
         {httpsSeen
-          ? "HTTPS traffic is being decrypted — all set."
-          : "Waiting for the first decrypted HTTPS request…"}
+          ? "Decrypting HTTPS — the proxy works (overall status, any target)."
+          : "No decrypted HTTPS yet — finish the steps above for your target."}
       </div>
     </div>
   );
