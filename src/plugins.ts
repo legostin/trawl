@@ -21,6 +21,15 @@ export interface Plugin {
   enabled: boolean;
 }
 
+export interface PluginDep {
+  id: string;
+  repo: string;
+  host?: string;
+  reference?: string;
+  /** Reinstall the dependency when the installed version is older. */
+  minVersion?: string;
+}
+
 export interface PluginManifest {
   id: string;
   name: string;
@@ -29,6 +38,8 @@ export interface PluginManifest {
   author: string;
   entry: string;
   apiVersion: string;
+  /** Plugins auto-installed alongside this one. */
+  dependencies?: PluginDep[];
 }
 
 /** Compare dotted numeric versions. Returns >0 if a is newer than b. */
