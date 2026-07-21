@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowUpCircle, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { AlertTriangle, ArrowUpCircle, KeyRound, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { usePlugins } from "@/plugins";
 import { loadPlugin } from "@/plugins/loader";
 import { useToast } from "../toast";
@@ -18,8 +19,16 @@ export function PluginsPanel() {
   const update = usePlugins((s) => s.update);
   const show = useToast((s) => s.show);
   const [repo, setRepo] = useState("");
+  const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+
+  /** First path segment of the input that looks like a non-github.com domain. */
+  const ghost = (() => {
+    const s = repo.trim().replace(/^https?:\/\//, "").replace(/^www\./, "");
+    const first = s.split("/")[0] ?? "";
+    return first.includes(".") && first !== "github.com" ? first : null;
+  })();
 
   useEffect(() => {
     void load().then(() => usePlugins.getState().checkUpdates());
@@ -62,6 +71,10 @@ export function PluginsPanel() {
     if (!value || busy) return;
     setBusy(true);
     try {
+      if (ghost && token.trim()) {
+        await invoke("git_host_token_set", { host: ghost, token: token.trim() });
+        setToken("");
+      }
       await install(value);
       const list = usePlugins.getState().installed;
       const id = list[list.length - 1]?.id;
@@ -100,18 +113,30 @@ export function PluginsPanel() {
         </span>
       </div>
 
-      <div className="mb-6 flex gap-2">
+      <div className={ghost ? "mb-2 flex gap-2" : "mb-6 flex gap-2"}>
         <Input
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void add()}
-          placeholder="owner/repo  ·  owner/repo@v1.0.0  ·  GitHub URL"
+          placeholder="owner/repo  ·  owner/repo@v1.0.0  ·  ghe.host/owner/repo"
         />
         <Button onClick={() => void add()} disabled={busy || !repo.trim()}>
           <Package />
           {busy ? "Installing…" : "Add"}
         </Button>
       </div>
+      {ghost && (
+        <div className="mb-6 flex items-center gap-2">
+          <KeyRound className="size-4 shrink-0 text-muted-foreground" />
+          <Input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void add()}
+            placeholder={`${ghost} access token — optional, stored locally; needed for private repos`}
+          />
+        </div>
+      )}
 
       {installed.length === 0 ? (
         <p className="text-sm text-muted-foreground">No plugins installed yet.</p>
@@ -137,6 +162,7 @@ export function PluginsPanel() {
                   )}
                 </div>
                 <div className="truncate font-mono text-xs text-muted-foreground">
+                  {p.host && p.host !== "github.com" ? `${p.host}/` : ""}
                   {p.repo}@{p.ref}
                 </div>
                 {p.description && (
