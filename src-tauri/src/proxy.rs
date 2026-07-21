@@ -269,6 +269,16 @@ impl CaptureHandler {
         rx.await.ok()
     }
 
+    /// Store a flow, updating it in place if a request breakpoint already inserted
+    /// it (so a paused-then-resumed flow keeps its single row), else inserting new.
+    fn upsert_flow(&self, preinserted: bool, flow: &Flow) {
+        if preinserted {
+            self.store.update(flow.id, |x| *x = flow.clone());
+        } else {
+            self.store.insert(flow.clone());
+        }
+    }
+
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
         let scope = self.active_scope();
         let env = self.active_env();
@@ -457,16 +467,99 @@ impl HttpHandler for CaptureHandler {
             format!("{}:{}{}", url.host, url.port, url.path),
         ];
 
+        // Working request values. A definition-based request breakpoint (below)
+        // may edit these BEFORE any rule runs; the handler rule and request-phase
+        // rules then see the edited request. `preinserted` tracks that the flow
+        // row already exists (created while paused) so we update instead of dup.
+        let mut req_method = parts.method.to_string();
+        let mut req_headers = orig_headers.clone();
+        let mut req_body_text = text_of(&display_body, is_text);
+        let mut preinserted = false;
+
+        // ── БРЕЙКПОИНТ ФАЗЫ ЗАПРОСА: срабатывает до всех правил ──
+        if self.breakpoint_matches(BpPhase::Request, &targets, &req_method) {
+            let mut flow = Flow::new_request(
+                id,
+                req_method.clone(),
+                url.clone(),
+                HttpMessage {
+                    headers: req_headers.clone(),
+                    body: if is_text { req_body_text.clone().into_bytes() } else { display_body.clone() },
+                    body_is_text: is_text,
+                },
+            );
+            flow.timestamp = unix_ms();
+            flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
+            flow.state = FlowState::Paused;
+            flow.paused_phase = Some("request".into());
+            self.store.insert(flow.clone());
+            self.current_id = Some(id);
+            preinserted = true;
+            (self.emit)("flow-added", &flow);
+            (self.emit)("flow-paused", &flow);
+
+            match self.await_resolution(id, BpPhase::Request).await {
+                Some(Resolution::Execute { method, headers, body, .. }) => {
+                    if let Some(m) = method {
+                        req_method = m;
+                    }
+                    req_headers = headers;
+                    if is_text {
+                        req_body_text = body;
+                    }
+                    self.store.update(id, |f| {
+                        f.state = FlowState::Pending;
+                        f.paused_phase = None;
+                        f.method = req_method.clone();
+                        f.request.headers = req_headers.clone();
+                        if is_text {
+                            f.request.body = req_body_text.clone().into_bytes();
+                        }
+                    });
+                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                        (self.emit)("flow-updated", &u);
+                    }
+                }
+                Some(Resolution::Abort(reason)) => {
+                    self.store.update(id, |f| {
+                        f.state = FlowState::Error;
+                        f.paused_phase = None;
+                        f.error = Some(reason.clone());
+                    });
+                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                        (self.emit)("flow-updated", &u);
+                        self.persist(&u);
+                    }
+                    return RequestOrResponse::Response(build_abort_response(&reason));
+                }
+                Some(Resolution::Respond { status, headers, body }) => {
+                    let spec = json!({
+                        "status": status,
+                        "headers": headers_to_json(&headers),
+                        "body": body,
+                    });
+                    self.record_mock_response(id, &spec);
+                    return RequestOrResponse::Response(build_mock_response(&spec));
+                }
+                None => {
+                    self.store.update(id, |f| {
+                        f.state = FlowState::Pending;
+                        f.paused_phase = None;
+                    });
+                }
+            }
+        }
+
         // ── handler-режим: скрипт сам выполняет запрос (send) и возвращает ответ ──
         if let Some(hrule) = self.matching_handler(&targets) {
             let input = json!({
                 "request": {
-                    "method": parts.method.to_string(),
+                    "method": req_method,
                     "url": full_url,
                     "host": url.host,
                     "path": url.path,
-                    "headers": headers_to_json(&orig_headers),
-                    "body": text_of(&display_body, is_text),
+                    "headers": headers_to_json(&req_headers),
+                    "body": req_body_text,
                 },
                 "env": self.active_env(),
             })
@@ -489,11 +582,11 @@ impl HttpHandler for CaptureHandler {
 
             let mut flow = Flow::new_request(
                 id,
-                parts.method.to_string(),
-                url,
+                req_method.clone(),
+                url.clone(),
                 HttpMessage {
-                    headers: orig_headers,
-                    body: display_body,
+                    headers: req_headers.clone(),
+                    body: if is_text { req_body_text.clone().into_bytes() } else { display_body.clone() },
                     body_is_text: is_text,
                 },
             );
@@ -515,7 +608,7 @@ impl HttpHandler for CaptureHandler {
                     flow.response = Some(ResponseMessage { status, headers, body, body_is_text: true });
                     flow.timings.done = Some(self.started.elapsed().as_millis() as u64);
                     flow.state = FlowState::Completed;
-                    self.store.insert(flow.clone());
+                    self.upsert_flow(preinserted, &flow);
                     (self.emit)("flow-added", &flow);
                     self.persist(&flow);
                     return RequestOrResponse::Response(build_mock_response(&spec));
@@ -524,7 +617,7 @@ impl HttpHandler for CaptureHandler {
             // ошибка handler
             flow.state = FlowState::Error;
             flow.error = Some(res.error.unwrap_or_else(|| "handler error".into()));
-            self.store.insert(flow.clone());
+            self.upsert_flow(preinserted, &flow);
             (self.emit)("flow-added", &flow);
             self.persist(&flow);
             return RequestOrResponse::Response(build_abort_response(
@@ -532,10 +625,10 @@ impl HttpHandler for CaptureHandler {
             ));
         }
 
-        // ── скрипты фазы запроса ──
+        // ── скрипты фазы запроса (цепочка правил над, возможно, отредактированным запросом) ──
         let rules = self.matching(Phase::Request, &targets);
-        let mut work_headers = orig_headers.clone();
-        let mut work_body = text_of(&display_body, is_text);
+        let mut work_headers = req_headers.clone();
+        let mut work_body = req_body_text.clone();
         let mut applied: Vec<String> = Vec::new();
         let mut directive = Directive::Continue;
         let mut script_error: Option<String> = None;
@@ -545,7 +638,7 @@ impl HttpHandler for CaptureHandler {
             for rule in &rules {
                 let input = json!({
                     "request": {
-                        "method": parts.method.to_string(),
+                        "method": req_method.clone(),
                         "url": full_url,
                         "host": url.host,
                         "path": url.path,
@@ -602,11 +695,10 @@ impl HttpHandler for CaptureHandler {
             self.apply_env(&env);
         }
 
-        let mut override_method: Option<String> = None;
         let stored_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { display_body };
         let mut flow = Flow::new_request(
             id,
-            parts.method.to_string(),
+            req_method.clone(),
             url,
             HttpMessage { headers: work_headers.clone(), body: stored_body, body_is_text: is_text },
         );
@@ -614,13 +706,13 @@ impl HttpHandler for CaptureHandler {
         flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
         flow.applied_rules = applied;
         flow.error = script_error;
-        self.store.insert(flow.clone());
-        (self.emit)("flow-added", &flow);
+        self.upsert_flow(preinserted, &flow);
+        (self.emit)(if preinserted { "flow-updated" } else { "flow-added" }, &flow);
         self.current_id = Some(id);
 
-        // Pause on a matched UI breakpoint or a script ctx.breakpoint().
-        let want_break = matches!(directive, Directive::Breakpoint)
-            || self.breakpoint_matches(BpPhase::Request, &targets, &parts.method.to_string());
+        // Pause only on a rule-triggered ctx.breakpoint(); definition-based request
+        // breakpoints already paused above, before any rule ran.
+        let want_break = matches!(directive, Directive::Breakpoint);
         if !want_break {
             self.persist(&flow);
         } else {
@@ -634,7 +726,7 @@ impl HttpHandler for CaptureHandler {
             match self.await_resolution(id, BpPhase::Request).await {
                 Some(Resolution::Execute { method, headers, body, .. }) => {
                     if let Some(m) = method {
-                        override_method = Some(m);
+                        req_method = m;
                     }
                     work_headers = headers;
                     if is_text {
@@ -655,12 +747,10 @@ impl HttpHandler for CaptureHandler {
             self.store.update(id, |f| {
                 f.state = FlowState::Pending;
                 f.paused_phase = None;
+                f.method = req_method.clone();
                 f.request.headers = work_headers.clone();
                 if is_text {
                     f.request.body = work_body.clone().into_bytes();
-                }
-                if let Some(m) = &override_method {
-                    f.method = m.clone();
                 }
             });
             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
@@ -688,10 +778,8 @@ impl HttpHandler for CaptureHandler {
             }
             Directive::Breakpoint | Directive::Continue => {
                 let mut new_parts = parts;
-                if let Some(m) = override_method {
-                    if let Ok(method) = hudsucker::hyper::Method::from_bytes(m.as_bytes()) {
-                        new_parts.method = method;
-                    }
+                if let Ok(method) = hudsucker::hyper::Method::from_bytes(req_method.as_bytes()) {
+                    new_parts.method = method;
                 }
                 new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
                 Request::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body)))).into()
@@ -1372,6 +1460,54 @@ mod tests {
         let echoed = client.get(format!("http://{upstream_addr}/api"))
             .send().await.unwrap().text().await.unwrap();
         assert!(echoed.to_lowercase().contains("x-debug: edited"), "edit not applied: {echoed}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A request breakpoint fires BEFORE a matching handler rule: the flow pauses,
+    // the edit is applied, and the edited request then flows into the handler's send().
+    #[tokio::test]
+    async fn request_breakpoint_fires_before_handler_rule() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![rule("echo", &format!("{upstream_addr}/*"), Phase::Handler, "return send(request);")];
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None, status: None,
+                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let echoed = client.get(format!("http://{upstream_addr}/api"))
+            .send().await.unwrap().text().await.unwrap();
+        assert!(
+            echoed.to_lowercase().contains("x-bp: hit"),
+            "breakpoint did not fire before the handler rule: {echoed}"
+        );
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
