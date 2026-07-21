@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useUpdater } from "../updater";
 import { useLayout } from "../layout";
+import { usePlugins } from "../plugins";
 import { bootstrapPlugins } from "../plugins/bootstrap";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { Sidebar } from "./Sidebar";
@@ -25,7 +26,11 @@ export function AppShell() {
   const detailCollapsed = useFlows((s) => s.detailCollapsed);
   const loadProjects = useProjects((s) => s.load);
   const mode = useLayout((s) => s.mode);
+  const pluginModes = usePlugins((s) => s.modes);
   useKeyboardShortcuts();
+
+  const builtin = mode === "traffic" || mode === "setup" || mode === "plugins";
+  const isUnknownMode = !builtin && !pluginModes.some((m) => m.id === mode);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -45,36 +50,55 @@ export function AppShell() {
         <TopBar />
 
         <main className="min-h-0 flex-1">
-        {mode === "setup" ? (
-          <SetupPanel />
-        ) : mode === "plugins" ? (
-          <PluginsPanel />
-        ) : mode !== "traffic" ? (
-          <PluginMode modeId={mode} />
-        ) : view === "rules" ? (
-          <RulesView />
-        ) : (
-          <ResizableGroup direction="horizontal" className="h-full">
-            <ResizablePanel
-              id="list"
-              order={1}
-              defaultSize={45}
-              minSize={25}
-              className="flex min-h-0 flex-col"
-            >
-              <FilterBar />
-              <ListPanel />
-            </ResizablePanel>
-            {!detailCollapsed && (
-              <>
-                <ResizableHandle />
-                <ResizablePanel id="detail" order={2} minSize={30} className="min-h-0">
-                  <FlowDetail />
-                </ResizablePanel>
-              </>
-            )}
-          </ResizableGroup>
-        )}
+          {/* Every panel stays mounted; only the active one is shown. Switching
+              modes/views therefore preserves each panel's state (open tabs, scroll,
+              in-progress edits, plugin editor contents). */}
+          <Pane show={mode === "traffic" && view === "traffic"}>
+            <ResizableGroup direction="horizontal" className="h-full">
+              <ResizablePanel
+                id="list"
+                order={1}
+                defaultSize={45}
+                minSize={25}
+                className="flex min-h-0 flex-col"
+              >
+                <FilterBar />
+                <ListPanel />
+              </ResizablePanel>
+              {!detailCollapsed && (
+                <>
+                  <ResizableHandle />
+                  <ResizablePanel id="detail" order={2} minSize={30} className="min-h-0">
+                    <FlowDetail />
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizableGroup>
+          </Pane>
+
+          <Pane show={mode === "traffic" && view === "rules"}>
+            <RulesView />
+          </Pane>
+
+          <Pane show={mode === "setup"}>
+            <SetupPanel />
+          </Pane>
+
+          <Pane show={mode === "plugins"}>
+            <PluginsPanel />
+          </Pane>
+
+          {pluginModes.map((m) => (
+            <Pane key={m.id} show={mode === m.id}>
+              <PluginMode modeId={m.id} />
+            </Pane>
+          ))}
+
+          {isUnknownMode && (
+            <Pane show>
+              <PluginMode modeId={mode} />
+            </Pane>
+          )}
         </main>
 
         <StatusBar />
@@ -82,6 +106,15 @@ export function AppShell() {
 
       <ProjectEditor />
       <Toast />
+    </div>
+  );
+}
+
+/** A full-size panel that stays mounted; only shown when `show` is true. */
+function Pane({ show, children }: { show: boolean; children: ReactNode }) {
+  return (
+    <div className="h-full" style={{ display: show ? "block" : "none" }}>
+      {children}
     </div>
   );
 }
