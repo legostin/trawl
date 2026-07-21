@@ -4,6 +4,7 @@ import { useProjects } from "../projects";
 import { useLayout } from "../layout";
 import { useTheme } from "./ThemeProvider";
 import { UpdateButton } from "./UpdateButton";
+import { PulseDot } from "./PulseDot";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
@@ -19,6 +20,7 @@ export function TopBar() {
   const query = useFlows((s) => s.filter.query);
   const setFilter = useFlows((s) => s.setFilter);
   const clearFlows = useFlows((s) => s.clearFlows);
+  const pausedCount = useFlows((s) => s.flows.filter((f) => f.state === "paused").length);
   const projects = useProjects((s) => s.projects);
   const activeId = useProjects((s) => s.activeId);
   const setActive = useProjects((s) => s.setActive);
@@ -87,7 +89,15 @@ export function TopBar() {
               value={view}
               onChange={setView}
               options={[
-                { value: "traffic", label: "Traffic" },
+                {
+                  value: "traffic",
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      Traffic
+                      {pausedCount > 0 && <PulseDot />}
+                    </span>
+                  ),
+                },
                 { value: "rules", label: "Rules" },
                 { value: "breakpoints", label: "Breakpoints" },
               ]}
