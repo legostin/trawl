@@ -31,6 +31,10 @@ pub type SharedLibrary = Arc<RwLock<String>>;
 pub type SharedProject = Arc<RwLock<Option<Project>>>;
 pub type SharedBreakpoints = Arc<RwLock<Vec<crate::breakpoints::Breakpoint>>>;
 pub type SharedIntercept = Arc<RwLock<bool>>;
+/// Auto-continue timeout in seconds (0 = hold forever).
+pub type SharedTimeout = Arc<RwLock<u64>>;
+/// Hold new requests while any flow is paused on a breakpoint.
+pub type SharedPauseOthers = Arc<RwLock<bool>>;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum BpPhase {
@@ -76,6 +80,8 @@ struct CaptureHandler {
     breakpoints: SharedBreakpoints,
     intercept: SharedIntercept,
     pending: BreakpointRegistry,
+    timeout_secs: SharedTimeout,
+    pause_others: SharedPauseOthers,
 }
 
 impl CaptureHandler {
@@ -286,12 +292,43 @@ impl CaptureHandler {
         })
     }
 
-    /// Register a pending breakpoint and await the UI's resolution.
-    /// Returns None if the sender was dropped (proxy stopped) — caller continues unmodified.
+    /// Register a pending breakpoint and await the UI's resolution. Returns None
+    /// (continue unmodified) if the sender was dropped (proxy stopped) or the
+    /// auto-continue timeout elapsed.
     async fn await_resolution(&self, id: u64, phase: BpPhase) -> Option<Resolution> {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert((id, phase), tx);
-        rx.await.ok()
+        let secs = *self.timeout_secs.read().unwrap();
+        if secs == 0 {
+            return rx.await.ok();
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(secs), rx).await {
+            Ok(r) => r.ok(),
+            Err(_) => {
+                // Timed out — drop the pending sender and un-pause so the UI closes.
+                self.pending.lock().unwrap().remove(&(id, phase));
+                self.store.update(id, |f| {
+                    if f.paused_phase.is_some() {
+                        f.state = FlowState::Pending;
+                        f.paused_phase = None;
+                    }
+                });
+                if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    (self.emit)("flow-updated", &u);
+                }
+                None
+            }
+        }
+    }
+
+    /// While "pause others" is on, hold a new request until no flow is paused.
+    async fn hold_while_paused(&self) {
+        if !*self.pause_others.read().unwrap() {
+            return;
+        }
+        while !self.pending.lock().unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     /// Store a flow, updating it in place if a request breakpoint already inserted
@@ -538,6 +575,10 @@ impl HttpHandler for CaptureHandler {
             format!("{}{}", url.host, url.path),
             format!("{}:{}{}", url.host, url.port, url.path),
         ];
+
+        // "Pause others": if enabled, hold this new request while another flow is
+        // paused on a breakpoint, so nothing slips through mid-interception.
+        self.hold_while_paused().await;
 
         // Working request values. A definition-based request breakpoint (below)
         // may edit these BEFORE any rule runs; the handler rule and request-phase
@@ -1155,6 +1196,8 @@ pub async fn start(
     breakpoints: SharedBreakpoints,
     intercept: SharedIntercept,
     pending: BreakpointRegistry,
+    timeout_secs: SharedTimeout,
+    pause_others: SharedPauseOthers,
 ) -> Result<ProxyHandle> {
     let ca = load_or_create_ca(&ca_dir)?;
     let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
@@ -1178,6 +1221,8 @@ pub async fn start(
         breakpoints,
         intercept,
         pending,
+        timeout_secs,
+        pause_others,
     };
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -1313,7 +1358,7 @@ mod tests {
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1348,7 +1393,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1403,7 +1448,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1440,7 +1485,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1521,7 +1566,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1562,7 +1607,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1591,7 +1636,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1641,7 +1686,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1688,7 +1733,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1731,7 +1776,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1767,6 +1812,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
+    // With a timeout set and nobody resolving, a paused flow auto-continues.
+    #[tokio::test]
+    async fn breakpoint_auto_continues_on_timeout() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
+        let timeout = Arc::new(RwLock::new(1u64)); // 1s auto-continue
+        let pother = Arc::new(RwLock::new(false));
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending, timeout, pother,
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        // No resolver — the flow should time out and continue unmodified.
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let status = client.get(format!("http://{upstream_addr}/api"))
+            .send().await.unwrap().status();
+        assert_eq!(status, 200, "flow should auto-continue after the timeout");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
     // Abort resolution short-circuits with 502.
     #[tokio::test]
     async fn request_breakpoint_abort_returns_502() {
@@ -1778,7 +1852,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1831,7 +1905,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1884,7 +1958,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -1944,7 +2018,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -2002,7 +2076,7 @@ mod tests {
         let ca_dir = temp_ca();
         let handle = start(
             "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
-            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
 
@@ -2069,7 +2143,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2130,7 +2204,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2203,7 +2277,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2240,7 +2314,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![proj_rule, global_rule]);
         *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2305,7 +2379,7 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
