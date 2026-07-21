@@ -14,6 +14,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { useFlows } from "@/store";
 import { useProjects } from "@/projects";
+import { useRules } from "@/rules";
 import { useLayout } from "@/layout";
 import { usePlugins } from "@/plugins";
 import { sendRequest } from "@/http";
@@ -23,9 +24,16 @@ import { BodyViewer } from "@/components/BodyViewer";
 import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
-import type { ActiveProject, EnvVar, FlowAction, RegisteredMode, TrawlHost } from "./api";
+import type {
+  ActiveProject,
+  EnvVar,
+  FlowAction,
+  RegisteredMode,
+  RuleDraft,
+  TrawlHost,
+} from "./api";
 
-const HOST_VERSION = "1.4.0";
+const HOST_VERSION = "1.5.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -88,6 +96,19 @@ export function installHost(): void {
       },
       onChange: (cb: (project: ActiveProject | null) => void) =>
         bus.on("project:changed", () => cb(activeProject())),
+    },
+    rules: {
+      create: async (draft: RuleDraft) => {
+        await useRules.getState().upsert({
+          id: crypto.randomUUID(),
+          enabled: true,
+          projectId: useProjects.getState().activeId ?? null,
+          ...draft,
+        });
+        // Land the user in the rules editor with the new rule selected.
+        useLayout.getState().setMode("traffic");
+        useFlows.getState().setView("rules");
+      },
     },
     gitHosts: {
       token: (host: string) => invoke<string | null>("git_host_token_get", { host }),

@@ -63,6 +63,19 @@ export interface TrawlProjects {
   onChange(cb: (project: ActiveProject | null) => void): () => void;
 }
 
+/** A rule to be created by a plugin (id/enabled/project are filled by the host). */
+export interface RuleDraft {
+  name: string;
+  pattern: string;
+  phase: "request" | "response" | "both" | "handler";
+  script: string;
+}
+
+export interface TrawlRules {
+  /** Create a rule in the active project and open it in the rules editor. */
+  create(draft: RuleDraft): Promise<void>;
+}
+
 /** Per-host git access tokens (entered once at plugin-install time). Plugins
  *  run with full app access, so browsing logic lives in plugins; the host only
  *  stores tokens and hands them out. */
@@ -114,6 +127,7 @@ export interface TrawlHost {
   http: TrawlHttp;
   projects: TrawlProjects;
   gitHosts: TrawlGitHosts;
+  rules: TrawlRules;
   storage: TrawlStorage;
   ui: TrawlUi;
   util: TrawlUtil;
