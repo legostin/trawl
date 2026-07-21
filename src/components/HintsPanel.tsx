@@ -1,40 +1,38 @@
-import { useMemo } from "react";
-import { Lightbulb, Plus, Replace, Variable } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Lightbulb, Plus, Replace, Search, Variable } from "lucide-react";
 import { useFlows } from "../store";
 import { useRules } from "../rules";
 import { useProjects } from "../projects";
 import { useToast } from "../toast";
-import { analyzeJson, accessor, matchGlob, type FieldInfo } from "@/lib/analyze";
-import { bodyToText, tryParseJson } from "@/lib/body";
+import { accessor, type FieldInfo } from "@/lib/analyze";
 import { saveToEnvRule, overrideRule } from "../scripting/genRules";
 import { cn } from "@/lib/utils";
 
 export function HintsPanel({
   pattern,
+  fields,
   onInsert,
 }: {
   pattern: string;
+  fields: FieldInfo[];
   onInsert: (code: string) => void;
 }) {
-  const flows = useFlows((s) => s.flows);
   const setView = useFlows((s) => s.setView);
   const upsertRule = useRules((s) => s.upsert);
   const activeId = useProjects((s) => s.activeId);
   const showToast = useToast((s) => s.show);
+  const [q, setQ] = useState("");
 
-  const fields = useMemo(() => {
-    const matched = flows.filter((f) =>
-      [`${f.url.host}${f.url.path}`, `${f.url.host}:${f.url.port}${f.url.path}`].some((t) =>
-        matchGlob(pattern, t),
-      ),
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return fields;
+    // Search by field path AND by example value.
+    return fields.filter(
+      (f) =>
+        f.path.toLowerCase().includes(needle) ||
+        (f.example ?? "").toLowerCase().includes(needle),
     );
-    const values: unknown[] = [];
-    for (const f of matched.slice(-20)) {
-      const parsed = tryParseJson(bodyToText(f.response));
-      if (parsed !== null) values.push(parsed);
-    }
-    return analyzeJson(values);
-  }, [flows, pattern]);
+  }, [fields, q]);
 
   const createRule = async (rule: Parameters<typeof upsertRule>[0]) => {
     await upsertRule({ ...rule, projectId: activeId ?? null });
@@ -47,18 +45,32 @@ export function HintsPanel({
       <div className="flex items-center gap-1.5 border-b border-border bg-card px-2 py-1.5 text-xs font-semibold text-muted-foreground">
         <Lightbulb className="size-3.5" /> Fields from past responses
       </div>
+      <div className="border-b border-border p-1.5">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search field or value…"
+            className="h-6 w-full rounded border border-border bg-background pl-6 pr-2 text-[11px] outline-none focus:border-primary"
+          />
+        </div>
+      </div>
       <div className="min-h-0 flex-1 overflow-auto p-1">
         {fields.length === 0 ? (
           <div className="p-2 text-[11px] leading-relaxed text-muted-foreground">
             No data yet. Route traffic matching this pattern to see JSON response fields here, with
-            example values and one-click actions.
+            example values and one-click actions. They also drive <code>response.data</code>{" "}
+            autocomplete.
           </div>
+        ) : shown.length === 0 ? (
+          <div className="p-2 text-[11px] text-muted-foreground">No fields match “{q}”.</div>
         ) : (
-          fields.map((f) => (
+          shown.map((f) => (
             <FieldRow
               key={f.path}
               field={f}
-              onInsert={() => onInsert(`${accessor(f.path)} = ;`)}
+              onInsert={() => onInsert("response." + accessor(f.path))}
               onEnv={() => void createRule(saveToEnvRule(pattern, f.path, activeId ?? null))}
               onOverride={() =>
                 void createRule(overrideRule(pattern, f.path, f.example, activeId ?? null))
@@ -105,7 +117,7 @@ function FieldRow({
           {field.type === "array" ? "[…]" : (field.example ?? "")}
         </span>
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
-          <IconBtn title="Insert accessor" onClick={onInsert}>
+          <IconBtn title="Insert accessor at cursor" onClick={onInsert}>
             <Plus className="size-3" />
           </IconBtn>
           <IconBtn title="Save to project env" onClick={onEnv}>

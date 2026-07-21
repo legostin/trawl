@@ -1,15 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookMarked, FileCode2, Plus, Save, Trash2 } from "lucide-react";
 import { useRules, type Phase, type Rule } from "../rules";
 import { useProjects } from "../projects";
-import { ScriptEditor } from "./ScriptEditor";
+import { useFlows } from "../store";
+import { ScriptEditor, type ScriptEditorApi } from "./ScriptEditor";
 import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
-import { SNIPPETS } from "../scripting/snippets";
-import { setLibraryTypes } from "../monaco-setup";
+import { SNIPPETS, TEMPLATES } from "../scripting/snippets";
+import { STD_FUNCTIONS } from "../scripting/stdlib";
+import { setLibraryTypes, setResponseDataType } from "../monaco-setup";
 import { HintsPanel } from "./HintsPanel";
+import { analyzeJson, fieldsToType, matchGlob } from "@/lib/analyze";
+import { bodyToText, tryParseJson } from "@/lib/body";
 import { cn } from "@/lib/utils";
 
 const NEW_SCRIPT =
@@ -119,6 +123,28 @@ function RuleEditor({
 }) {
   const [draft, setDraft] = useState<Rule>(rule);
   const patch = (p: Partial<Rule>) => setDraft((d) => ({ ...d, ...p }));
+  const editorApi = useRef<ScriptEditorApi | null>(null);
+  const flows = useFlows((s) => s.flows);
+
+  // Fields observed in past responses matching this pattern — power the hints
+  // panel and the `response.data` structure autocomplete.
+  const fields = useMemo(() => {
+    const matched = flows.filter((f) =>
+      [`${f.url.host}${f.url.path}`, `${f.url.host}:${f.url.port}${f.url.path}`].some((t) =>
+        matchGlob(draft.pattern, t),
+      ),
+    );
+    const values: unknown[] = [];
+    for (const f of matched.slice(-20)) {
+      const parsed = tryParseJson(bodyToText(f.response));
+      if (parsed !== null) values.push(parsed);
+    }
+    return analyzeJson(values);
+  }, [flows, draft.pattern]);
+
+  useEffect(() => {
+    setResponseDataType(fieldsToType(fields));
+  }, [fields]);
 
   return (
     <div className="flex h-full flex-col">
@@ -161,13 +187,27 @@ function RuleEditor({
       </div>
       <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
         <span className="text-[11px] text-muted-foreground">Templates:</span>
+        {TEMPLATES.map((t) => (
+          <Button
+            key={t.label}
+            size="sm"
+            variant="outline"
+            className="h-6 text-[11px]"
+            title="Replace the whole script"
+            onClick={() => editorApi.current?.replaceAll(t.code)}
+          >
+            {t.label}
+          </Button>
+        ))}
+        <span className="ml-2 text-[11px] text-muted-foreground">Snippets:</span>
         {SNIPPETS.map((s) => (
           <Button
             key={s.label}
             size="sm"
-            variant="outline"
+            variant="ghost"
             className="h-6 text-[11px]"
-            onClick={() => patch({ script: draft.script + (draft.script.endsWith("\n") ? "" : "\n") + s.code })}
+            title="Insert at the cursor"
+            onClick={() => editorApi.current?.insert(s.code)}
           >
             {s.label}
           </Button>
@@ -175,13 +215,16 @@ function RuleEditor({
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
-          <ScriptEditor value={draft.script} onChange={(script) => patch({ script })} />
+          <ScriptEditor
+            value={draft.script}
+            onChange={(script) => patch({ script })}
+            apiRef={editorApi}
+          />
         </div>
         <HintsPanel
           pattern={draft.pattern}
-          onInsert={(code) =>
-            patch({ script: draft.script + (draft.script.endsWith("\n") ? "" : "\n") + code + "\n" })
-          }
+          fields={fields}
+          onInsert={(code) => editorApi.current?.insert(code)}
         />
       </div>
     </div>
@@ -194,15 +237,37 @@ function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: strin
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
         <span className="text-xs text-muted-foreground">
-          Functions here are available in every rule (prelude).
+          Your functions are available in every rule (prelude); they can override the standard library.
         </span>
         <Button size="sm" className="ml-auto" onClick={() => void onSave(src)}>
           <Save />
           Save
         </Button>
       </div>
-      <div className="min-h-0 flex-1">
-        <ScriptEditor value={src} onChange={setSrc} />
+      <div className="grid min-h-0 flex-1 grid-cols-2">
+        <div className="min-h-0 overflow-auto border-r border-border p-3">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Standard library (built-in)
+          </div>
+          <ul className="flex flex-col gap-2">
+            {STD_FUNCTIONS.map((fn) => (
+              <li key={fn.signature} className="rounded border border-border/60 bg-card px-2 py-1.5">
+                <div className="flex items-center gap-2">
+                  <code className="font-mono text-[11px] text-primary break-all">{fn.signature}</code>
+                  {fn.phase === "handler" && (
+                    <span className="shrink-0 rounded bg-secondary px-1 text-[9px] uppercase text-muted-foreground">
+                      handler
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{fn.doc}</div>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="min-h-0">
+          <ScriptEditor value={src} onChange={setSrc} />
+        </div>
       </div>
     </div>
   );

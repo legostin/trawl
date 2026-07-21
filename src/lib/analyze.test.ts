@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { analyzeJson, accessor, matchGlob } from "./analyze";
+import { analyzeJson, accessor, matchGlob, fieldsToType } from "./analyze";
+
+describe("fieldsToType", () => {
+  it("builds a nested TS type with arrays of objects", () => {
+    const t = fieldsToType(analyzeJson([{ user: { name: "a" }, items: [{ id: 1 }] }]));
+    expect(t).toBe("{ items: Array<{ id: number }>; user: { name: string } }");
+  });
+
+  it("handles arrays of scalars and top-level scalars", () => {
+    const t = fieldsToType(analyzeJson([{ ok: true, tags: ["x", "y"] }]));
+    expect(t).toBe("{ ok: boolean; tags: string[] }");
+  });
+
+  it("returns an index type when there are no fields", () => {
+    expect(fieldsToType([])).toBe("{ [key: string]: any }");
+  });
+});
 
 describe("analyzeJson", () => {
   it("collects nested object field paths, types and examples", () => {
