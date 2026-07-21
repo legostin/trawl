@@ -9,6 +9,7 @@ mod projects;
 mod proxy;
 mod rules;
 mod scripting;
+mod snippets;
 mod setup_actions;
 mod store;
 
@@ -41,6 +42,8 @@ pub fn run() {
             commands::delete_rule,
             commands::get_library,
             commands::save_library,
+            commands::get_snippets,
+            commands::save_snippets,
             commands::list_projects,
             commands::save_project,
             commands::delete_project,

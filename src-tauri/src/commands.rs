@@ -209,6 +209,21 @@ pub fn save_library(app: AppHandle, source: String, state: State<'_, AppState>) 
     Ok(())
 }
 
+// ── User templates & snippets ──
+
+#[tauri::command]
+pub fn get_snippets(app: AppHandle) -> Result<crate::snippets::SnippetsFile, String> {
+    crate::snippets::load_snippets(&rules_dir(&app)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_snippets(
+    app: AppHandle,
+    file: crate::snippets::SnippetsFile,
+) -> Result<(), String> {
+    crate::snippets::save_snippets(&rules_dir(&app)?, &file).map_err(|e| e.to_string())
+}
+
 // ── Проекты ──
 
 #[tauri::command]

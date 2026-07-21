@@ -8,10 +8,12 @@ import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
-import { SNIPPETS, TEMPLATES } from "../scripting/snippets";
 import { STD_FUNCTIONS } from "../scripting/stdlib";
+import { useSnippets, type SnippetKind } from "../scripting/snippetStore";
 import { setLibraryTypes, setResponseDataType } from "../monaco-setup";
+import { SnippetMenu } from "./SnippetMenu";
 import { HintsPanel } from "./HintsPanel";
+import { useToast } from "../toast";
 import { analyzeJson, fieldsToType, matchGlob } from "@/lib/analyze";
 import { bodyToText, tryParseJson } from "@/lib/body";
 import { cn } from "@/lib/utils";
@@ -28,9 +30,11 @@ export function RulesView() {
     useRules();
   const activeId = useProjects((s) => s.activeId);
 
+  const loadSnippets = useSnippets((s) => s.load);
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSnippets();
+  }, [load, loadSnippets]);
 
   useEffect(() => {
     setLibraryTypes(library);
@@ -125,6 +129,22 @@ function RuleEditor({
   const patch = (p: Partial<Rule>) => setDraft((d) => ({ ...d, ...p }));
   const editorApi = useRef<ScriptEditorApi | null>(null);
   const flows = useFlows((s) => s.flows);
+  const addSnippet = useSnippets((s) => s.add);
+  const showToast = useToast((s) => s.show);
+  const [saving, setSaving] = useState<{ kind: SnippetKind; code: string } | null>(null);
+  const [saveName, setSaveName] = useState("");
+
+  const confirmSave = async () => {
+    const name = saveName.trim();
+    if (!name || !saving) {
+      setSaving(null);
+      return;
+    }
+    await addSnippet(saving.kind, name, saving.code);
+    showToast(`Saved ${saving.kind} “${name}”`);
+    setSaving(null);
+    setSaveName("");
+  };
 
   // Fields observed in past responses matching this pattern — power the hints
   // panel and the `response.data` structure autocomplete.
@@ -185,34 +205,57 @@ function RuleEditor({
           </Button>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
-        <span className="text-[11px] text-muted-foreground">Templates:</span>
-        {TEMPLATES.map((t) => (
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
+        <SnippetMenu kind="template" label="Templates" onPick={(c) => editorApi.current?.replaceAll(c)} />
+        <SnippetMenu kind="snippet" label="Snippets" onPick={(c) => editorApi.current?.insert(c)} />
+        <div className="ml-auto flex items-center gap-1">
           <Button
-            key={t.label}
-            size="sm"
-            variant="outline"
-            className="h-6 text-[11px]"
-            title="Replace the whole script"
-            onClick={() => editorApi.current?.replaceAll(t.code)}
-          >
-            {t.label}
-          </Button>
-        ))}
-        <span className="ml-2 text-[11px] text-muted-foreground">Snippets:</span>
-        {SNIPPETS.map((s) => (
-          <Button
-            key={s.label}
             size="sm"
             variant="ghost"
             className="h-6 text-[11px]"
-            title="Insert at the cursor"
-            onClick={() => editorApi.current?.insert(s.code)}
+            title="Save the whole script as a reusable template"
+            onClick={() => setSaving({ kind: "template", code: editorApi.current?.getValue() || draft.script })}
           >
-            {s.label}
+            Save as template
           </Button>
-        ))}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 text-[11px]"
+            title="Save the selection (or whole script) as a reusable snippet"
+            onClick={() =>
+              setSaving({
+                kind: "snippet",
+                code: editorApi.current?.getSelectionText() || editorApi.current?.getValue() || draft.script,
+              })
+            }
+          >
+            Save as snippet
+          </Button>
+        </div>
       </div>
+      {saving && (
+        <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-1.5">
+          <span className="text-[11px] text-muted-foreground">Save {saving.kind} as:</span>
+          <Input
+            autoFocus
+            value={saveName}
+            onChange={(e) => setSaveName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirmSave();
+              if (e.key === "Escape") setSaving(null);
+            }}
+            placeholder="Name"
+            className="h-6 w-56 text-[11px]"
+          />
+          <Button size="sm" className="h-6 text-[11px]" onClick={() => void confirmSave()}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={() => setSaving(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">
           <ScriptEditor
