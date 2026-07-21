@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, ArrowUpCircle, KeyRound, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { usePlugins } from "@/plugins";
 import { loadPlugin } from "@/plugins/loader";
@@ -139,9 +140,15 @@ export function PluginsPanel() {
           </div>
           <p className="pl-6 text-xs text-muted-foreground">
             How to get one: open{" "}
-            <code className="select-all break-all">
-              https://{ghost}/settings/tokens/new?scopes=repo&description=Trawl
-            </code>{" "}
+            <button
+              type="button"
+              className="cursor-pointer break-all font-mono text-primary underline underline-offset-2 hover:opacity-80"
+              onClick={() =>
+                void openUrl(`https://${ghost}/settings/tokens/new?scopes=repo&description=Trawl`)
+              }
+            >
+              https://{ghost}/settings/tokens/new
+            </button>{" "}
             (Settings → Developer settings → Personal access tokens → Tokens (classic) →
             Generate new token), keep only the <code>repo</code> scope, generate and copy the{" "}
             <code>ghp_…</code> value — GitHub shows it once.
