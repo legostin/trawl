@@ -1,6 +1,6 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowRight, Inbox, SearchX, Wand2 } from "lucide-react";
+import { ArrowRight, CircleDot, Inbox, SearchX, Wand2 } from "lucide-react";
 import { useFlows } from "../store";
 import { visibleFlows } from "../filter";
 import { MethodBadge, StatusBadge } from "./badges";
@@ -81,7 +81,11 @@ export function TrafficTable() {
                     gridTemplateColumns: COLS,
                   }}
                 >
-                  {flow.appliedRules.length > 0 ? (
+                  {flow.pausedPhase ? (
+                    <span title={`Paused on breakpoint (${flow.pausedPhase})`}>
+                      <CircleDot className="size-3 text-http-red" />
+                    </span>
+                  ) : flow.appliedRules.length > 0 ? (
                     <span title={`Rule applied: ${flow.appliedRules.join(", ")}`}>
                       <Wand2 className="size-3 text-http-amber" />
                     </span>
