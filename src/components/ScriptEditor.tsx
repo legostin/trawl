@@ -8,6 +8,10 @@ export interface ScriptEditorApi {
   insert: (text: string) => void;
   /** Replace the whole document (kept in the undo stack). */
   replaceAll: (text: string) => void;
+  /** Current selection text (empty when nothing is selected). */
+  getSelectionText: () => string;
+  /** Full document text. */
+  getValue: () => string;
 }
 
 export function ScriptEditor({
@@ -40,6 +44,12 @@ export function ScriptEditor({
         }
         editor.focus();
       },
+      getSelectionText: () => {
+        const sel = editor.getSelection();
+        const model = editor.getModel();
+        return sel && model ? model.getValueInRange(sel) : "";
+      },
+      getValue: () => editor.getModel()?.getValue() ?? "",
     };
   };
 
