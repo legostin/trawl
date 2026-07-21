@@ -4,8 +4,16 @@ import { listen } from "@tauri-apps/api/event";
 import type { Flow } from "./types";
 import { emptyFilter, type FlowFilter } from "./filter";
 
-export type View = "traffic" | "rules";
+export type View = "traffic" | "rules" | "breakpoints";
 export type ListMode = "sequence" | "structure";
+
+export interface EditedPayload {
+  method?: string;
+  status?: number;
+  headers?: [string, string][];
+  body?: string;
+  reason?: string;
+}
 
 interface FlowsState {
   flows: Flow[];
@@ -26,6 +34,13 @@ interface FlowsState {
   setListMode: (m: ListMode) => void;
   toggleDetail: () => void;
   clearFlows: () => void;
+
+  resolveBreakpoint: (
+    id: number,
+    phase: "request" | "response",
+    action: "execute" | "abort" | "respond",
+    edited: EditedPayload,
+  ) => Promise<void>;
 
   init: () => Promise<() => void>;
   startProxy: (port: number) => Promise<string>;
@@ -60,14 +75,23 @@ export const useFlows = create<FlowsState>((set, get) => ({
       return { flows: next };
     }),
 
+  resolveBreakpoint: async (id, phase, action, edited) => {
+    await invoke("resolve_breakpoint", { id, phase, action, edited });
+  },
+
   init: async () => {
     const existing = await invoke<Flow[]>("get_flows");
     set({ flows: existing });
     const un1 = await listen<Flow>("flow-added", (e) => get().upsert(e.payload));
     const un2 = await listen<Flow>("flow-updated", (e) => get().upsert(e.payload));
+    const un3 = await listen<Flow>("flow-paused", (e) => {
+      get().upsert(e.payload);
+      set({ selectedId: e.payload.id });
+    });
     return () => {
       un1();
       un2();
+      un3();
     };
   },
   startProxy: (port) => invoke<string>("start_proxy", { port }),
