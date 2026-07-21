@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   ChevronDown,
+  CircleDot,
   Copy,
   FileCode2,
   FlaskConical,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { useFlows } from "../store";
 import { useRules, type Rule } from "../rules";
+import { useBreakpoints, breakpointFromFlow } from "../breakpoints";
 import { useProjects, projectTracks, type Project } from "../projects";
 import { usePlugins } from "../plugins";
 import { useToast } from "../toast";
@@ -81,6 +83,7 @@ export function FlowDetail() {
   const flow = useFlows((s) => s.flows.find((f) => f.id === s.selectedId) ?? null);
   const setView = useFlows((s) => s.setView);
   const upsertRule = useRules((s) => s.upsert);
+  const upsertBreakpoint = useBreakpoints((s) => s.upsert);
   const activeId = useProjects((s) => s.activeId);
   const flowActions = usePlugins((s) => s.flowActions);
   const [tab, setTab] = useState<Tab>("overview");
@@ -88,6 +91,11 @@ export function FlowDetail() {
   const createRule = async (rule: Rule) => {
     await upsertRule({ ...rule, projectId: activeId ?? null });
     setView("rules");
+  };
+
+  const createBreakpoint = async (f: Flow) => {
+    await upsertBreakpoint(breakpointFromFlow(f, activeId ?? null));
+    setView("breakpoints");
   };
 
   if (!flow) {
@@ -152,6 +160,15 @@ export function FlowDetail() {
             >
               <FlaskConical />
               Mock
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              title="Create a breakpoint for this endpoint"
+              onClick={() => void createBreakpoint(flow)}
+            >
+              <CircleDot />
+              Breakpoint
             </Button>
             <Button
               variant="outline"

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import type { Flow } from "./types";
 
 export interface Breakpoint {
   id: string;
@@ -13,6 +14,22 @@ export interface Breakpoint {
   onResponse: boolean;
   /** Owning project; null = global. */
   projectId: string | null;
+}
+
+/** A breakpoint pre-filled from a captured flow: matches its host+path (query
+ *  stripped, wildcard-suffixed) and method, pausing the request phase. */
+export function breakpointFromFlow(flow: Flow, projectId: string | null): Breakpoint {
+  const path = flow.url.path.split("?")[0];
+  return {
+    id: crypto.randomUUID(),
+    name: `${flow.method} ${path}`.slice(0, 40),
+    enabled: true,
+    pattern: `${flow.url.host}${path}*`,
+    method: flow.method,
+    onRequest: true,
+    onResponse: false,
+    projectId,
+  };
 }
 
 interface BreakpointsState {
