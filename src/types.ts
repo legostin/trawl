@@ -40,4 +40,6 @@ export interface Flow {
   state: FlowState;
   error: string | null;
   appliedRules: string[];
+  /** Set while the flow is held on a breakpoint. */
+  pausedPhase?: "request" | "response" | null;
 }

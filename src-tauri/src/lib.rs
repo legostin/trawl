@@ -1,3 +1,4 @@
+mod breakpoints;
 mod ca;
 mod commands;
 mod db;
@@ -40,6 +41,12 @@ pub fn run() {
             commands::list_rules,
             commands::save_rule,
             commands::delete_rule,
+            commands::list_breakpoints,
+            commands::save_breakpoint,
+            commands::delete_breakpoint,
+            commands::set_intercept,
+            commands::get_intercept,
+            commands::resolve_breakpoint,
             commands::get_library,
             commands::save_library,
             commands::get_snippets,
