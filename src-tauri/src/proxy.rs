@@ -21,7 +21,7 @@ use crate::ca::load_or_create_ca;
 use crate::db::DbHandle;
 use crate::model::{Flow, FlowState, HttpMessage, ResponseMessage, UrlParts};
 use crate::projects::{env_from_object, update_project_env, Project};
-use crate::rules::{Phase, Rule};
+use crate::rules::{glob_match_env, Phase, Rule};
 use crate::scripting::ScriptClient;
 use crate::store::FlowStore;
 
@@ -225,6 +225,7 @@ impl CaptureHandler {
     /// (`host/path` и `host:port/path`) и оно в области активного проекта.
     fn matching(&self, phase: Phase, targets: &[String]) -> Vec<Rule> {
         let scope = self.active_scope();
+        let env = self.active_env();
         self.rules
             .read()
             .unwrap()
@@ -233,7 +234,7 @@ impl CaptureHandler {
                 r.enabled
                     && r.project_id == scope
                     && r.runs_in(phase)
-                    && targets.iter().any(|t| r.matches_target(t))
+                    && targets.iter().any(|t| glob_match_env(&r.pattern, t, &env))
             })
             .cloned()
             .collect()
@@ -245,6 +246,7 @@ impl CaptureHandler {
             return false;
         }
         let scope = self.active_scope();
+        let env = self.active_env();
         self.breakpoints.read().unwrap().iter().any(|b| {
             b.enabled
                 && b.project_id == scope
@@ -255,7 +257,7 @@ impl CaptureHandler {
                 && b.method
                     .as_deref()
                     .map_or(true, |m| m == "*" || m.eq_ignore_ascii_case(method))
-                && targets.iter().any(|t| b.matches_target(t))
+                && targets.iter().any(|t| glob_match_env(&b.pattern, t, &env))
         })
     }
 
@@ -269,6 +271,7 @@ impl CaptureHandler {
 
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
         let scope = self.active_scope();
+        let env = self.active_env();
         self.rules
             .read()
             .unwrap()
@@ -277,7 +280,7 @@ impl CaptureHandler {
                 r.enabled
                     && r.project_id == scope
                     && r.phase == Phase::Handler
-                    && targets.iter().any(|t| r.matches_target(t))
+                    && targets.iter().any(|t| glob_match_env(&r.pattern, t, &env))
             })
             .cloned()
     }
