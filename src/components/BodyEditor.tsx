@@ -1,7 +1,10 @@
 import { useState } from "react";
+import Editor from "@monaco-editor/react";
+import "../monaco-setup";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
+import { useTheme } from "./ThemeProvider";
 import { parseUrlEncoded } from "@/lib/params";
 
 export type BodyFormat = "raw" | "json" | "form" | "multipart";
@@ -9,6 +12,29 @@ export type BodyFormat = "raw" | "json" | "form" | "multipart";
 type Row = { key: string; value: string };
 
 const MULTIPART_BOUNDARY = "----trawlBoundary7MA4YWxkTrZu0gW";
+
+/** Monaco language for syntax highlighting, from format + content-type. */
+function monacoLanguage(fmt: BodyFormat, contentType: string): string {
+  if (fmt === "json") return "json";
+  const ct = contentType.toLowerCase();
+  if (ct.includes("json")) return "json";
+  if (ct.includes("html")) return "html";
+  if (ct.includes("xml")) return "xml";
+  if (ct.includes("javascript")) return "javascript";
+  if (ct.includes("css")) return "css";
+  return "plaintext";
+}
+
+/** Pretty-print JSON; returns the input unchanged if it isn't valid JSON. */
+function prettifyJson(s: string): string {
+  const t = s.trim();
+  if (!t) return s;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return s;
+  }
+}
 
 /** Pick the initial body format from a content-type header. */
 export function detectBodyFormat(contentType: string): BodyFormat {
@@ -64,8 +90,10 @@ export function BodyEditor({
   initialContentType: string;
   onChange: (r: { body: string; contentType: string }) => void;
 }) {
-  const [fmt, setFmt] = useState<BodyFormat>(detectBodyFormat(initialContentType));
-  const [text, setText] = useState(initialBody);
+  const initialFmt = detectBodyFormat(initialContentType);
+  const { theme } = useTheme();
+  const [fmt, setFmt] = useState<BodyFormat>(initialFmt);
+  const [text, setText] = useState(initialFmt === "json" ? prettifyJson(initialBody) : initialBody);
   const [rows, setRows] = useState<Row[]>(() =>
     parseUrlEncoded(initialBody).map(([key, value]) => ({ key, value })),
   );
@@ -93,9 +121,18 @@ export function BodyEditor({
     } else if (!isKv && wasKv) {
       nextText = serializeForm(rows);
       setText(nextText);
+    } else if (next === "json") {
+      nextText = prettifyJson(text);
+      setText(nextText);
     }
     setFmt(next);
     emit(next, nextText, nextRows);
+  };
+
+  const prettify = () => {
+    const next = prettifyJson(text);
+    setText(next);
+    emit(fmt, next, rows);
   };
 
   const patchRow = (i: number, p: Partial<Row>) => {
@@ -123,19 +160,26 @@ export function BodyEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="flex items-center gap-1 text-xs text-muted-foreground">
-        Format
-        <Select
-          value={fmt}
-          onChange={(e) => changeFormat(e.target.value as BodyFormat)}
-          className="h-7"
-        >
-          <option value="raw">Raw</option>
-          <option value="json">JSON</option>
-          <option value="form">Form (urlencoded)</option>
-          <option value="multipart">Multipart</option>
-        </Select>
-      </label>
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          Format
+          <Select
+            value={fmt}
+            onChange={(e) => changeFormat(e.target.value as BodyFormat)}
+            className="h-7"
+          >
+            <option value="raw">Raw</option>
+            <option value="json">JSON</option>
+            <option value="form">Form (urlencoded)</option>
+            <option value="multipart">Multipart</option>
+          </Select>
+        </label>
+        {fmt === "json" && (
+          <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={prettify}>
+            Prettify
+          </Button>
+        )}
+      </div>
 
       {isKv ? (
         <div>
@@ -180,13 +224,25 @@ export function BodyEditor({
           </Button>
         </div>
       ) : (
-        <textarea
-          value={text}
-          onChange={(e) => changeText(e.target.value)}
-          spellCheck={false}
-          className="h-64 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
-          placeholder={fmt === "json" ? "{ }" : ""}
-        />
+        <div className="h-72 overflow-hidden rounded border border-border">
+          <Editor
+            height="100%"
+            language={monacoLanguage(fmt, initialContentType)}
+            theme={theme === "dark" ? "vs-dark" : "light"}
+            value={text}
+            onChange={(v) => changeText(v ?? "")}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 12,
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              tabSize: 2,
+              lineNumbersMinChars: 3,
+              wordWrap: "on",
+              padding: { top: 6 },
+            }}
+          />
+        </div>
       )}
     </div>
   );
