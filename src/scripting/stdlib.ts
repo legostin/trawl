@@ -68,6 +68,7 @@ export const STD_FUNCTIONS: StdFn[] = [
   { signature: "setJsonBody(msg, obj)", doc: "Stringify obj into the body + set content-type." },
   { signature: "bearer(token)", doc: "Set Authorization: Bearer <token> on the request." },
   { signature: "queryParam(request, name): string | undefined", doc: "Read a decoded query param." },
+  { signature: "ctx.breakpoint()", doc: "Pause the flow for live editing in the Traffic view." },
   {
     signature: "sendJsonRequest(request): { …response, data }",
     doc: "Send and parse the JSON response into .data (autocompletes by structure).",
