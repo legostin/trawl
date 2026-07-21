@@ -13,6 +13,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+/// A plugin this plugin needs installed (from `trawl-plugin.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDep {
+    pub id: String,
+    /// "owner/repo" to install the dependency from.
+    pub repo: String,
+    #[serde(default = "default_host")]
+    pub host: String,
+    /// Git ref; defaults to "main".
+    #[serde(default)]
+    pub reference: Option<String>,
+    /// Reinstall the dependency when the installed version is older.
+    #[serde(default)]
+    pub min_version: Option<String>,
+}
+
 /// Manifest fetched from the plugin repo (`trawl-plugin.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +46,23 @@ pub struct PluginManifest {
     pub entry: String,
     #[serde(default)]
     pub api_version: String,
+    #[serde(default)]
+    pub dependencies: Vec<PluginDep>,
+}
+
+/// Dotted-numeric version compare ("0.10.1" > "0.9.9").
+fn cmp_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').map(|x| x.trim().parse::<u64>().unwrap_or(0)).collect()
+    };
+    let (va, vb) = (parse(a), parse(b));
+    for i in 0..va.len().max(vb.len()) {
+        let d = va.get(i).unwrap_or(&0).cmp(vb.get(i).unwrap_or(&0));
+        if d != std::cmp::Ordering::Equal {
+            return d;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 /// Installed-plugin record persisted in `plugins.json`.
@@ -269,6 +303,76 @@ pub async fn fetch_plugin_manifest(
     .map_err(|e| e.to_string())?
 }
 
+/// Install one plugin and, recursively, its manifest dependencies. `visited`
+/// keys are "host/repo" — a cycle or duplicate dep is skipped, not an error.
+fn install_tree(
+    data: &Path,
+    host: &str,
+    repo: &str,
+    git_ref: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Result<(), String> {
+    if !visited.insert(format!("{host}/{repo}")) {
+        return Ok(());
+    }
+    if visited.len() > 8 {
+        return Err("dependency chain too deep".into());
+    }
+    let token = host_token(data, host);
+    let manifest = fetch_manifest_blocking(host, repo, git_ref, token.as_deref())?;
+    if manifest.id.trim().is_empty() {
+        return Err("manifest is missing an id".into());
+    }
+    let bundle = http_get_text(
+        &api_content_url(host, repo, git_ref, &manifest.entry),
+        token.as_deref(),
+        true,
+    )?;
+
+    // Cache the bundle.
+    let dir = plugins_dir(data).join(&manifest.id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("plugin.js"), &bundle).map_err(|e| e.to_string())?;
+
+    // Upsert the registry entry.
+    let mut file = load_plugins(data).map_err(|e| e.to_string())?;
+    let plugin = Plugin {
+        id: manifest.id.clone(),
+        name: if manifest.name.is_empty() { manifest.id.clone() } else { manifest.name.clone() },
+        version: manifest.version.clone(),
+        description: manifest.description.clone(),
+        author: manifest.author.clone(),
+        repo: repo.to_string(),
+        host: host.to_string(),
+        git_ref: git_ref.to_string(),
+        enabled: true,
+    };
+    if let Some(e) = file.plugins.iter_mut().find(|p| p.id == plugin.id) {
+        *e = plugin;
+    } else {
+        file.plugins.push(plugin);
+    }
+    save_plugins(data, &file).map_err(|e| e.to_string())?;
+
+    // Dependencies: install missing ones, refresh ones older than min_version.
+    for dep in &manifest.dependencies {
+        let existing = file.plugins.iter().find(|p| p.id == dep.id).cloned();
+        let needed = match &existing {
+            None => true,
+            Some(p) => dep
+                .min_version
+                .as_deref()
+                .is_some_and(|mv| cmp_versions(&p.version, mv) == std::cmp::Ordering::Less),
+        };
+        if needed {
+            let dep_ref = dep.reference.clone().unwrap_or_else(|| "main".to_string());
+            install_tree(data, &dep.host, &dep.repo, &dep_ref, visited)
+                .map_err(|e| format!("dependency \"{}\": {e}", dep.id))?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn install_plugin(
     app: AppHandle,
@@ -279,53 +383,13 @@ pub async fn install_plugin(
     let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
     let host = effective_host(parsed_host, host);
     let data = data_dir(&app)?;
-
-    // Fetch manifest + bundle off the async runtime.
-    let host_c = host.clone();
-    let repo_c = repo.clone();
-    let ref_c = git_ref.clone();
-    let token = host_token(&data, &host);
-    let (manifest, bundle) = tokio::task::spawn_blocking(move || {
-        let m = fetch_manifest_blocking(&host_c, &repo_c, &ref_c, token.as_deref())?;
-        let code = http_get_text(
-            &api_content_url(&host_c, &repo_c, &ref_c, &m.entry),
-            token.as_deref(),
-            true,
-        )?;
-        Ok::<_, String>((m, code))
+    tokio::task::spawn_blocking(move || {
+        let mut visited = std::collections::HashSet::new();
+        install_tree(&data, &host, &repo, &git_ref, &mut visited)?;
+        load_plugins(&data).map(|f| f.plugins).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())??;
-
-    if manifest.id.trim().is_empty() {
-        return Err("manifest is missing an id".into());
-    }
-
-    // Cache the bundle.
-    let dir = plugins_dir(&data).join(&manifest.id);
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::write(dir.join("plugin.js"), &bundle).map_err(|e| e.to_string())?;
-
-    // Upsert the registry entry.
-    let mut file = load_plugins(&data).map_err(|e| e.to_string())?;
-    let plugin = Plugin {
-        id: manifest.id.clone(),
-        name: if manifest.name.is_empty() { manifest.id.clone() } else { manifest.name },
-        version: manifest.version,
-        description: manifest.description,
-        author: manifest.author,
-        repo,
-        host,
-        git_ref,
-        enabled: true,
-    };
-    if let Some(e) = file.plugins.iter_mut().find(|p| p.id == plugin.id) {
-        *e = plugin;
-    } else {
-        file.plugins.push(plugin);
-    }
-    save_plugins(&data, &file).map_err(|e| e.to_string())?;
-    Ok(file.plugins)
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -504,6 +568,37 @@ mod tests {
             encode_seg("ветка/с слэшем"),
             "%D0%B2%D0%B5%D1%82%D0%BA%D0%B0%2F%D1%81%20%D1%81%D0%BB%D1%8D%D1%88%D0%B5%D0%BC"
         );
+    }
+
+    #[test]
+    fn manifest_dependencies_parse_with_defaults() {
+        let m: PluginManifest = serde_json::from_str(
+            r#"{
+                "id": "contracts", "name": "Contracts", "entry": "dist/plugin.js",
+                "dependencies": [
+                    { "id": "http-client", "repo": "legostin/trawl-plugin-http-client", "minVersion": "0.3.1" }
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(m.dependencies.len(), 1);
+        let d = &m.dependencies[0];
+        assert_eq!(d.host, "github.com");
+        assert_eq!(d.reference, None);
+        assert_eq!(d.min_version.as_deref(), Some("0.3.1"));
+        // Manifests without the field keep working.
+        let m2: PluginManifest =
+            serde_json::from_str(r#"{ "id": "a", "name": "A", "entry": "e.js" }"#).unwrap();
+        assert!(m2.dependencies.is_empty());
+    }
+
+    #[test]
+    fn version_compare_is_numeric() {
+        use std::cmp::Ordering::*;
+        assert_eq!(cmp_versions("0.3.1", "0.3.1"), Equal);
+        assert_eq!(cmp_versions("0.10.0", "0.9.9"), Greater);
+        assert_eq!(cmp_versions("0.3.0", "0.3.1"), Less);
+        assert_eq!(cmp_versions("1.0", "1.0.0"), Equal);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, ArrowUpCircle, KeyRound, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { usePlugins } from "@/plugins";
-import { loadPlugin } from "@/plugins/loader";
+import { loadEnabledPlugins, loadPlugin } from "@/plugins/loader";
 import { useToast } from "../toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -76,11 +76,17 @@ export function PluginsPanel() {
         await invoke("git_host_token_set", { host: ghost, token: token.trim() });
         setToken("");
       }
+      const prev = new Set(usePlugins.getState().installed.map((p) => p.id));
       await install(value);
-      const list = usePlugins.getState().installed;
-      const id = list[list.length - 1]?.id;
-      if (id) await loadPlugin(id);
-      show(`Installed ${value}`);
+      // Manifest dependencies may have (re)installed other plugins — reload
+      // every enabled bundle so all of them pick up their fresh code.
+      await loadEnabledPlugins();
+      const added = usePlugins.getState().installed.filter((p) => !prev.has(p.id));
+      show(
+        added.length > 1
+          ? `Installed ${added.map((p) => p.name).join(", ")}`
+          : `Installed ${value}`,
+      );
       setRepo("");
     } catch (e) {
       show(`Install failed: ${e instanceof Error ? e.message : String(e)}`);
