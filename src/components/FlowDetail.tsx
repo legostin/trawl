@@ -23,6 +23,8 @@ import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
 import { bodyToText } from "@/lib/body";
 import { queryParams, formParams, isFormEncoded } from "@/lib/params";
+import { parseRequestCookies, parseResponseCookies } from "@/lib/cookies";
+import { CookiesTable } from "./CookiesTable";
 import { bodyLength, formatBytes, durationMs, formatDuration, formatClock } from "@/lib/format";
 import type { Flow } from "@/types";
 
@@ -207,16 +209,7 @@ export function FlowDetail() {
 
         {tab === "request" && <RequestPanel flow={flow} />}
 
-        {tab === "response" && (
-          <div>
-            <SectionTitle>Headers</SectionTitle>
-            <div className="px-3">
-              <HeadersTable headers={flow.response?.headers ?? []} />
-            </div>
-            <SectionTitle>Body</SectionTitle>
-            <BodyViewer msg={flow.response} />
-          </div>
-        )}
+        {tab === "response" && <ResponsePanel flow={flow} />}
 
         {tab === "timing" && (
           <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 font-mono text-xs">
@@ -235,16 +228,18 @@ export function FlowDetail() {
   );
 }
 
-type ReqTab = "query" | "form" | "headers" | "body";
+type ReqTab = "query" | "form" | "cookies" | "headers" | "body";
 
 function RequestPanel({ flow }: { flow: Flow }) {
   const query = queryParams(flow.url.path);
   const form = formParams(flow.request);
   const hasForm = isFormEncoded(flow.request);
+  const cookies = parseRequestCookies(flow.request.headers);
 
   const tabs: { value: ReqTab; label: string }[] = [];
   if (query.length > 0) tabs.push({ value: "query", label: `Query (${query.length})` });
   if (hasForm) tabs.push({ value: "form", label: `Form (${form.length})` });
+  if (cookies.length > 0) tabs.push({ value: "cookies", label: `Cookies (${cookies.length})` });
   tabs.push({ value: "headers", label: `Headers (${flow.request.headers.length})` });
   tabs.push({ value: "body", label: "Body" });
 
@@ -265,12 +260,41 @@ function RequestPanel({ flow }: { flow: Flow }) {
           <HeadersTable headers={form} emptyText="No form parameters" />
         </div>
       )}
+      {active === "cookies" && <CookiesTable cookies={cookies} />}
       {active === "headers" && (
         <div className="px-3 pt-2">
           <HeadersTable headers={flow.request.headers} />
         </div>
       )}
       {active === "body" && <BodyViewer msg={flow.request} />}
+    </div>
+  );
+}
+
+type ResTab = "cookies" | "headers" | "body";
+
+function ResponsePanel({ flow }: { flow: Flow }) {
+  const headers = flow.response?.headers ?? [];
+  const cookies = parseResponseCookies(headers);
+
+  const tabs: { value: ResTab; label: string }[] = [];
+  if (cookies.length > 0) tabs.push({ value: "cookies", label: `Cookies (${cookies.length})` });
+  tabs.push({ value: "headers", label: `Headers (${headers.length})` });
+  tabs.push({ value: "body", label: "Body" });
+
+  const [tab, setTab] = useState<ResTab>(tabs[0].value);
+  const active = tabs.some((t) => t.value === tab) ? tab : tabs[0].value;
+
+  return (
+    <div>
+      <TabBar<ResTab> value={active} onChange={setTab} tabs={tabs} />
+      {active === "cookies" && <CookiesTable cookies={cookies} emptyText="No Set-Cookie headers" />}
+      {active === "headers" && (
+        <div className="px-3 pt-2">
+          <HeadersTable headers={headers} />
+        </div>
+      )}
+      {active === "body" && <BodyViewer msg={flow.response} />}
     </div>
   );
 }
@@ -356,14 +380,6 @@ function ProjectAction({ host }: { host: string }) {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {children}
     </div>
   );
 }
