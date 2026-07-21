@@ -126,15 +126,26 @@ export function PluginsPanel() {
         </Button>
       </div>
       {ghost && (
-        <div className="mb-6 flex items-center gap-2">
-          <KeyRound className="size-4 shrink-0 text-muted-foreground" />
-          <Input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void add()}
-            placeholder={`${ghost} access token — optional, stored locally; needed for private repos`}
-          />
+        <div className="mb-6 flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <KeyRound className="size-4 shrink-0 text-muted-foreground" />
+            <Input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void add()}
+              placeholder={`${ghost} access token — optional, stored locally; needed for private repos`}
+            />
+          </div>
+          <p className="pl-6 text-xs text-muted-foreground">
+            How to get one: open{" "}
+            <code className="select-all break-all">
+              https://{ghost}/settings/tokens/new?scopes=repo&description=Trawl
+            </code>{" "}
+            (Settings → Developer settings → Personal access tokens → Tokens (classic) →
+            Generate new token), keep only the <code>repo</code> scope, generate and copy the{" "}
+            <code>ghp_…</code> value — GitHub shows it once.
+          </p>
         </div>
       )}
 
