@@ -63,6 +63,9 @@ pub struct Flow {
     pub error: Option<String>,
     /// Имена сработавших правил-скриптов (индикатор «изменён»).
     pub applied_rules: Vec<String>,
+    /// Set while the flow is held on a breakpoint: "request" | "response".
+    #[serde(default)]
+    pub paused_phase: Option<String>,
 }
 
 impl Flow {
@@ -78,6 +81,7 @@ impl Flow {
             state: FlowState::Pending,
             error: None,
             applied_rules: Vec::new(),
+            paused_phase: None,
         }
     }
 }
@@ -110,5 +114,21 @@ mod tests {
         let back: Flow = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, 1);
         assert_eq!(back.method, "GET");
+    }
+
+    #[test]
+    fn flow_paused_phase_defaults_none_and_roundtrips() {
+        let mut flow = Flow::new_request(
+            1,
+            "GET".into(),
+            UrlParts { scheme: "http".into(), host: "h".into(), port: 80, path: "/".into() },
+            HttpMessage { headers: vec![], body: vec![], body_is_text: true },
+        );
+        assert!(flow.paused_phase.is_none());
+        flow.paused_phase = Some("request".into());
+        let json = serde_json::to_string(&flow).unwrap();
+        assert!(json.contains("\"pausedPhase\":\"request\""), "json was: {json}");
+        let back: Flow = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.paused_phase.as_deref(), Some("request"));
     }
 }
