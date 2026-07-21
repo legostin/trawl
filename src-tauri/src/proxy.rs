@@ -1513,6 +1513,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
+    // Regression: a breakpoint whose pattern includes the scheme (a pasted full
+    // URL) must still match — proxy targets are scheme-less host/path.
+    #[tokio::test]
+    async fn request_breakpoint_matches_scheme_prefixed_pattern() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("http://{upstream_addr}/*"), true, false)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None, status: None,
+                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let echoed = client.get(format!("http://{upstream_addr}/api"))
+            .send().await.unwrap().text().await.unwrap();
+        assert!(echoed.to_lowercase().contains("x-bp: hit"), "scheme-prefixed breakpoint did not fire: {echoed}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
     // Abort resolution short-circuits with 502.
     #[tokio::test]
     async fn request_breakpoint_abort_returns_502() {
