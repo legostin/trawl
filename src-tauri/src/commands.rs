@@ -31,6 +31,10 @@ pub struct AppState {
     pub intercept: Arc<RwLock<bool>>,
     /// Flows currently held on a breakpoint, keyed by (flow id, phase).
     pub pending_breakpoints: crate::proxy::BreakpointRegistry,
+    /// Auto-continue a paused flow after N seconds (0 = hold forever).
+    pub breakpoint_timeout: Arc<RwLock<u64>>,
+    /// Hold new requests while any flow is paused on a breakpoint.
+    pub pause_others: Arc<RwLock<bool>>,
 }
 
 impl AppState {
@@ -46,6 +50,8 @@ impl AppState {
             breakpoints: Arc::new(RwLock::new(Vec::new())),
             intercept: Arc::new(RwLock::new(true)),
             pending_breakpoints: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            breakpoint_timeout: Arc::new(RwLock::new(0)),
+            pause_others: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -103,9 +109,12 @@ pub async fn start_proxy(
     let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
     let loaded_library = rules::load_library(&rdir).map_err(|e| e.to_string())?;
     let loaded_bps = crate::breakpoints::load_breakpoints(&rdir).map_err(|e| e.to_string())?;
+    let bp_settings = crate::breakpoints::load_settings(&rdir);
     *state.rules.write().unwrap() = loaded_rules;
     *state.library.write().unwrap() = loaded_library;
     *state.breakpoints.write().unwrap() = loaded_bps;
+    *state.breakpoint_timeout.write().unwrap() = bp_settings.timeout_secs;
+    *state.pause_others.write().unwrap() = bp_settings.pause_others;
     let pfile = projects::load_projects(&data_dir(&app)?).map_err(|e| e.to_string())?;
     *state.active_project.write().unwrap() = pfile
         .active_id
@@ -125,6 +134,8 @@ pub async fn start_proxy(
         state.breakpoints.clone(),
         state.intercept.clone(),
         state.pending_breakpoints.clone(),
+        state.breakpoint_timeout.clone(),
+        state.pause_others.clone(),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -293,6 +304,23 @@ pub fn set_intercept(enabled: bool, state: State<'_, AppState>) {
 #[tauri::command]
 pub fn get_intercept(state: State<'_, AppState>) -> bool {
     *state.intercept.read().unwrap()
+}
+
+#[tauri::command]
+pub fn get_breakpoint_settings(app: AppHandle) -> Result<crate::breakpoints::BreakpointSettings, String> {
+    Ok(crate::breakpoints::load_settings(&rules_dir(&app)?))
+}
+
+#[tauri::command]
+pub fn set_breakpoint_settings(
+    app: AppHandle,
+    settings: crate::breakpoints::BreakpointSettings,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    crate::breakpoints::save_settings(&rules_dir(&app)?, &settings).map_err(|e| e.to_string())?;
+    *state.breakpoint_timeout.write().unwrap() = settings.timeout_secs;
+    *state.pause_others.write().unwrap() = settings.pause_others;
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]

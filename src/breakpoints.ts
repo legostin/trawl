@@ -33,27 +33,40 @@ export function breakpointFromFlow(flow: Flow, projectId: string | null): Breakp
   };
 }
 
+interface BreakpointSettings {
+  timeoutSecs: number;
+  pauseOthers: boolean;
+}
+
 interface BreakpointsState {
   breakpoints: Breakpoint[];
   intercept: boolean;
+  /** Auto-continue a paused flow after N seconds; 0 = hold forever. */
+  timeoutSecs: number;
+  /** Hold new requests while any flow is paused. */
+  pauseOthers: boolean;
   selectedId: string | null;
   load: () => Promise<void>;
   select: (id: string | null) => void;
   upsert: (bp: Breakpoint) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setIntercept: (enabled: boolean) => Promise<void>;
+  saveSettings: (patch: Partial<BreakpointSettings>) => Promise<void>;
 }
 
-export const useBreakpoints = create<BreakpointsState>((set) => ({
+export const useBreakpoints = create<BreakpointsState>((set, get) => ({
   breakpoints: [],
   intercept: true,
+  timeoutSecs: 0,
+  pauseOthers: false,
   selectedId: null,
   load: async () => {
-    const [breakpoints, intercept] = await Promise.all([
+    const [breakpoints, intercept, settings] = await Promise.all([
       invoke<Breakpoint[]>("list_breakpoints"),
       invoke<boolean>("get_intercept"),
+      invoke<BreakpointSettings>("get_breakpoint_settings"),
     ]);
-    set({ breakpoints, intercept });
+    set({ breakpoints, intercept, timeoutSecs: settings.timeoutSecs, pauseOthers: settings.pauseOthers });
   },
   select: (id) => set({ selectedId: id }),
   upsert: async (bp) => {
@@ -72,5 +85,13 @@ export const useBreakpoints = create<BreakpointsState>((set) => ({
   setIntercept: async (enabled) => {
     await invoke("set_intercept", { enabled });
     set({ intercept: enabled });
+  },
+  saveSettings: async (patch) => {
+    const settings = {
+      timeoutSecs: patch.timeoutSecs ?? get().timeoutSecs,
+      pauseOthers: patch.pauseOthers ?? get().pauseOthers,
+    };
+    await invoke("set_breakpoint_settings", { settings });
+    set(settings);
   },
 }));

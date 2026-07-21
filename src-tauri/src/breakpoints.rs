@@ -41,6 +41,33 @@ pub fn load_breakpoints(dir: &Path) -> Result<Vec<Breakpoint>> {
     Ok(bps)
 }
 
+/// Global breakpoint behaviour (not tied to a single breakpoint).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSettings {
+    /// Auto-continue a paused flow after N seconds; 0 = hold forever.
+    #[serde(default)]
+    pub timeout_secs: u64,
+    /// While any flow is paused, hold new incoming requests too.
+    #[serde(default)]
+    pub pause_others: bool,
+}
+
+pub fn load_settings(dir: &Path) -> BreakpointSettings {
+    let path = dir.join("breakpoint-settings.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_settings(dir: &Path, settings: &BreakpointSettings) -> Result<()> {
+    fs::create_dir_all(dir).context("create settings dir")?;
+    let text = serde_json::to_string_pretty(settings).context("serialize settings")?;
+    fs::write(dir.join("breakpoint-settings.json"), text).context("write settings")?;
+    Ok(())
+}
+
 pub fn save_breakpoints(dir: &Path, bps: &[Breakpoint]) -> Result<()> {
     fs::create_dir_all(dir).context("create breakpoints dir")?;
     let text = serde_json::to_string_pretty(bps).context("serialize breakpoints")?;

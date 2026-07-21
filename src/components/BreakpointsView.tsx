@@ -12,8 +12,19 @@ import { cn } from "@/lib/utils";
 const METHODS = ["*", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 export function BreakpointsView() {
-  const { breakpoints, selectedId, intercept, load, select, upsert, remove, setIntercept } =
-    useBreakpoints();
+  const {
+    breakpoints,
+    selectedId,
+    intercept,
+    timeoutSecs,
+    pauseOthers,
+    load,
+    select,
+    upsert,
+    remove,
+    setIntercept,
+    saveSettings,
+  } = useBreakpoints();
   const activeId = useProjects((s) => s.activeId);
 
   useEffect(() => {
@@ -60,6 +71,33 @@ export function BreakpointsView() {
           <Button size="iconSm" variant="ghost" title="New breakpoint" onClick={newBreakpoint}>
             <Plus />
           </Button>
+        </div>
+        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-[11px] text-muted-foreground">
+          <label
+            className="flex items-center gap-1"
+            title="Auto-continue a paused flow after N seconds (0 = hold forever)"
+          >
+            timeout
+            <input
+              type="number"
+              min={0}
+              value={timeoutSecs}
+              onChange={(e) => void saveSettings({ timeoutSecs: Math.max(0, Number(e.target.value) || 0) })}
+              className="h-6 w-12 rounded border border-border bg-card px-1 text-foreground"
+            />
+            s
+          </label>
+          <label
+            className="ml-auto flex items-center gap-1"
+            title="While a breakpoint is active, hold new requests too"
+          >
+            <input
+              type="checkbox"
+              checked={pauseOthers}
+              onChange={(e) => void saveSettings({ pauseOthers: e.target.checked })}
+            />
+            pause others
+          </label>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {scoped.map((b) => (

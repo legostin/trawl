@@ -46,6 +46,8 @@ pub fn run() {
             commands::delete_breakpoint,
             commands::set_intercept,
             commands::get_intercept,
+            commands::get_breakpoint_settings,
+            commands::set_breakpoint_settings,
             commands::resolve_breakpoint,
             commands::get_library,
             commands::save_library,
