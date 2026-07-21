@@ -1,3 +1,4 @@
+mod breakpoints;
 mod ca;
 mod commands;
 mod db;
