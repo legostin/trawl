@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { useToast } from "./toast";
 import type { Flow } from "./types";
 
 export interface Breakpoint {
@@ -56,8 +57,13 @@ export const useBreakpoints = create<BreakpointsState>((set) => ({
   },
   select: (id) => set({ selectedId: id }),
   upsert: async (bp) => {
-    const breakpoints = await invoke<Breakpoint[]>("save_breakpoint", { breakpoint: bp });
-    set({ breakpoints, selectedId: bp.id });
+    try {
+      const breakpoints = await invoke<Breakpoint[]>("save_breakpoint", { breakpoint: bp });
+      set({ breakpoints, selectedId: bp.id });
+    } catch (e) {
+      // Backend rejects conflicts (e.g. two enabled breakpoints on the same params).
+      useToast.getState().show(String(e));
+    }
   },
   remove: async (id) => {
     const breakpoints = await invoke<Breakpoint[]>("delete_breakpoint", { id });
