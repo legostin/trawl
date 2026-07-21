@@ -120,6 +120,8 @@ export interface TrawlHost {
   registerMode(mode: RegisteredMode): void;
   /** Add an action button to the request-detail toolbar. */
   registerFlowAction(action: FlowAction): void;
+  /** Open a URL in the system's default browser. */
+  openUrl(url: string): Promise<void>;
   /** Switch the active top-level mode (e.g. to open this plugin's mode). */
   setMode(id: string): void;
   log(...args: unknown[]): void;
