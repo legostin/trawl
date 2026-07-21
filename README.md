@@ -19,9 +19,6 @@ Grab the latest signed DMG from the **[Releases](https://github.com/legostin/tra
 | --- | --- | --- |
 | **macOS 12+** (Apple Silicon **and** Intel) | `Trawl_x.y.z_universal.dmg` | Universal binary. Signed + notarized. |
 
-> **Windows / Linux:** not released as prebuilt binaries, but Trawl is a Tauri
-> app and builds from source on both — see [Development](#development).
-
 Trawl **auto-updates**: it checks on launch and offers an in-app *Update to
 vX.Y.Z* button when a newer release is available.
 
@@ -102,7 +99,7 @@ on the Traffic tab signals a flow is waiting.
 ## Development
 
 Prerequisites: Node 20+, pnpm 9+, Rust (stable), and the Tauri prerequisites for
-your OS.
+macOS.
 
 ```sh
 pnpm install
