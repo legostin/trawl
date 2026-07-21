@@ -299,11 +299,12 @@ impl CaptureHandler {
         &self,
         id: u64,
         targets: &[String],
+        method: &str,
         status: u16,
         headers: Vec<(String, String)>,
         body: String,
     ) -> Result<(u16, Vec<(String, String)>, String), String> {
-        if !self.breakpoint_matches(BpPhase::Response, targets, "") {
+        if !self.breakpoint_matches(BpPhase::Response, targets, method) {
             return Ok((status, headers, body));
         }
         self.store.update(id, |f| {
@@ -677,7 +678,7 @@ impl HttpHandler for CaptureHandler {
                     (self.emit)("flow-added", &flow);
 
                     // Response breakpoint fires on the handler's synthetic response too.
-                    match self.break_response(id, &targets, status, headers, body_str).await {
+                    match self.break_response(id, &targets, &req_method, status, headers, body_str).await {
                         Ok((status, headers, body_str)) => {
                             self.store.update(id, |f| {
                                 f.response = Some(ResponseMessage {
@@ -914,7 +915,9 @@ impl HttpHandler for CaptureHandler {
         };
 
         // ── скрипты фазы ответа ──
-        let flow_url = self.store.all().into_iter().find(|f| f.id == id).map(|f| f.url);
+        let found = self.store.all().into_iter().find(|f| f.id == id);
+        let flow_method = found.as_ref().map(|f| f.method.clone()).unwrap_or_default();
+        let flow_url = found.map(|f| f.url);
         let (targets, host_str) = match &flow_url {
             Some(u) => (
                 vec![
@@ -988,7 +991,7 @@ impl HttpHandler for CaptureHandler {
 
         // Pause on a matched response breakpoint (UI-defined) or a response rule's
         // ctx.breakpoint(). The client keeps waiting until the UI resolves it.
-        let want_break = rule_break || self.breakpoint_matches(BpPhase::Response, &targets, "");
+        let want_break = rule_break || self.breakpoint_matches(BpPhase::Response, &targets, &flow_method);
         if want_break {
             self.store.update(id, |f| {
                 f.state = FlowState::Paused;
@@ -1853,6 +1856,66 @@ mod tests {
             .build().unwrap();
         let resp = client.get("http://handler.test/x").send().await.unwrap();
         assert_eq!(resp.status(), 418, "response breakpoint did not fire on handler response");
+        assert_eq!(resp.text().await.unwrap(), "edited");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A response breakpoint with a method filter (e.g. GET) must still match on
+    // the response phase — the request's method is matched, not an empty string.
+    #[tokio::test]
+    async fn response_breakpoint_matches_method_filter() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 1024];
+                    let _ = sock.read(&mut b).await;
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\norig").await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let mut bp = breakpoint(&format!("{upstream_addr}/*"), false, true);
+        bp.method = Some("GET".into());
+        *bps.write().unwrap() = vec![bp];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.paused_phase.as_deref() == Some("response")) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None, path: None, status: Some(418),
+                            headers: vec![("Content-Type".into(), "text/plain".into())],
+                            body: "edited".into(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
+        assert_eq!(resp.status(), 418, "method-filtered response breakpoint did not fire");
         assert_eq!(resp.text().await.unwrap(), "edited");
 
         handle.stop();
