@@ -6,6 +6,7 @@ import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
+import { LabeledSwitch, Switch } from "./ui/switch";
 import { cn } from "@/lib/utils";
 
 const METHODS = ["*", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -20,6 +21,13 @@ export function BreakpointsView() {
   }, [load]);
 
   const scoped = breakpoints.filter((b) => (b.projectId ?? null) === (activeId ?? null));
+
+  /** Toggle from the list without stealing the current selection. */
+  const toggleEnabled = async (b: Breakpoint, enabled: boolean) => {
+    const wasSelected = useBreakpoints.getState().selectedId;
+    await upsert({ ...b, enabled });
+    useBreakpoints.getState().select(wasSelected);
+  };
 
   const newBreakpoint = () => {
     void upsert({
@@ -41,36 +49,45 @@ export function BreakpointsView() {
       <div className="flex w-64 shrink-0 flex-col border-r border-border">
         <div className="flex items-center gap-2 border-b border-border bg-card px-2 py-1.5">
           <span className="text-xs font-semibold text-muted-foreground">Breakpoints</span>
-          <label className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
-            <input
-              type="checkbox"
+          <span className="ml-auto">
+            <LabeledSwitch
+              label="intercept"
               checked={intercept}
-              onChange={(e) => void setIntercept(e.target.checked)}
+              onCheckedChange={(v) => void setIntercept(v)}
+              title="Master switch: pause matching flows"
             />
-            intercept
-          </label>
+          </span>
           <Button size="iconSm" variant="ghost" title="New breakpoint" onClick={newBreakpoint}>
             <Plus />
           </Button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {scoped.map((b) => (
-            <button
+            <div
               key={b.id}
-              onClick={() => select(b.id)}
               className={cn(
-                "flex w-full items-center gap-2 px-3 py-2 text-left text-xs",
+                "flex w-full items-center gap-2 pr-3",
                 b.id === selectedId ? "bg-primary/15" : "hover:bg-accent",
               )}
             >
-              <CircleDot
-                className={cn("size-3.5 shrink-0", b.enabled ? "text-http-red" : "text-muted-foreground")}
+              <button
+                onClick={() => select(b.id)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs"
+              >
+                <CircleDot
+                  className={cn("size-3.5 shrink-0", b.enabled ? "text-http-red" : "text-muted-foreground")}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{b.name}</span>
+                  <span className="block truncate text-muted-foreground">{b.pattern}</span>
+                </span>
+              </button>
+              <Switch
+                checked={b.enabled}
+                onCheckedChange={(v) => void toggleEnabled(b, v)}
+                title={b.enabled ? "Disable breakpoint" : "Enable breakpoint"}
               />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{b.name}</span>
-                <span className="block truncate text-muted-foreground">{b.pattern}</span>
-              </span>
-            </button>
+            </div>
           ))}
           {scoped.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground">No breakpoints yet — press ＋</div>
@@ -135,30 +152,23 @@ function BreakpointEditor({
             </option>
           ))}
         </Select>
-        <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={draft.onRequest}
-            onChange={(e) => patch({ onRequest: e.target.checked })}
-          />
-          request
-        </label>
-        <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={draft.onResponse}
-            onChange={(e) => patch({ onResponse: e.target.checked })}
-          />
-          response
-        </label>
-        <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => patch({ enabled: e.target.checked })}
-          />
-          enabled
-        </label>
+        <LabeledSwitch
+          label="request"
+          checked={draft.onRequest}
+          onCheckedChange={(v) => patch({ onRequest: v })}
+          title="Pause on the request phase"
+        />
+        <LabeledSwitch
+          label="response"
+          checked={draft.onResponse}
+          onCheckedChange={(v) => patch({ onResponse: v })}
+          title="Pause on the response phase"
+        />
+        <LabeledSwitch
+          label="enabled"
+          checked={draft.enabled}
+          onCheckedChange={(v) => patch({ enabled: v })}
+        />
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" onClick={() => void onSave(draft)}>
             <Save />

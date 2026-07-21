@@ -8,6 +8,7 @@ import { EmptyState } from "./EmptyState";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
+import { LabeledSwitch, Switch } from "./ui/switch";
 import { STD_FUNCTIONS } from "../scripting/stdlib";
 import { useSnippets, type SnippetKind } from "../scripting/snippetStore";
 import { setLibraryTypes, setResponseDataType } from "../monaco-setup";
@@ -43,6 +44,16 @@ export function RulesView() {
   // Показываем только правила активного проекта (или глобальные, когда проект off).
   const scoped = rules.filter((r) => (r.projectId ?? null) === (activeId ?? null));
 
+  /** Toggle from the list without stealing the current selection/editor. */
+  const toggleEnabled = async (r: Rule, enabled: boolean) => {
+    const st = useRules.getState();
+    const wasSelected = st.selectedId;
+    const wasLibrary = st.editingLibrary;
+    await upsert({ ...r, enabled });
+    if (wasLibrary) useRules.getState().editLibrary();
+    else useRules.getState().select(wasSelected);
+  };
+
   const newRule = () => {
     void upsert({
       id: crypto.randomUUID(),
@@ -68,20 +79,29 @@ export function RulesView() {
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {scoped.map((r) => (
-            <button
+            <div
               key={r.id}
-              onClick={() => select(r.id)}
               className={cn(
-                "flex w-full items-center gap-2 px-3 py-2 text-left text-xs",
+                "flex w-full items-center gap-2 pr-3",
                 r.id === selectedId ? "bg-primary/15" : "hover:bg-accent",
               )}
             >
-              <FileCode2 className={cn("size-3.5 shrink-0", r.enabled ? "text-http-green" : "text-muted-foreground")} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{r.name}</span>
-                <span className="block truncate text-muted-foreground">{r.pattern}</span>
-              </span>
-            </button>
+              <button
+                onClick={() => select(r.id)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs"
+              >
+                <FileCode2 className={cn("size-3.5 shrink-0", r.enabled ? "text-http-green" : "text-muted-foreground")} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{r.name}</span>
+                  <span className="block truncate text-muted-foreground">{r.pattern}</span>
+                </span>
+              </button>
+              <Switch
+                checked={r.enabled}
+                onCheckedChange={(v) => void toggleEnabled(r, v)}
+                title={r.enabled ? "Disable rule" : "Enable rule"}
+              />
+            </div>
           ))}
           {scoped.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground">No rules yet — press ＋</div>
@@ -187,14 +207,11 @@ function RuleEditor({
           <option value="response">response</option>
           <option value="both">both</option>
         </Select>
-        <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => patch({ enabled: e.target.checked })}
-          />
-          enabled
-        </label>
+        <LabeledSwitch
+          label="enabled"
+          checked={draft.enabled}
+          onCheckedChange={(v) => patch({ enabled: v })}
+        />
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" onClick={() => void onSave(draft)}>
             <Save />
