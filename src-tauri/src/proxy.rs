@@ -46,12 +46,15 @@ pub enum Resolution {
         status: Option<u16>,
         headers: Vec<(String, String)>,
         body: String,
+        /// Raw body bytes (e.g. an uploaded file); overrides `body` when Some.
+        body_bytes: Option<Vec<u8>>,
     },
     Abort(String),
     Respond {
         status: u16,
         headers: Vec<(String, String)>,
         body: String,
+        body_bytes: Option<Vec<u8>>,
     },
 }
 
@@ -189,6 +192,17 @@ fn build_mock_response(spec: &Value) -> Response<Body> {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+/// Build a response from raw bytes (a substituted/uploaded body). Strips
+/// content-encoding/length (the bytes are final) and sets a correct length.
+fn build_bytes_response(status: u16, headers: &[(String, String)], body: Vec<u8>) -> Response<Body> {
+    let map = build_header_map(headers, body.len(), true);
+    let mut resp = Response::new(Body::from(Full::new(Bytes::from(body))));
+    *resp.status_mut() =
+        hudsucker::hyper::StatusCode::from_u16(status).unwrap_or(hudsucker::hyper::StatusCode::OK);
+    *resp.headers_mut() = map;
+    resp
+}
+
 fn build_abort_response(reason: &str) -> Response<Body> {
     Response::builder()
         .status(502)
@@ -303,9 +317,9 @@ impl CaptureHandler {
         status: u16,
         headers: Vec<(String, String)>,
         body: String,
-    ) -> Result<(u16, Vec<(String, String)>, String), String> {
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), String> {
         if !self.breakpoint_matches(BpPhase::Response, targets, method) {
-            return Ok((status, headers, body));
+            return Ok((status, headers, body.into_bytes()));
         }
         self.store.update(id, |f| {
             f.state = FlowState::Paused;
@@ -321,12 +335,14 @@ impl CaptureHandler {
             (self.emit)("flow-paused", &u);
         }
         let out = match self.await_resolution(id, BpPhase::Response).await {
-            Some(Resolution::Execute { status: st, headers: h, body: b, .. }) => {
-                Ok((st.unwrap_or(status), h, b))
+            Some(Resolution::Execute { status: st, headers: h, body: b, body_bytes: bb, .. }) => {
+                Ok((st.unwrap_or(status), h, bb.unwrap_or_else(|| b.into_bytes())))
             }
-            Some(Resolution::Respond { status: st, headers: h, body: b }) => Ok((st, h, b)),
+            Some(Resolution::Respond { status: st, headers: h, body: b, body_bytes: bb }) => {
+                Ok((st, h, bb.unwrap_or_else(|| b.into_bytes())))
+            }
             Some(Resolution::Abort(reason)) => Err(reason),
-            None => Ok((status, headers, body)),
+            None => Ok((status, headers, body.into_bytes())),
         };
         self.store.update(id, |f| {
             f.state = FlowState::Pending;
@@ -597,14 +613,26 @@ impl HttpHandler for CaptureHandler {
                     }
                     return RequestOrResponse::Response(build_abort_response(&reason));
                 }
-                Some(Resolution::Respond { status, headers, body }) => {
-                    let spec = json!({
-                        "status": status,
-                        "headers": headers_to_json(&headers),
-                        "body": body,
+                Some(Resolution::Respond { status, headers, body, body_bytes }) => {
+                    let bytes = body_bytes.unwrap_or_else(|| body.into_bytes());
+                    let is_text = looks_textual(&headers);
+                    let done = self.started.elapsed().as_millis() as u64;
+                    self.store.update(id, |f| {
+                        f.response = Some(ResponseMessage {
+                            status,
+                            headers: headers.clone(),
+                            body: bytes.clone(),
+                            body_is_text: is_text,
+                        });
+                        f.timings.done = Some(done);
+                        f.state = FlowState::Completed;
+                        f.paused_phase = None;
                     });
-                    self.record_mock_response(id, &spec);
-                    return RequestOrResponse::Response(build_mock_response(&spec));
+                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                        (self.emit)("flow-updated", &u);
+                        self.persist(&u);
+                    }
+                    return RequestOrResponse::Response(build_bytes_response(status, &headers, bytes));
                 }
                 None => {
                     self.store.update(id, |f| {
@@ -679,13 +707,14 @@ impl HttpHandler for CaptureHandler {
 
                     // Response breakpoint fires on the handler's synthetic response too.
                     match self.break_response(id, &targets, &req_method, status, headers, body_str).await {
-                        Ok((status, headers, body_str)) => {
+                        Ok((status, headers, body_bytes)) => {
+                            let is_text = looks_textual(&headers);
                             self.store.update(id, |f| {
                                 f.response = Some(ResponseMessage {
                                     status,
                                     headers: headers.clone(),
-                                    body: body_str.clone().into_bytes(),
-                                    body_is_text: true,
+                                    body: body_bytes.clone(),
+                                    body_is_text: is_text,
                                 });
                                 f.state = FlowState::Completed;
                             });
@@ -693,12 +722,7 @@ impl HttpHandler for CaptureHandler {
                                 (self.emit)("flow-updated", &u);
                                 self.persist(&u);
                             }
-                            let out_spec = json!({
-                                "status": status,
-                                "headers": headers_to_json(&headers),
-                                "body": body_str,
-                            });
-                            return RequestOrResponse::Response(build_mock_response(&out_spec));
+                            return RequestOrResponse::Response(build_bytes_response(status, &headers, body_bytes));
                         }
                         Err(reason) => {
                             self.store.update(id, |f| {
@@ -835,12 +859,26 @@ impl HttpHandler for CaptureHandler {
                     directive = Directive::Continue;
                 }
                 Some(Resolution::Abort(reason)) => directive = Directive::Abort(reason),
-                Some(Resolution::Respond { status, headers, body }) => {
-                    directive = Directive::Mock(json!({
-                        "status": status,
-                        "headers": headers_to_json(&headers),
-                        "body": body,
-                    }));
+                Some(Resolution::Respond { status, headers, body, body_bytes }) => {
+                    let bytes = body_bytes.unwrap_or_else(|| body.into_bytes());
+                    let is_text = looks_textual(&headers);
+                    let done = self.started.elapsed().as_millis() as u64;
+                    self.store.update(id, |f| {
+                        f.response = Some(ResponseMessage {
+                            status,
+                            headers: headers.clone(),
+                            body: bytes.clone(),
+                            body_is_text: is_text,
+                        });
+                        f.timings.done = Some(done);
+                        f.state = FlowState::Completed;
+                        f.paused_phase = None;
+                    });
+                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                        (self.emit)("flow-updated", &u);
+                        self.persist(&u);
+                    }
+                    return RequestOrResponse::Response(build_bytes_response(status, &headers, bytes));
                 }
                 None => directive = Directive::Continue,
             }
@@ -991,6 +1029,7 @@ impl HttpHandler for CaptureHandler {
 
         // Pause on a matched response breakpoint (UI-defined) or a response rule's
         // ctx.breakpoint(). The client keeps waiting until the UI resolves it.
+        let mut sub_bytes: Option<Vec<u8>> = None;
         let want_break = rule_break || self.breakpoint_matches(BpPhase::Response, &targets, &flow_method);
         if want_break {
             self.store.update(id, |f| {
@@ -1007,12 +1046,14 @@ impl HttpHandler for CaptureHandler {
                 (self.emit)("flow-paused", &u);
             }
             match self.await_resolution(id, BpPhase::Response).await {
-                Some(Resolution::Execute { status, headers, body, .. }) => {
+                Some(Resolution::Execute { status, headers, body, body_bytes, .. }) => {
                     if let Some(sc) = status {
                         work_status = sc;
                     }
                     work_headers = headers;
-                    if is_text {
+                    if let Some(bb) = body_bytes {
+                        sub_bytes = Some(bb); // file substitution — raw bytes win
+                    } else if is_text {
                         work_body = body;
                     }
                 }
@@ -1037,14 +1078,28 @@ impl HttpHandler for CaptureHandler {
             });
         }
 
-        let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
-        let stored_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { display_body };
+        let substituted = sub_bytes.is_some();
+        let stored_is_text = if substituted { looks_textual(&work_headers) } else { is_text };
+        let out_body: Vec<u8> = if let Some(b) = &sub_bytes {
+            b.clone()
+        } else if is_text {
+            work_body.clone().into_bytes()
+        } else {
+            bytes.clone()
+        };
+        let stored_body: Vec<u8> = if let Some(b) = sub_bytes {
+            b
+        } else if is_text {
+            work_body.clone().into_bytes()
+        } else {
+            display_body
+        };
         self.store.update(id, |f| {
             f.response = Some(ResponseMessage {
                 status: work_status,
                 headers: work_headers.clone(),
                 body: stored_body,
-                body_is_text: is_text,
+                body_is_text: stored_is_text,
             });
             f.timings.ttfb = Some(done_ms);
             f.timings.done = Some(done_ms);
@@ -1065,7 +1120,7 @@ impl HttpHandler for CaptureHandler {
 
         let mut new_parts = parts;
         new_parts.status = hudsucker::hyper::StatusCode::from_u16(work_status).unwrap_or(new_parts.status);
-        new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
+        new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text || substituted);
         Response::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body))))
     }
 }
@@ -1553,7 +1608,7 @@ mod tests {
                             path: None,
                             status: None,
                             headers: vec![("X-Debug".into(), "edited".into())],
-                            body: String::new(),
+                            body: String::new(), body_bytes: None,
                         });
                         break;
                     }
@@ -1598,7 +1653,7 @@ mod tests {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
                         let _ = tx.send(Resolution::Execute {
                             method: None, path: None, status: None,
-                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
+                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(), body_bytes: None,
                         });
                         break;
                     }
@@ -1645,7 +1700,7 @@ mod tests {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
                         let _ = tx.send(Resolution::Execute {
                             method: None, path: None, status: None,
-                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
+                            headers: vec![("X-Bp".into(), "hit".into())], body: String::new(), body_bytes: None,
                         });
                         break;
                     }
@@ -1691,7 +1746,7 @@ mod tests {
                             path: Some("/api?edited=1".into()),
                             status: None,
                             headers: f.request.headers.clone(),
-                            body: String::new(),
+                            body: String::new(), body_bytes: None,
                         });
                         break;
                     }
@@ -1791,7 +1846,7 @@ mod tests {
                             path: None,
                             status: Some(418),
                             headers: vec![("Content-Type".into(), "text/plain".into())],
-                            body: "edited".into(),
+                            body: "edited".into(), body_bytes: None,
                         });
                         break;
                     }
@@ -1842,7 +1897,7 @@ mod tests {
                         let _ = tx.send(Resolution::Execute {
                             method: None, path: None, status: Some(418),
                             headers: vec![("Content-Type".into(), "text/plain".into())],
-                            body: "edited".into(),
+                            body: "edited".into(), body_bytes: None,
                         });
                         break;
                     }
@@ -1902,7 +1957,7 @@ mod tests {
                         let _ = tx.send(Resolution::Execute {
                             method: None, path: None, status: Some(418),
                             headers: vec![("Content-Type".into(), "text/plain".into())],
-                            body: "edited".into(),
+                            body: "edited".into(), body_bytes: None,
                         });
                         break;
                     }
@@ -1917,6 +1972,69 @@ mod tests {
         let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
         assert_eq!(resp.status(), 418, "method-filtered response breakpoint did not fire");
         assert_eq!(resp.text().await.unwrap(), "edited");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A response breakpoint can replace the body with raw bytes (an uploaded file);
+    // the client receives exactly those bytes.
+    #[tokio::test]
+    async fn response_breakpoint_substitutes_binary_body() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 1024];
+                    let _ = sock.read(&mut b).await;
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}").await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        // A tiny PNG-like binary payload (non-UTF8 bytes).
+        let file: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF];
+        let file_task = file.clone();
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.paused_phase.as_deref() == Some("response")) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None, path: None, status: None,
+                            headers: vec![("Content-Type".into(), "image/png".into())],
+                            body: String::new(),
+                            body_bytes: Some(file_task.clone()),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let resp = client.get(format!("http://{upstream_addr}/img")).send().await.unwrap();
+        assert_eq!(resp.headers().get("content-type").unwrap(), "image/png");
+        let got = resp.bytes().await.unwrap().to_vec();
+        assert_eq!(got, file, "client should receive the substituted file bytes");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
