@@ -1,5 +1,5 @@
-import { useState } from "react";
-import Editor from "@monaco-editor/react";
+import { useRef, useState } from "react";
+import Editor, { type OnMount } from "@monaco-editor/react";
 import "../monaco-setup";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -87,14 +87,19 @@ export function BodyEditor({
   initialBody,
   initialContentType,
   allowFile,
+  fill,
   onChange,
 }: {
   initialBody: string;
   initialContentType: string;
   /** Show a "Replace with file…" uploader (raw bytes replace the body). */
   allowFile?: boolean;
+  /** Grow the editor to fill the available height (main Body tab). */
+  fill?: boolean;
   onChange: (r: { body: string; contentType: string; bodyBase64?: string }) => void;
 }) {
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const openFind = () => editorRef.current?.getAction("actions.find")?.run();
   const initialFmt = detectBodyFormat(initialContentType);
   const { theme } = useTheme();
   const [fmt, setFmt] = useState<BodyFormat>(initialFmt);
@@ -199,7 +204,7 @@ export function BodyEditor({
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className={fill ? "flex h-full flex-col gap-2" : "flex flex-col gap-2"}>
       <div className="flex items-center gap-2">
         <label className="flex items-center gap-1 text-xs text-muted-foreground">
           Format
@@ -217,6 +222,17 @@ export function BodyEditor({
         {fmt === "json" && (
           <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={prettify}>
             Prettify
+          </Button>
+        )}
+        {!isKv && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 text-[11px]"
+            title="Search in the body (⌘F)"
+            onClick={openFind}
+          >
+            Find
           </Button>
         )}
         {allowFile && (
@@ -278,12 +294,21 @@ export function BodyEditor({
           </Button>
         </div>
       ) : (
-        <div className="h-72 overflow-hidden rounded border border-border">
+        <div
+          className={
+            fill
+              ? "min-h-0 flex-1 overflow-hidden rounded border border-border"
+              : "h-72 overflow-hidden rounded border border-border"
+          }
+        >
           <Editor
             height="100%"
             language={monacoLanguage(fmt, initialContentType)}
             theme={theme === "dark" ? "vs-dark" : "light"}
             value={text}
+            onMount={(ed) => {
+              editorRef.current = ed;
+            }}
             onChange={(v) => changeText(v ?? "")}
             options={{
               minimap: { enabled: false },
