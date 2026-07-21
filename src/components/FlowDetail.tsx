@@ -16,6 +16,7 @@ import { usePlugins } from "../plugins";
 import { useToast } from "../toast";
 import { MethodBadge, StatusBadge } from "./badges";
 import { HeadersTable } from "./HeadersTable";
+import { InterceptEditor } from "./InterceptEditor";
 import { BodyViewer } from "./BodyViewer";
 import { EmptyState } from "./EmptyState";
 import { TabBar } from "./ui/tabs";
@@ -97,6 +98,10 @@ export function FlowDetail() {
         hint="Click a row in the list or a tree node to see details."
       />
     );
+  }
+
+  if (flow.pausedPhase) {
+    return <InterceptEditor flow={flow} />;
   }
 
   const { scheme, host, port, path } = flow.url;
