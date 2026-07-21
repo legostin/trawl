@@ -100,7 +100,12 @@ export function BreakpointsView() {
           <BreakpointEditor
             key={selected.id}
             bp={selected}
-            onSave={upsert}
+            onSave={(b) => {
+              // `enabled` is owned by the list toggle; never let a stale editor
+              // draft overwrite the live value on Save.
+              const live = useBreakpoints.getState().breakpoints.find((x) => x.id === b.id);
+              return upsert({ ...b, enabled: live ? live.enabled : b.enabled });
+            }}
             onDelete={() => void remove(selected.id)}
           />
         ) : (
@@ -163,11 +168,6 @@ function BreakpointEditor({
           checked={draft.onResponse}
           onCheckedChange={(v) => patch({ onResponse: v })}
           title="Pause on the response phase"
-        />
-        <LabeledSwitch
-          label="enabled"
-          checked={draft.enabled}
-          onCheckedChange={(v) => patch({ enabled: v })}
         />
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" onClick={() => void onSave(draft)}>
