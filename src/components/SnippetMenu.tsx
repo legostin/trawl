@@ -1,6 +1,11 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronDown, Search, Star, Trash2 } from "lucide-react";
-import { useSnippets, type SnippetItem, type SnippetKind } from "../scripting/snippetStore";
+import {
+  useSnippets,
+  BUILTIN_SNIPPETS,
+  type SnippetItem,
+  type SnippetKind,
+} from "../scripting/snippetStore";
 import { Button } from "./ui/button";
 
 /** A searchable dropdown of templates or snippets, most-used first, with preview. */
@@ -14,7 +19,9 @@ export function SnippetMenu({
   /** Called with the chosen item's code (usage is recorded automatically). */
   onPick: (code: string) => void;
 }) {
-  const items = useSnippets((s) => s.items(kind));
+  // Select raw state (stable refs) and derive the sorted list with useMemo — a
+  // selector returning a fresh array each call would loop under zustand v5.
+  const user = useSnippets((s) => s.user);
   const usage = useSnippets((s) => s.usage);
   const recordUse = useSnippets((s) => s.recordUse);
   const remove = useSnippets((s) => s.remove);
@@ -22,6 +29,14 @@ export function SnippetMenu({
   const [q, setQ] = useState("");
   const [preview, setPreview] = useState<SnippetItem | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  const items = useMemo(
+    () =>
+      [...BUILTIN_SNIPPETS, ...user]
+        .filter((i) => i.kind === kind)
+        .sort((a, b) => (usage[b.id] ?? 0) - (usage[a.id] ?? 0) || a.label.localeCompare(b.label)),
+    [kind, user, usage],
+  );
 
   const filtered = useMemo(() => {
     const n = q.trim().toLowerCase();
