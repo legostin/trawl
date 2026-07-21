@@ -103,6 +103,13 @@ function ProjectForm({
 }) {
   const [draft, setDraft] = useState<Project>(project);
   const patch = (p: Partial<Project>) => setDraft((d) => ({ ...d, ...p }));
+  // Persist immediately — used for host add/remove so domains never get lost
+  // when the editor is closed without pressing Save.
+  const commit = (p: Partial<Project>) => {
+    const next = { ...draft, ...p };
+    setDraft(next);
+    void onSave(next);
+  };
   const closeEditor = useProjects((s) => s.closeEditor);
 
   return (
@@ -132,15 +139,15 @@ function ProjectForm({
       <div className="min-h-0 flex-1 space-y-5 overflow-auto p-4">
         <HostList
           title="Tracked hosts (include)"
-          hint="A bare domain also matches subdomains; wildcards like *.example.com work too."
+          hint="A bare domain also matches subdomains; wildcards like *.example.com work too. Changes save automatically."
           hosts={draft.includeHosts}
-          onChange={(includeHosts) => patch({ includeHosts })}
+          onChange={(includeHosts) => commit({ includeHosts })}
         />
         <HostList
           title="Excluded hosts"
-          hint="Takes priority over include."
+          hint="Takes priority over include. Changes save automatically."
           hosts={draft.excludeHosts}
-          onChange={(excludeHosts) => patch({ excludeHosts })}
+          onChange={(excludeHosts) => commit({ excludeHosts })}
         />
         <EnvList env={draft.env} onChange={(env) => patch({ env })} />
       </div>
