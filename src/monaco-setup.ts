@@ -3,6 +3,7 @@ import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { loader } from "@monaco-editor/react";
 import { API_DTS } from "./scripting/apiTypes";
+import { STD_DTS } from "./scripting/stdlib";
 
 // Оффлайн-воркеры (Tauri без CDN).
 (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
@@ -24,8 +25,9 @@ const jsDefaults = (
   monaco.languages as unknown as { typescript: { javascriptDefaults: TsDefaults } }
 ).typescript.javascriptDefaults;
 
-// Автокомплит по нашему API скриптов.
+// Автокомплит по нашему API скриптов + стандартной библиотеке.
 jsDefaults.addExtraLib(API_DTS, "ts:trawl-api.d.ts");
+jsDefaults.addExtraLib(STD_DTS, "ts:trawl-stdlib.d.ts");
 jsDefaults.setDiagnosticsOptions({
   noSemanticValidation: true, // не ругаться на "переопределение" глобалей из d.ts
   noSyntaxValidation: false,
@@ -38,5 +40,20 @@ export function setLibraryTypes(source: string) {
   libDisposable?.dispose();
   libDisposable = jsDefaults.addExtraLib(source, "ts:trawl-library.js");
 }
+
+let dataDisposable: { dispose: () => void } | null = null;
+
+/** Types `response.data` (from sendJsonRequest) by the structure of past
+ *  responses matching the current rule. `typeBody` comes from fieldsToType(). */
+export function setResponseDataType(typeBody: string) {
+  dataDisposable?.dispose();
+  dataDisposable = jsDefaults.addExtraLib(
+    `type TrawlResponseData = ${typeBody};`,
+    "ts:trawl-response-data.d.ts",
+  );
+}
+
+// Default until a rule is selected.
+setResponseDataType("{ [key: string]: any }");
 
 export { monaco };

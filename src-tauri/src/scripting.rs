@@ -111,7 +111,25 @@ fn eval_job(c: &Ctx<'_>, job: &ScriptJob) -> ScriptResult {
     }
 }
 
+/// Built-in helper functions injected before every rule (both phases). Kept in
+/// sync with the declarations shown for autocomplete in `src/scripting/stdlib.ts`.
+const STD_LIB: &str = r#"
+function __lc(o){var r={};for(var k in o){r[k.toLowerCase()]=k;}return r;}
+function header(msg,name){if(!msg||!msg.headers)return undefined;var k=__lc(msg.headers)[String(name).toLowerCase()];return k?msg.headers[k]:undefined;}
+function hasHeader(msg,name){return header(msg,name)!==undefined;}
+function setHeader(msg,name,value){if(!msg.headers)msg.headers={};var k=__lc(msg.headers)[String(name).toLowerCase()];if(k)delete msg.headers[k];msg.headers[name]=String(value);}
+function removeHeader(msg,name){if(!msg||!msg.headers)return;var k=__lc(msg.headers)[String(name).toLowerCase()];if(k)delete msg.headers[k];}
+function jsonBody(msg){try{return JSON.parse((msg&&msg.body)||'null');}catch(e){return null;}}
+function setJsonBody(msg,obj){msg.body=JSON.stringify(obj);if(!hasHeader(msg,'content-type'))setHeader(msg,'content-type','application/json');}
+function bearer(token){setHeader(request,'authorization','Bearer '+token);}
+function queryParam(req,name){var q=(req.path||'').split('?')[1]||'';var parts=q.split('&');for(var i=0;i<parts.length;i++){var kv=parts[i].split('=');if(decodeURIComponent(kv[0])===name)return decodeURIComponent((kv[1]||'').replace(/\+/g,' '));}return undefined;}
+function sendJsonRequest(req){var r=send(req);try{r.data=JSON.parse(r.body||'null');}catch(e){r.data=null;}return r;}
+function sendWithRetry(req,opts){opts=opts||{};var max=opts.retries||3;var delay=opts.delay||1000;var r=send(req);var n=0;while(n<max&&(r.status===429||r.status>=500)){sleep(delay);r=send(req);n++;}return r;}
+"#;
+
 fn build_source(prelude: &str, script: &str) -> String {
+    let prelude = format!("{STD_LIB}\n{prelude}");
+    let prelude = &prelude;
     format!(
         r#"
 (function() {{
@@ -214,6 +232,8 @@ fn native_send(req_json: &str) -> String {
 }
 
 fn build_handler_source(prelude: &str, script: &str) -> String {
+    let prelude = format!("{STD_LIB}\n{prelude}");
+    let prelude = &prelude;
     format!(
         r#"
 (function() {{
@@ -315,6 +335,32 @@ mod tests {
         assert_eq!(res.action, "continue");
         let req = res.request.unwrap();
         assert_eq!(req["headers"]["X-Debug"], "1");
+    }
+
+    #[tokio::test]
+    async fn stdlib_helpers_are_available() {
+        // Guards against a syntax error in STD_LIB (which would break every rule).
+        let res = run(
+            "setJsonBody(request, { a: (jsonBody(request) || {}).a, injected: true });",
+            r#"{"request":{"headers":{},"body":"{\"a\":1}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        let body: serde_json::Value = serde_json::from_str(req["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["a"], 1);
+        assert_eq!(body["injected"], true);
+    }
+
+    #[tokio::test]
+    async fn stdlib_header_helpers_case_insensitive() {
+        let res = run(
+            "request.__found = header(request, 'CONTENT-TYPE');",
+            r#"{"request":{"headers":{"Content-Type":"application/json"}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue");
+        assert_eq!(res.request.unwrap()["__found"], "application/json");
     }
 
     #[tokio::test]

@@ -73,6 +73,66 @@ export function accessor(path: string): string {
   return "data" + parts.join("");
 }
 
+/** Builds a TS type literal from analyzed fields, for `response.data.…` autocomplete.
+ *  e.g. [{path:"user.name",type:"string"}, {path:"items[].id",type:"number"}]
+ *       → "{ user: { name: string }; items: Array<{ id: number }> }" */
+export function fieldsToType(fields: FieldInfo[]): string {
+  interface Node {
+    children: Record<string, Node>;
+    type?: string;
+    array?: boolean;
+    elemType?: string;
+  }
+  const root: Node = { children: {} };
+  const ts = (t?: string): string =>
+    t === "number" ? "number" : t === "boolean" ? "boolean" : t === "string" ? "string" : "any";
+
+  for (const f of fields) {
+    const segs = f.path.split(".");
+    let node = root;
+    segs.forEach((raw, i) => {
+      const isArr = raw.endsWith("[]");
+      const key = isArr ? raw.slice(0, -2) : raw;
+      if (!key) return;
+      const child = (node.children[key] ??= { children: {} });
+      const isLeaf = i === segs.length - 1;
+      if (isArr) {
+        child.array = true;
+        if (isLeaf) child.elemType = f.type;
+        node = child;
+      } else if (isLeaf) {
+        child.type = f.type;
+      } else {
+        node = child;
+      }
+    });
+  }
+
+  const emit = (node: Node): string => {
+    const keys = Object.keys(node.children);
+    if (keys.length === 0) return "{ [key: string]: any }";
+    const body = keys
+      .map((k) => {
+        const c = node.children[k];
+        let t: string;
+        if (Object.keys(c.children).length > 0) {
+          t = emit(c);
+          if (c.array) t = `Array<${t}>`;
+        } else if (c.array) {
+          t = `${c.elemType ? ts(c.elemType) : "any"}[]`;
+        } else {
+          t = ts(c.type);
+        }
+        const safe = /^[A-Za-z_$][\w$]*$/.test(k) ? k : JSON.stringify(k);
+        return `${safe}: ${t}`;
+      })
+      .join("; ");
+    return `{ ${body} }`;
+  };
+
+  return emit(root);
+}
+
 /** glob-матч по строке (мирроринг серверных правил: `*`, `?`). */
 export function matchGlob(pattern: string, target: string): boolean {
   let re = "^";

@@ -423,13 +423,14 @@ mod tests {
     use super::*;
 
     fn tmp_db() -> Db {
+        // Atomic counter guarantees a unique path even when tests run in parallel
+        // (SystemTime nanos can collide across threads).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "trawl-db-test-{}-{}.db",
+            "trawl-db-test-{}-{n}.db",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
         ));
         let _ = std::fs::remove_file(&path);
         let db = Db::open(&path).unwrap();
