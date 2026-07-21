@@ -9,7 +9,7 @@ import { queryParams } from "@/lib/params";
 import type { Flow, Header } from "@/types";
 
 type Row = { key: string; value: string };
-type Tab = "query" | "headers" | "body";
+type Tab = "query" | "headers" | "body" | "response";
 
 function toRows(pairs: Header[]): Row[] {
   return pairs.map(([key, value]) => ({ key, value }));
@@ -18,7 +18,7 @@ function toPairs(rows: Row[]): [string, string][] {
   return rows.filter((r) => r.key.trim() !== "").map((r) => [r.key, r.value]);
 }
 
-/** Editable key/value rows, shared by the Headers and Query tabs. */
+/** Editable key/value rows, shared by the Headers, Query and Response-headers tabs. */
 function KeyValueEditor({
   rows,
   onChange,
@@ -34,7 +34,7 @@ function KeyValueEditor({
   const add = () => onChange([...rows, { key: "", value: "" }]);
 
   return (
-    <div className="p-3">
+    <>
       <table className="mb-2 w-full border-collapse text-xs">
         <tbody>
           {rows.map((r, i) => (
@@ -72,7 +72,7 @@ function KeyValueEditor({
       <Button size="sm" variant="ghost" onClick={add}>
         {addLabel}
       </Button>
-    </div>
+    </>
   );
 }
 
@@ -83,25 +83,33 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
 
   const basePath = useMemo(() => flow.url.path.split("?")[0], [flow.url.path]);
 
+  // Request-side fields (drive Execute in the request phase).
   const [method, setMethod] = useState(flow.method);
+  const [reqHeaderRows, setReqHeaderRows] = useState<Row[]>(toRows(flow.request.headers));
+  const [queryRows, setQueryRows] = useState<Row[]>(toRows(queryParams(flow.url.path) as Header[]));
+  const [reqBody, setReqBody] = useState(bodyToText(flow.request));
+
+  // Response-side fields. In the response phase they edit the real response
+  // (Execute); in the request phase they compose the local response (Respond).
   const [status, setStatus] = useState(String(flow.response?.status ?? 200));
-  const [headerRows, setHeaderRows] = useState<Row[]>(
-    toRows(isRequest ? flow.request.headers : flow.response?.headers ?? []),
+  const [respHeaderRows, setRespHeaderRows] = useState<Row[]>(
+    isRequest
+      ? [{ key: "content-type", value: "application/json" }]
+      : toRows(flow.response?.headers ?? []),
   );
-  const [queryRows, setQueryRows] = useState<Row[]>(
-    toRows(queryParams(flow.url.path) as Header[]),
-  );
-  const [body, setBody] = useState(bodyToText(isRequest ? flow.request : flow.response));
+  const [respBody, setRespBody] = useState(isRequest ? "" : bodyToText(flow.response));
+
   const [busy, setBusy] = useState(false);
 
   const tabs: { value: Tab; label: string }[] = isRequest
     ? [
         { value: "query", label: `Query (${queryRows.length})` },
-        { value: "headers", label: `Headers (${headerRows.length})` },
+        { value: "headers", label: `Headers (${reqHeaderRows.length})` },
         { value: "body", label: "Body" },
+        { value: "response", label: "Response" },
       ]
     : [
-        { value: "headers", label: `Headers (${headerRows.length})` },
+        { value: "headers", label: `Headers (${respHeaderRows.length})` },
         { value: "body", label: "Body" },
       ];
   const [tab, setTab] = useState<Tab>(isRequest ? "query" : "headers");
@@ -121,18 +129,24 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
       if (action === "abort") {
         await resolve(flow.id, phase, "abort", { reason: "aborted from UI" });
       } else if (action === "respond") {
+        // Return a local response (request phase) — never hits the server.
         await resolve(flow.id, phase, "respond", {
           status: Number(status) || 200,
-          headers: toPairs(headerRows),
-          body,
+          headers: toPairs(respHeaderRows),
+          body: respBody,
+        });
+      } else if (isRequest) {
+        await resolve(flow.id, phase, "execute", {
+          method,
+          path: buildPath(),
+          headers: toPairs(reqHeaderRows),
+          body: reqBody,
         });
       } else {
         await resolve(flow.id, phase, "execute", {
-          method: isRequest ? method : undefined,
-          path: isRequest ? buildPath() : undefined,
-          status: isRequest ? undefined : Number(status) || 200,
-          headers: toPairs(headerRows),
-          body,
+          status: Number(status) || 200,
+          headers: toPairs(respHeaderRows),
+          body: respBody,
         });
       }
     } finally {
@@ -171,7 +185,13 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
             Execute
           </Button>
           {isRequest && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void act("respond")}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              title="Return the Response tab to the client without contacting the server"
+              onClick={() => void act("respond")}
+            >
               <Reply />
               Respond locally
             </Button>
@@ -185,21 +205,60 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
 
       <TabBar<Tab> value={active} onChange={setTab} tabs={tabs} />
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto p-3">
         {active === "query" && (
           <KeyValueEditor rows={queryRows} onChange={setQueryRows} addLabel="+ Add parameter" />
         )}
         {active === "headers" && (
-          <KeyValueEditor rows={headerRows} onChange={setHeaderRows} addLabel="+ Add header" />
+          <KeyValueEditor
+            rows={isRequest ? reqHeaderRows : respHeaderRows}
+            onChange={isRequest ? setReqHeaderRows : setRespHeaderRows}
+            addLabel="+ Add header"
+          />
         )}
         {active === "body" && (
-          <div className="p-3">
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              spellCheck={false}
-              className="h-72 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
-            />
+          <textarea
+            value={isRequest ? reqBody : respBody}
+            onChange={(e) => (isRequest ? setReqBody(e.target.value) : setRespBody(e.target.value))}
+            spellCheck={false}
+            className="h-72 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
+          />
+        )}
+        {active === "response" && (
+          <div className="flex flex-col gap-3">
+            <div className="text-[11px] text-muted-foreground">
+              Used by <span className="font-medium text-foreground">Respond locally</span> — returned to
+              the client without contacting the server.
+            </div>
+            <label className="flex items-center gap-1 text-xs text-muted-foreground">
+              Status
+              <Input
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="h-7 w-24 font-mono"
+              />
+            </label>
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Response headers
+              </div>
+              <KeyValueEditor
+                rows={respHeaderRows}
+                onChange={setRespHeaderRows}
+                addLabel="+ Add header"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Response body
+              </div>
+              <textarea
+                value={respBody}
+                onChange={(e) => setRespBody(e.target.value)}
+                spellCheck={false}
+                className="h-56 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
+              />
+            </div>
           </div>
         )}
       </div>
