@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as JsxRuntime from "react/jsx-runtime";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   aggregateFlows,
   deleteReport,
@@ -24,7 +25,7 @@ import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
 import type { ActiveProject, EnvVar, FlowAction, RegisteredMode, TrawlHost } from "./api";
 
-const HOST_VERSION = "1.3.0";
+const HOST_VERSION = "1.4.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -104,6 +105,7 @@ export function installHost(): void {
       bodyText: (msg) => bodyToText(msg),
       buildCurl: (flow) => buildCurl(flow),
     },
+    openUrl: (url: string) => openUrl(url),
     registerMode: (mode: RegisteredMode) => usePlugins.getState().registerMode(mode),
     registerFlowAction: (action: FlowAction) =>
       usePlugins.getState().registerFlowAction(action),
