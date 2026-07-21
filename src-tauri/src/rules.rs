@@ -49,6 +49,28 @@ impl Rule {
     }
 }
 
+/// Подставляет `{{KEY}}` в паттерн значениями из env-объекта активного
+/// проекта (project variables). Неизвестные плейсхолдеры остаются как есть.
+pub fn expand_pattern(pattern: &str, env: &serde_json::Value) -> String {
+    let mut out = pattern.to_string();
+    if let Some(map) = env.as_object() {
+        for (k, v) in map {
+            if let Some(s) = v.as_str() {
+                out = out.replace(&format!("{{{{{k}}}}}"), s);
+            }
+        }
+    }
+    out
+}
+
+/// Матчинг glob-паттерна с подстановкой project variables (`{{VAR}}`).
+pub fn glob_match_env(pattern: &str, target: &str, env: &serde_json::Value) -> bool {
+    match glob_to_regex(&expand_pattern(pattern, env)) {
+        Ok(re) => re.is_match(target),
+        Err(_) => false,
+    }
+}
+
 /// Преобразует glob (`*`, `?`) в анкоренный regex.
 pub fn glob_to_regex(glob: &str) -> Result<Regex> {
     let mut re = String::from("^");
@@ -115,6 +137,20 @@ mod tests {
             script: String::new(),
             project_id: None,
         }
+    }
+
+    #[test]
+    fn expands_project_variables_in_patterns() {
+        let env = serde_json::json!({ "APP_HOST": "app.example.com", "API_HOST": "api.example.com" });
+        assert_eq!(
+            expand_pattern("{{APP_HOST}}/v4/adverts*", &env),
+            "app.example.com/v4/adverts*"
+        );
+        // Неизвестная переменная остаётся как есть (и матчиться не будет).
+        assert_eq!(expand_pattern("{{NOPE}}/x", &env), "{{NOPE}}/x");
+        assert!(glob_match_env("{{API_HOST}}/v1/*", "api.example.com/v1/users", &env));
+        assert!(!glob_match_env("{{API_HOST}}/v1/*", "app.example.com/v1/users", &env));
+        assert!(glob_match_env("*/v1/*", "x/v1/y", &serde_json::json!({})));
     }
 
     #[test]
