@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -153,24 +154,61 @@ fn api_content_url(host: &str, repo: &str, git_ref: &str, file: &str) -> String 
     )
 }
 
-fn http_get_text(url: &str) -> Result<String, String> {
+fn http_get_text(url: &str, token: Option<&str>, raw: bool) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("trawl-plugin-installer")
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(url)
-        .header("Accept", "application/vnd.github.raw")
-        .send()
-        .map_err(|e| e.to_string())?;
+    let accept = if raw { "application/vnd.github.raw" } else { "application/vnd.github+json" };
+    let mut req = client.get(url).header("Accept", accept);
+    if let Some(t) = token {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+    let resp = req.send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {} for {url}", resp.status()));
     }
     resp.text().map_err(|e| e.to_string())
 }
 
-fn fetch_manifest_blocking(host: &str, repo: &str, git_ref: &str) -> Result<PluginManifest, String> {
-    let text = http_get_text(&api_content_url(host, repo, git_ref, "trawl-plugin.json"))?;
+// ── Per-host git tokens (git-hosts.json) ──
+
+fn git_hosts_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("git-hosts.json")
+}
+
+pub fn load_git_hosts(data_dir: &Path) -> HashMap<String, String> {
+    fs::read_to_string(git_hosts_path(data_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn host_token(data_dir: &Path, host: &str) -> Option<String> {
+    load_git_hosts(data_dir).get(host).cloned()
+}
+
+/// An empty token removes the host's entry.
+pub fn save_git_host_token(data_dir: &Path, host: &str, token: &str) -> Result<()> {
+    fs::create_dir_all(data_dir).context("create data dir")?;
+    let mut hosts = load_git_hosts(data_dir);
+    if token.trim().is_empty() {
+        hosts.remove(host);
+    } else {
+        hosts.insert(host.to_string(), token.trim().to_string());
+    }
+    fs::write(git_hosts_path(data_dir), serde_json::to_string_pretty(&hosts)?)
+        .context("write git-hosts.json")?;
+    Ok(())
+}
+
+fn fetch_manifest_blocking(
+    host: &str,
+    repo: &str,
+    git_ref: &str,
+    token: Option<&str>,
+) -> Result<PluginManifest, String> {
+    let text = http_get_text(&api_content_url(host, repo, git_ref, "trawl-plugin.json"), token, true)?;
     serde_json::from_str::<PluginManifest>(&text).map_err(|e| format!("invalid manifest: {e}"))
 }
 
@@ -191,15 +229,19 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub async fn fetch_plugin_manifest(
+    app: AppHandle,
     repo: String,
     reference: Option<String>,
     host: Option<String>,
 ) -> Result<PluginManifest, String> {
     let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
     let host = effective_host(parsed_host, host);
-    tokio::task::spawn_blocking(move || fetch_manifest_blocking(&host, &repo, &git_ref))
-        .await
-        .map_err(|e| e.to_string())?
+    let token = host_token(&data_dir(&app)?, &host);
+    tokio::task::spawn_blocking(move || {
+        fetch_manifest_blocking(&host, &repo, &git_ref, token.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -217,9 +259,14 @@ pub async fn install_plugin(
     let host_c = host.clone();
     let repo_c = repo.clone();
     let ref_c = git_ref.clone();
+    let token = host_token(&data, &host);
     let (manifest, bundle) = tokio::task::spawn_blocking(move || {
-        let m = fetch_manifest_blocking(&host_c, &repo_c, &ref_c)?;
-        let code = http_get_text(&api_content_url(&host_c, &repo_c, &ref_c, &m.entry))?;
+        let m = fetch_manifest_blocking(&host_c, &repo_c, &ref_c, token.as_deref())?;
+        let code = http_get_text(
+            &api_content_url(&host_c, &repo_c, &ref_c, &m.entry),
+            token.as_deref(),
+            true,
+        )?;
         Ok::<_, String>((m, code))
     })
     .await
@@ -306,6 +353,16 @@ fn safe_key(key: &str) -> String {
 
 fn plugin_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("plugin-data"))
+}
+
+#[tauri::command]
+pub fn git_host_token_set(app: AppHandle, host: String, token: String) -> Result<(), String> {
+    save_git_host_token(&data_dir(&app)?, &host, &token).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_host_token_has(app: AppHandle, host: String) -> Result<bool, String> {
+    Ok(host_token(&data_dir(&app)?, &host).is_some())
 }
 
 #[tauri::command]
@@ -401,6 +458,19 @@ mod tests {
         let s = safe_key("../../etc/passwd");
         assert!(!s.contains('/'));
         assert!(!s.contains("..") || !s.contains('/'));
+    }
+
+    #[test]
+    fn git_hosts_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("trawl-git-hosts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(host_token(&dir, "github.example.org").is_none());
+        save_git_host_token(&dir, "github.example.org", "tok123").unwrap();
+        assert_eq!(host_token(&dir, "github.example.org").as_deref(), Some("tok123"));
+        // Empty token removes the entry.
+        save_git_host_token(&dir, "github.example.org", "").unwrap();
+        assert!(host_token(&dir, "github.example.org").is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
