@@ -89,6 +89,7 @@ export function TopBar() {
               options={[
                 { value: "traffic", label: "Traffic" },
                 { value: "rules", label: "Rules" },
+                { value: "breakpoints", label: "Breakpoints" },
               ]}
             />
           </>

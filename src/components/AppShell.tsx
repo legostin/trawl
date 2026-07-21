@@ -13,6 +13,7 @@ import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
 import { RulesView } from "./RulesView";
+import { BreakpointsView } from "./BreakpointsView";
 import { FilterBar } from "./FilterBar";
 import { ListPanel } from "./ListPanel";
 import { FlowDetail } from "./FlowDetail";
@@ -78,6 +79,10 @@ export function AppShell() {
 
           <Pane show={mode === "traffic" && view === "rules"}>
             <RulesView />
+          </Pane>
+
+          <Pane show={mode === "traffic" && view === "breakpoints"}>
+            <BreakpointsView />
           </Pane>
 
           <Pane show={mode === "setup"}>
