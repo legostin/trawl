@@ -81,14 +81,19 @@ function serializeMultipart(rows: Row[]): string {
  * defaults from the content-type but can be switched; switching serializes the
  * body accordingly and reports the matching content-type back to the parent.
  */
+type FileBody = { name: string; base64: string; size: number; type: string };
+
 export function BodyEditor({
   initialBody,
   initialContentType,
+  allowFile,
   onChange,
 }: {
   initialBody: string;
   initialContentType: string;
-  onChange: (r: { body: string; contentType: string }) => void;
+  /** Show a "Replace with file…" uploader (raw bytes replace the body). */
+  allowFile?: boolean;
+  onChange: (r: { body: string; contentType: string; bodyBase64?: string }) => void;
 }) {
   const initialFmt = detectBodyFormat(initialContentType);
   const { theme } = useTheme();
@@ -97,6 +102,7 @@ export function BodyEditor({
   const [rows, setRows] = useState<Row[]>(() =>
     parseUrlEncoded(initialBody).map(([key, value]) => ({ key, value })),
   );
+  const [file, setFile] = useState<FileBody | null>(null);
 
   const emit = (nextFmt: BodyFormat, nextText: string, nextRows: Row[]) => {
     const body =
@@ -106,6 +112,26 @@ export function BodyEditor({
           ? serializeMultipart(nextRows)
           : nextText;
     onChange({ body, contentType: contentTypeFor(nextFmt, initialContentType) });
+  };
+
+  const onPickFile = (f: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(",")[1] ?? "";
+      const picked = { name: f.name, base64, size: f.size, type: f.type };
+      setFile(picked);
+      onChange({
+        body: "",
+        contentType: picked.type || contentTypeFor(fmt, initialContentType),
+        bodyBase64: picked.base64,
+      });
+    };
+    reader.readAsDataURL(f);
+  };
+
+  const clearFile = () => {
+    setFile(null);
+    emit(fmt, text, rows);
   };
 
   const changeFormat = (next: BodyFormat) => {
@@ -158,6 +184,20 @@ export function BodyEditor({
 
   const isKv = fmt === "form" || fmt === "multipart";
 
+  if (file) {
+    return (
+      <div className="flex items-center gap-2 rounded border border-border bg-card p-3 text-xs">
+        <span className="font-mono">📎 {file.name}</span>
+        <span className="text-muted-foreground">
+          {file.type || "application/octet-stream"} · {file.size} bytes
+        </span>
+        <Button size="sm" variant="ghost" className="ml-auto h-6 text-[11px]" onClick={clearFile}>
+          Clear
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -178,6 +218,20 @@ export function BodyEditor({
           <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={prettify}>
             Prettify
           </Button>
+        )}
+        {allowFile && (
+          <label className="ml-auto cursor-pointer text-[11px] text-primary hover:underline">
+            Replace with file…
+            <input
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onPickFile(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
         )}
       </div>
 

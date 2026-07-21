@@ -14,6 +14,8 @@ export interface EditedPayload {
   status?: number;
   headers?: [string, string][];
   body?: string;
+  /** Raw body as base64 (an uploaded file); overrides `body` on the backend. */
+  bodyBase64?: string;
   reason?: string;
 }
 

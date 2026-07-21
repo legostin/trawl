@@ -308,6 +308,9 @@ pub struct EditedPayload {
     pub headers: Vec<(String, String)>,
     #[serde(default)]
     pub body: String,
+    /// Raw body as base64 (an uploaded file); overrides `body` when present.
+    #[serde(default)]
+    pub body_base64: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -320,11 +323,21 @@ pub fn resolve_breakpoint(
     edited: EditedPayload,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    use base64::Engine;
     use crate::proxy::{BpPhase, Resolution};
     let bp_phase = match phase.as_str() {
         "request" => BpPhase::Request,
         "response" => BpPhase::Response,
         _ => return Err("bad phase".into()),
+    };
+    // Decode an uploaded file body (base64) into raw bytes, if present.
+    let body_bytes = match edited.body_base64 {
+        Some(b64) => Some(
+            base64::engine::general_purpose::STANDARD
+                .decode(b64.as_bytes())
+                .map_err(|e| format!("bad base64 body: {e}"))?,
+        ),
+        None => None,
     };
     let resolution = match action.as_str() {
         "execute" => Resolution::Execute {
@@ -333,12 +346,14 @@ pub fn resolve_breakpoint(
             status: edited.status,
             headers: edited.headers,
             body: edited.body,
+            body_bytes,
         },
         "abort" => Resolution::Abort(edited.reason.unwrap_or_else(|| "aborted".into())),
         "respond" => Resolution::Respond {
             status: edited.status.unwrap_or(200),
             headers: edited.headers,
             body: edited.body,
+            body_bytes,
         },
         _ => return Err("bad action".into()),
     };

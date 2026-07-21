@@ -108,6 +108,8 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
       : toRows(flow.response?.headers ?? []),
   );
   const [respBody, setRespBody] = useState(isRequest ? "" : bodyToText(flow.response));
+  // Set when the response body is replaced by an uploaded file (raw bytes).
+  const [respBodyBase64, setRespBodyBase64] = useState<string | undefined>(undefined);
 
   const [busy, setBusy] = useState(false);
 
@@ -144,6 +146,7 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
           status: Number(status) || 200,
           headers: toPairs(respHeaderRows),
           body: respBody,
+          bodyBase64: respBodyBase64,
         });
       } else if (isRequest) {
         await resolve(flow.id, phase, "execute", {
@@ -157,6 +160,7 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
           status: Number(status) || 200,
           headers: toPairs(respHeaderRows),
           body: respBody,
+          bodyBase64: respBodyBase64,
         });
       }
     } finally {
@@ -244,8 +248,10 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
             <BodyEditor
               initialBody={respBody}
               initialContentType={ctOf(respHeaderRows)}
-              onChange={({ body, contentType }) => {
+              allowFile
+              onChange={({ body, contentType, bodyBase64 }) => {
                 setRespBody(body);
+                setRespBodyBase64(bodyBase64);
                 if (contentType) setRespHeaderRows((rows) => withContentType(rows, contentType));
               }}
             />
@@ -282,8 +288,10 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
               <BodyEditor
                 initialBody={respBody}
                 initialContentType={ctOf(respHeaderRows)}
-                onChange={({ body, contentType }) => {
+                allowFile
+                onChange={({ body, contentType, bodyBase64 }) => {
                   setRespBody(body);
+                  setRespBodyBase64(bodyBase64);
                   if (contentType) setRespHeaderRows((rows) => withContentType(rows, contentType));
                 }}
               />
