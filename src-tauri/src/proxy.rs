@@ -290,6 +290,50 @@ impl CaptureHandler {
         }
     }
 
+    /// If a response breakpoint matches, pause on this response for live editing
+    /// and return the (possibly edited) response. Used for synthetic responses
+    /// produced inside `handle_request` (handler rules) that never reach
+    /// `handle_response`. The flow MUST already be in the store. Ok = send it,
+    /// Err(reason) = abort. Response phase only, so a String body is fine.
+    async fn break_response(
+        &self,
+        id: u64,
+        targets: &[String],
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: String,
+    ) -> Result<(u16, Vec<(String, String)>, String), String> {
+        if !self.breakpoint_matches(BpPhase::Response, targets, "") {
+            return Ok((status, headers, body));
+        }
+        self.store.update(id, |f| {
+            f.state = FlowState::Paused;
+            f.paused_phase = Some("response".into());
+            f.response = Some(ResponseMessage {
+                status,
+                headers: headers.clone(),
+                body: body.clone().into_bytes(),
+                body_is_text: true,
+            });
+        });
+        if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+            (self.emit)("flow-paused", &u);
+        }
+        let out = match self.await_resolution(id, BpPhase::Response).await {
+            Some(Resolution::Execute { status: st, headers: h, body: b, .. }) => {
+                Ok((st.unwrap_or(status), h, b))
+            }
+            Some(Resolution::Respond { status: st, headers: h, body: b }) => Ok((st, h, b)),
+            Some(Resolution::Abort(reason)) => Err(reason),
+            None => Ok((status, headers, body)),
+        };
+        self.store.update(id, |f| {
+            f.state = FlowState::Pending;
+            f.paused_phase = None;
+        });
+        out
+    }
+
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
         let scope = self.active_scope();
         let env = self.active_env();
@@ -619,19 +663,54 @@ impl HttpHandler for CaptureHandler {
                 if let Some(spec) = res.response {
                     let status = spec.get("status").and_then(|s| s.as_u64()).unwrap_or(200) as u16;
                     let headers = spec.get("headers").map(json_to_headers).unwrap_or_default();
-                    let body = spec
-                        .get("body")
-                        .and_then(|b| b.as_str())
-                        .unwrap_or("")
-                        .as_bytes()
-                        .to_vec();
-                    flow.response = Some(ResponseMessage { status, headers, body, body_is_text: true });
+                    let body_str = spec.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                    // Put the flow in the store first so a response breakpoint can pause it.
+                    flow.response = Some(ResponseMessage {
+                        status,
+                        headers: headers.clone(),
+                        body: body_str.clone().into_bytes(),
+                        body_is_text: true,
+                    });
                     flow.timings.done = Some(self.started.elapsed().as_millis() as u64);
                     flow.state = FlowState::Completed;
                     self.upsert_flow(preinserted, &flow);
                     (self.emit)("flow-added", &flow);
-                    self.persist(&flow);
-                    return RequestOrResponse::Response(build_mock_response(&spec));
+
+                    // Response breakpoint fires on the handler's synthetic response too.
+                    match self.break_response(id, &targets, status, headers, body_str).await {
+                        Ok((status, headers, body_str)) => {
+                            self.store.update(id, |f| {
+                                f.response = Some(ResponseMessage {
+                                    status,
+                                    headers: headers.clone(),
+                                    body: body_str.clone().into_bytes(),
+                                    body_is_text: true,
+                                });
+                                f.state = FlowState::Completed;
+                            });
+                            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                                (self.emit)("flow-updated", &u);
+                                self.persist(&u);
+                            }
+                            let out_spec = json!({
+                                "status": status,
+                                "headers": headers_to_json(&headers),
+                                "body": body_str,
+                            });
+                            return RequestOrResponse::Response(build_mock_response(&out_spec));
+                        }
+                        Err(reason) => {
+                            self.store.update(id, |f| {
+                                f.state = FlowState::Error;
+                                f.error = Some(reason.clone());
+                            });
+                            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                                (self.emit)("flow-updated", &u);
+                                self.persist(&u);
+                            }
+                            return RequestOrResponse::Response(build_abort_response(&reason));
+                        }
+                    }
                 }
             }
             // ошибка handler
@@ -1723,6 +1802,57 @@ mod tests {
             .build().unwrap();
         let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
         assert_eq!(resp.status(), 418);
+        assert_eq!(resp.text().await.unwrap(), "edited");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A response breakpoint fires on a handler rule's synthetic response too —
+    // even though it never passes through handle_response.
+    #[tokio::test]
+    async fn response_breakpoint_fires_on_handler_response() {
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        // Handler returns a synthetic response (no upstream) on 1.2.3.4.
+        let rules = vec![rule(
+            "mock-handler",
+            "handler.test/*",
+            Phase::Handler,
+            "return { status: 200, headers: {}, body: 'orig' };",
+        )];
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
+        *bps.write().unwrap() = vec![breakpoint("handler.test/*", false, true)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.paused_phase.as_deref() == Some("response")) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None, path: None, status: Some(418),
+                            headers: vec![("Content-Type".into(), "text/plain".into())],
+                            body: "edited".into(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let resp = client.get("http://handler.test/x").send().await.unwrap();
+        assert_eq!(resp.status(), 418, "response breakpoint did not fire on handler response");
         assert_eq!(resp.text().await.unwrap(), "edited");
 
         handle.stop();
