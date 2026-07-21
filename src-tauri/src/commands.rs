@@ -269,6 +269,8 @@ pub struct EditedPayload {
     #[serde(default)]
     pub method: Option<String>,
     #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
     pub status: Option<u16>,
     #[serde(default)]
     pub headers: Vec<(String, String)>,
@@ -295,6 +297,7 @@ pub fn resolve_breakpoint(
     let resolution = match action.as_str() {
         "execute" => Resolution::Execute {
             method: edited.method,
+            path: edited.path,
             status: edited.status,
             headers: edited.headers,
             body: edited.body,

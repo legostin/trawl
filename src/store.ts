@@ -9,6 +9,8 @@ export type ListMode = "sequence" | "structure";
 
 export interface EditedPayload {
   method?: string;
+  /** Edited request path+query (request phase only). */
+  path?: string;
   status?: number;
   headers?: [string, string][];
   body?: string;
