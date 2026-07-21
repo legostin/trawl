@@ -33,8 +33,6 @@ interface SnippetsState {
   user: SnippetItem[];
   usage: Record<string, number>;
   load: () => Promise<void>;
-  /** Built-in + user items of a kind, most-used first. */
-  items: (kind: SnippetKind) => SnippetItem[];
   recordUse: (id: string) => void;
   add: (kind: SnippetKind, label: string, code: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
@@ -62,12 +60,6 @@ export const useSnippets = create<SnippetsState>((set, get) => {
       } catch {
         /* not in Tauri */
       }
-    },
-    items: (kind) => {
-      const { usage } = get();
-      return [...BUILTIN, ...get().user]
-        .filter((i) => i.kind === kind)
-        .sort((a, b) => (usage[b.id] ?? 0) - (usage[a.id] ?? 0) || a.label.localeCompare(b.label));
     },
     recordUse: (id) => {
       set((s) => ({ usage: { ...s.usage, [id]: (s.usage[id] ?? 0) + 1 } }));
