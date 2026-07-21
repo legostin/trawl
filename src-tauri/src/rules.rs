@@ -63,9 +63,26 @@ pub fn expand_pattern(pattern: &str, env: &serde_json::Value) -> String {
     out
 }
 
+/// Убирает ведущий `scheme://` из паттерна: цели прокси — это `host/path` без
+/// схемы, поэтому вставленный целиком URL (`https://host/path`) иначе никогда бы
+/// не совпал. `*/path` не считается схемой и не трогается.
+fn strip_scheme(pattern: &str) -> &str {
+    if let Some(i) = pattern.find("://") {
+        let scheme = &pattern[..i];
+        if !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return &pattern[i + 3..];
+        }
+    }
+    pattern
+}
+
 /// Матчинг glob-паттерна с подстановкой project variables (`{{VAR}}`).
 pub fn glob_match_env(pattern: &str, target: &str, env: &serde_json::Value) -> bool {
-    match glob_to_regex(&expand_pattern(pattern, env)) {
+    match glob_to_regex(&expand_pattern(strip_scheme(pattern), env)) {
         Ok(re) => re.is_match(target),
         Err(_) => false,
     }
@@ -151,6 +168,25 @@ mod tests {
         assert!(glob_match_env("{{API_HOST}}/v1/*", "api.example.com/v1/users", &env));
         assert!(!glob_match_env("{{API_HOST}}/v1/*", "app.example.com/v1/users", &env));
         assert!(glob_match_env("*/v1/*", "x/v1/y", &serde_json::json!({})));
+    }
+
+    #[test]
+    fn glob_match_env_ignores_leading_scheme() {
+        let env = serde_json::json!({});
+        // A pattern pasted as a full URL must still match the scheme-less host/path target.
+        assert!(glob_match_env(
+            "https://app.example.com/v3/adverts/recommendation*",
+            "app.example.com/v3/adverts/recommendation?page=1",
+            &env,
+        ));
+        assert!(glob_match_env("http://api.example.com/*", "api.example.com/v1/users", &env));
+        // Scheme strip composes with {{VAR}} expansion.
+        let env2 = serde_json::json!({ "API_HOST": "api.example.com" });
+        assert!(glob_match_env("https://{{API_HOST}}/v1/*", "api.example.com/v1/users", &env2));
+        // Plain (scheme-less) patterns are unaffected.
+        assert!(glob_match_env("app.example.com/*", "app.example.com/x", &env));
+        // A wildcard scheme segment is not treated as a scheme (not stripped).
+        assert!(glob_match_env("*/v1/*", "x/v1/y", &env));
     }
 
     #[test]
