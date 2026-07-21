@@ -130,13 +130,38 @@ pub fn api_url(host: &str, repo: &str, path: &str) -> String {
     }
 }
 
-// Placeholder encoders until the git-browse task replaces them with real
-// percent-encoding (paths in the contracts repo contain spaces and Cyrillic).
+/// Everything beyond unreserved ASCII is escaped — repo paths in contract repos
+/// contain spaces and Cyrillic, and branch names may contain slashes.
+const SEG: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'|')
+    .add(b'[')
+    .add(b']')
+    .add(b'@')
+    .add(b':')
+    .add(b'&')
+    .add(b'+')
+    .add(b'=');
+
 fn encode_seg(s: &str) -> String {
-    s.to_string()
+    percent_encoding::utf8_percent_encode(s, SEG).to_string()
 }
+
+/// Encode each path segment, keeping `/` separators.
 fn encode_path(p: &str) -> String {
-    p.to_string()
+    p.split('/').map(encode_seg).collect::<Vec<_>>().join("/")
 }
 
 /// GitHub Contents API URL. Unlike raw.githubusercontent.com (Fastly-cached ~5min),
@@ -365,6 +390,14 @@ pub fn git_host_token_has(app: AppHandle, host: String) -> Result<bool, String> 
     Ok(host_token(&data_dir(&app)?, &host).is_some())
 }
 
+/// Hand a stored host token to a plugin. Plugins already run with full access
+/// to the app (see the PluginsPanel warning), so browsing logic can live in
+/// plugins while tokens are entered once at install time.
+#[tauri::command]
+pub fn git_host_token_get(app: AppHandle, host: String) -> Result<Option<String>, String> {
+    Ok(host_token(&data_dir(&app)?, &host))
+}
+
 #[tauri::command]
 pub fn plugin_storage_get(app: AppHandle, key: String) -> Result<Option<String>, String> {
     let path = plugin_data_dir(&app)?.join(format!("{}.json", safe_key(&key)));
@@ -458,6 +491,19 @@ mod tests {
         let s = safe_key("../../etc/passwd");
         assert!(!s.contains('/'));
         assert!(!s.contains("..") || !s.contains('/'));
+    }
+
+    #[test]
+    fn encodes_cyrillic_and_spaces_in_paths() {
+        assert_eq!(
+            encode_path("KLIA-11871 недавние поиски/GET_v4_adverts.json"),
+            "KLIA-11871%20%D0%BD%D0%B5%D0%B4%D0%B0%D0%B2%D0%BD%D0%B8%D0%B5%20%D0%BF%D0%BE%D0%B8%D1%81%D0%BA%D0%B8/GET_v4_adverts.json"
+        );
+        assert_eq!(encode_seg("KL-31600-kaspi-flow"), "KL-31600-kaspi-flow");
+        assert_eq!(
+            encode_seg("ветка/с слэшем"),
+            "%D0%B2%D0%B5%D1%82%D0%BA%D0%B0%2F%D1%81%20%D1%81%D0%BB%D1%8D%D1%88%D0%B5%D0%BC"
+        );
     }
 
     #[test]
