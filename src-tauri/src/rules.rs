@@ -63,6 +63,19 @@ pub fn expand_pattern(pattern: &str, env: &serde_json::Value) -> String {
     out
 }
 
+/// Пересекаются ли две фазы (для запрета двух включённых правил на один паттерн).
+/// `both` конфликтует с request/response/both; `handler` — только с handler.
+pub fn phases_conflict(a: Phase, b: Phase) -> bool {
+    use Phase::*;
+    match (a, b) {
+        (Handler, Handler) => true,
+        (Handler, _) | (_, Handler) => false,
+        (Both, _) | (_, Both) => true,
+        (Request, Request) | (Response, Response) => true,
+        (Request, Response) | (Response, Request) => false,
+    }
+}
+
 /// Убирает ведущий `scheme://` из паттерна: цели прокси — это `host/path` без
 /// схемы, поэтому вставленный целиком URL (`https://host/path`) иначе никогда бы
 /// не совпал. `*/path` не считается схемой и не трогается.
@@ -187,6 +200,20 @@ mod tests {
         assert!(glob_match_env("app.example.com/*", "app.example.com/x", &env));
         // A wildcard scheme segment is not treated as a scheme (not stripped).
         assert!(glob_match_env("*/v1/*", "x/v1/y", &env));
+    }
+
+    #[test]
+    fn phases_conflict_matrix() {
+        use Phase::*;
+        assert!(phases_conflict(Handler, Handler));
+        assert!(!phases_conflict(Handler, Request));
+        assert!(phases_conflict(Request, Request));
+        assert!(phases_conflict(Response, Response));
+        assert!(!phases_conflict(Request, Response));
+        assert!(phases_conflict(Both, Request));
+        assert!(phases_conflict(Both, Response));
+        assert!(phases_conflict(Both, Both));
+        assert!(!phases_conflict(Both, Handler));
     }
 
     #[test]

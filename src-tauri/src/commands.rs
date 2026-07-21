@@ -189,6 +189,21 @@ pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule
 pub fn save_rule(app: AppHandle, rule: Rule, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
     let dir = rules_dir(&app)?;
     let mut rules = rules::load_rules(&dir).map_err(|e| e.to_string())?;
+    // Hard validation: no two enabled rules with the same scope + pattern + overlapping phase.
+    if rule.enabled {
+        if let Some(other) = rules.iter().find(|r| {
+            r.id != rule.id
+                && r.enabled
+                && r.project_id == rule.project_id
+                && r.pattern == rule.pattern
+                && rules::phases_conflict(r.phase, rule.phase)
+        }) {
+            return Err(format!(
+                "Conflicts with enabled rule “{}” — same pattern and phase. Disable it first.",
+                other.name
+            ));
+        }
+    }
     if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
         *existing = rule;
     } else {
@@ -229,6 +244,23 @@ pub fn save_breakpoint(
 ) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
     let dir = rules_dir(&app)?;
     let mut bps = crate::breakpoints::load_breakpoints(&dir).map_err(|e| e.to_string())?;
+    // Hard validation: no two enabled breakpoints with the same scope + pattern +
+    // method that also pause the same phase (both request, or both response).
+    if breakpoint.enabled {
+        if let Some(other) = bps.iter().find(|b| {
+            b.id != breakpoint.id
+                && b.enabled
+                && b.project_id == breakpoint.project_id
+                && b.pattern == breakpoint.pattern
+                && b.method == breakpoint.method
+                && ((b.on_request && breakpoint.on_request) || (b.on_response && breakpoint.on_response))
+        }) {
+            return Err(format!(
+                "Conflicts with enabled breakpoint “{}” — same pattern, method and phase. Disable it first.",
+                other.name
+            ));
+        }
+    }
     if let Some(existing) = bps.iter_mut().find(|b| b.id == breakpoint.id) {
         *existing = breakpoint;
     } else {

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { useToast } from "./toast";
 
 export type Phase = "request" | "response" | "both" | "handler";
 
@@ -42,8 +43,13 @@ export const useRules = create<RulesState>((set) => ({
   select: (id) => set({ selectedId: id, editingLibrary: false }),
   editLibrary: () => set({ editingLibrary: true, selectedId: null }),
   upsert: async (rule) => {
-    const rules = await invoke<Rule[]>("save_rule", { rule });
-    set({ rules, selectedId: rule.id, editingLibrary: false });
+    try {
+      const rules = await invoke<Rule[]>("save_rule", { rule });
+      set({ rules, selectedId: rule.id, editingLibrary: false });
+    } catch (e) {
+      // Backend rejects conflicts (e.g. two enabled rules on the same params).
+      useToast.getState().show(String(e));
+    }
   },
   remove: async (id) => {
     const rules = await invoke<Rule[]>("delete_rule", { id });
