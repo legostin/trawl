@@ -221,22 +221,23 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
 
       {/* Panels stay mounted (hidden when inactive) so each editor keeps its
           state — notably the body format selector — across tab switches. */}
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col">
         {isRequest && (
-          <div className={cn(active !== "query" && "hidden")}>
+          <div className={cn("h-full overflow-auto p-3", active !== "query" && "hidden")}>
             <KeyValueEditor rows={queryRows} onChange={setQueryRows} addLabel="+ Add parameter" />
           </div>
         )}
-        <div className={cn(active !== "headers" && "hidden")}>
+        <div className={cn("h-full overflow-auto p-3", active !== "headers" && "hidden")}>
           <KeyValueEditor
             rows={isRequest ? reqHeaderRows : respHeaderRows}
             onChange={isRequest ? setReqHeaderRows : setRespHeaderRows}
             addLabel="+ Add header"
           />
         </div>
-        <div className={cn(active !== "body" && "hidden")}>
+        <div className={cn("flex h-full flex-col p-3", active !== "body" && "hidden")}>
           {isRequest ? (
             <BodyEditor
+              fill
               initialBody={reqBody}
               initialContentType={ctOf(reqHeaderRows)}
               onChange={({ body, contentType }) => {
@@ -246,6 +247,7 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
             />
           ) : (
             <BodyEditor
+              fill
               initialBody={respBody}
               initialContentType={ctOf(respHeaderRows)}
               allowFile
@@ -258,7 +260,7 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
           )}
         </div>
         {isRequest && (
-          <div className={cn("flex flex-col gap-3", active !== "response" && "hidden")}>
+          <div className={cn("flex h-full flex-col gap-3 overflow-auto p-3", active !== "response" && "hidden")}>
             <div className="text-[11px] text-muted-foreground">
               Used by <span className="font-medium text-foreground">Respond locally</span> — returned to
               the client without contacting the server.
