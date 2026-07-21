@@ -4,8 +4,10 @@ import { useFlows } from "../store";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { TabBar } from "./ui/tabs";
+import { BodyEditor } from "./BodyEditor";
 import { bodyToText } from "@/lib/body";
 import { queryParams } from "@/lib/params";
+import { cn } from "@/lib/utils";
 import type { Flow, Header } from "@/types";
 
 type Row = { key: string; value: string };
@@ -16,6 +18,14 @@ function toRows(pairs: Header[]): Row[] {
 }
 function toPairs(rows: Row[]): [string, string][] {
   return rows.filter((r) => r.key.trim() !== "").map((r) => [r.key, r.value]);
+}
+function ctOf(rows: Row[]): string {
+  return rows.find((r) => r.key.toLowerCase() === "content-type")?.value ?? "";
+}
+function withContentType(rows: Row[], value: string): Row[] {
+  const idx = rows.findIndex((r) => r.key.toLowerCase() === "content-type");
+  if (idx === -1) return [...rows, { key: "content-type", value }];
+  return rows.map((r, j) => (j === idx ? { ...r, value } : r));
 }
 
 /** Editable key/value rows, shared by the Headers, Query and Response-headers tabs. */
@@ -189,7 +199,7 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
               size="sm"
               variant="outline"
               disabled={busy}
-              title="Return the Response tab to the client without contacting the server"
+              title="Return the Response tab straight to the client. The real server is never contacted, and none of your rules (request / handler / response) run on it."
               onClick={() => void act("respond")}
             >
               <Reply />
@@ -205,27 +215,44 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
 
       <TabBar<Tab> value={active} onChange={setTab} tabs={tabs} />
 
+      {/* Panels stay mounted (hidden when inactive) so each editor keeps its
+          state — notably the body format selector — across tab switches. */}
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {active === "query" && (
-          <KeyValueEditor rows={queryRows} onChange={setQueryRows} addLabel="+ Add parameter" />
+        {isRequest && (
+          <div className={cn(active !== "query" && "hidden")}>
+            <KeyValueEditor rows={queryRows} onChange={setQueryRows} addLabel="+ Add parameter" />
+          </div>
         )}
-        {active === "headers" && (
+        <div className={cn(active !== "headers" && "hidden")}>
           <KeyValueEditor
             rows={isRequest ? reqHeaderRows : respHeaderRows}
             onChange={isRequest ? setReqHeaderRows : setRespHeaderRows}
             addLabel="+ Add header"
           />
-        )}
-        {active === "body" && (
-          <textarea
-            value={isRequest ? reqBody : respBody}
-            onChange={(e) => (isRequest ? setReqBody(e.target.value) : setRespBody(e.target.value))}
-            spellCheck={false}
-            className="h-72 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
-          />
-        )}
-        {active === "response" && (
-          <div className="flex flex-col gap-3">
+        </div>
+        <div className={cn(active !== "body" && "hidden")}>
+          {isRequest ? (
+            <BodyEditor
+              initialBody={reqBody}
+              initialContentType={ctOf(reqHeaderRows)}
+              onChange={({ body, contentType }) => {
+                setReqBody(body);
+                if (contentType) setReqHeaderRows((rows) => withContentType(rows, contentType));
+              }}
+            />
+          ) : (
+            <BodyEditor
+              initialBody={respBody}
+              initialContentType={ctOf(respHeaderRows)}
+              onChange={({ body, contentType }) => {
+                setRespBody(body);
+                if (contentType) setRespHeaderRows((rows) => withContentType(rows, contentType));
+              }}
+            />
+          )}
+        </div>
+        {isRequest && (
+          <div className={cn("flex flex-col gap-3", active !== "response" && "hidden")}>
             <div className="text-[11px] text-muted-foreground">
               Used by <span className="font-medium text-foreground">Respond locally</span> — returned to
               the client without contacting the server.
@@ -252,11 +279,13 @@ export function InterceptEditor({ flow }: { flow: Flow }) {
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Response body
               </div>
-              <textarea
-                value={respBody}
-                onChange={(e) => setRespBody(e.target.value)}
-                spellCheck={false}
-                className="h-56 w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs"
+              <BodyEditor
+                initialBody={respBody}
+                initialContentType={ctOf(respHeaderRows)}
+                onChange={({ body, contentType }) => {
+                  setRespBody(body);
+                  if (contentType) setRespHeaderRows((rows) => withContentType(rows, contentType));
+                }}
               />
             </div>
           </div>
