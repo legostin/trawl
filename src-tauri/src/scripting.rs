@@ -138,6 +138,7 @@ fn build_source(prelude: &str, script: &str) -> String {
     ctx.__action = "continue";
     ctx.mock = function(resp) {{ ctx.__action = "mock"; ctx.__mock = resp; }};
     ctx.abort = function(reason) {{ ctx.__action = "abort"; ctx.__reason = reason || "aborted"; }};
+    ctx.breakpoint = function() {{ ctx.__action = "breakpoint"; }};
     if (!ctx.env) ctx.env = {{}};
     const request = ctx.request;
     const response = ctx.response;
@@ -361,6 +362,12 @@ mod tests {
         .await;
         assert_eq!(res.action, "continue");
         assert_eq!(res.request.unwrap()["__found"], "application/json");
+    }
+
+    #[tokio::test]
+    async fn script_can_request_breakpoint() {
+        let res = run("ctx.breakpoint();", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "breakpoint");
     }
 
     #[tokio::test]
