@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use http_body_util::{BodyExt, Full};
@@ -28,6 +29,31 @@ pub type EmitFn = Arc<dyn Fn(&str, &Flow) + Send + Sync>;
 pub type SharedRules = Arc<RwLock<Vec<Rule>>>;
 pub type SharedLibrary = Arc<RwLock<String>>;
 pub type SharedProject = Arc<RwLock<Option<Project>>>;
+pub type SharedBreakpoints = Arc<RwLock<Vec<crate::breakpoints::Breakpoint>>>;
+pub type SharedIntercept = Arc<RwLock<bool>>;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum BpPhase {
+    Request,
+    Response,
+}
+
+pub enum Resolution {
+    Execute {
+        method: Option<String>,
+        status: Option<u16>,
+        headers: Vec<(String, String)>,
+        body: String,
+    },
+    Abort(String),
+    Respond {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: String,
+    },
+}
+
+pub type BreakpointRegistry = Arc<Mutex<HashMap<(u64, BpPhase), oneshot::Sender<Resolution>>>>;
 
 #[derive(Clone)]
 struct CaptureHandler {
@@ -42,6 +68,9 @@ struct CaptureHandler {
     active_project: SharedProject,
     data_dir: PathBuf,
     db: Option<DbHandle>,
+    breakpoints: SharedBreakpoints,
+    intercept: SharedIntercept,
+    pending: BreakpointRegistry,
 }
 
 impl CaptureHandler {
@@ -113,6 +142,7 @@ enum Directive {
     Continue,
     Mock(Value),
     Abort(String),
+    Breakpoint,
 }
 
 fn build_mock_response(spec: &Value) -> Response<Body> {
@@ -207,6 +237,34 @@ impl CaptureHandler {
             })
             .cloned()
             .collect()
+    }
+
+    /// Does any enabled, in-scope breakpoint match this flow in `phase`?
+    fn breakpoint_matches(&self, phase: BpPhase, targets: &[String], method: &str) -> bool {
+        if !*self.intercept.read().unwrap() {
+            return false;
+        }
+        let scope = self.active_scope();
+        self.breakpoints.read().unwrap().iter().any(|b| {
+            b.enabled
+                && b.project_id == scope
+                && match phase {
+                    BpPhase::Request => b.on_request,
+                    BpPhase::Response => b.on_response,
+                }
+                && b.method
+                    .as_deref()
+                    .map_or(true, |m| m == "*" || m.eq_ignore_ascii_case(method))
+                && targets.iter().any(|t| b.matches_target(t))
+        })
+    }
+
+    /// Register a pending breakpoint and await the UI's resolution.
+    /// Returns None if the sender was dropped (proxy stopped) — caller continues unmodified.
+    async fn await_resolution(&self, id: u64, phase: BpPhase) -> Option<Resolution> {
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert((id, phase), tx);
+        rx.await.ok()
     }
 
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
@@ -522,13 +580,26 @@ impl HttpHandler for CaptureHandler {
                         applied.push(rule.name.clone());
                         break;
                     }
+                    "breakpoint" => {
+                        if let Some(rv) = &res.request {
+                            if let Some(h) = rv.get("headers") {
+                                work_headers = json_to_headers(h);
+                            }
+                            if let Some(b) = rv.get("body").and_then(|b| b.as_str()) {
+                                work_body = b.to_string();
+                            }
+                        }
+                        directive = Directive::Breakpoint;
+                        applied.push(rule.name.clone());
+                        break;
+                    }
                     _ => script_error = res.error,
                 }
             }
             self.apply_env(&env);
         }
 
-        let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
+        let mut override_method: Option<String> = None;
         let stored_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { display_body };
         let mut flow = Flow::new_request(
             id,
@@ -542,8 +613,59 @@ impl HttpHandler for CaptureHandler {
         flow.error = script_error;
         self.store.insert(flow.clone());
         (self.emit)("flow-added", &flow);
-        self.persist(&flow);
         self.current_id = Some(id);
+
+        // Pause on a matched UI breakpoint or a script ctx.breakpoint().
+        let want_break = matches!(directive, Directive::Breakpoint)
+            || self.breakpoint_matches(BpPhase::Request, &targets, &parts.method.to_string());
+        if !want_break {
+            self.persist(&flow);
+        } else {
+            self.store.update(id, |f| {
+                f.state = FlowState::Paused;
+                f.paused_phase = Some("request".into());
+            });
+            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                (self.emit)("flow-paused", &u);
+            }
+            match self.await_resolution(id, BpPhase::Request).await {
+                Some(Resolution::Execute { method, headers, body, .. }) => {
+                    if let Some(m) = method {
+                        override_method = Some(m);
+                    }
+                    work_headers = headers;
+                    if is_text {
+                        work_body = body;
+                    }
+                    directive = Directive::Continue;
+                }
+                Some(Resolution::Abort(reason)) => directive = Directive::Abort(reason),
+                Some(Resolution::Respond { status, headers, body }) => {
+                    directive = Directive::Mock(json!({
+                        "status": status,
+                        "headers": headers_to_json(&headers),
+                        "body": body,
+                    }));
+                }
+                None => directive = Directive::Continue,
+            }
+            self.store.update(id, |f| {
+                f.state = FlowState::Pending;
+                f.paused_phase = None;
+                f.request.headers = work_headers.clone();
+                if is_text {
+                    f.request.body = work_body.clone().into_bytes();
+                }
+                if let Some(m) = &override_method {
+                    f.method = m.clone();
+                }
+            });
+            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                (self.emit)("flow-updated", &u);
+            }
+        }
+
+        let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
 
         match directive {
             Directive::Mock(spec) => {
@@ -561,8 +683,13 @@ impl HttpHandler for CaptureHandler {
                 }
                 RequestOrResponse::Response(build_abort_response(&reason))
             }
-            Directive::Continue => {
+            Directive::Breakpoint | Directive::Continue => {
                 let mut new_parts = parts;
+                if let Some(m) = override_method {
+                    if let Ok(method) = hudsucker::hyper::Method::from_bytes(m.as_bytes()) {
+                        new_parts.method = method;
+                    }
+                }
                 new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
                 Request::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body)))).into()
             }
@@ -609,6 +736,7 @@ impl HttpHandler for CaptureHandler {
         let mut work_body = text_of(&display_body, is_text);
         let mut applied: Vec<String> = Vec::new();
         let mut script_error: Option<String> = None;
+        let mut rule_break = false;
         let mut env = self.active_env();
         if !rules.is_empty() {
             let prelude = self.library.read().unwrap().clone();
@@ -642,10 +770,73 @@ impl HttpHandler for CaptureHandler {
                         }
                         applied.push(rule.name.clone());
                     }
+                    "breakpoint" => {
+                        if let Some(rv) = &res.response {
+                            if let Some(s) = rv.get("status").and_then(|s| s.as_u64()) {
+                                work_status = s as u16;
+                            }
+                            if let Some(h) = rv.get("headers") {
+                                work_headers = json_to_headers(h);
+                            }
+                            if let Some(b) = rv.get("body").and_then(|b| b.as_str()) {
+                                work_body = b.to_string();
+                            }
+                        }
+                        rule_break = true;
+                        applied.push(rule.name.clone());
+                    }
                     _ => script_error = res.error,
                 }
             }
             self.apply_env(&env);
+        }
+
+        // Pause on a matched response breakpoint (UI-defined) or a response rule's
+        // ctx.breakpoint(). The client keeps waiting until the UI resolves it.
+        let want_break = rule_break || self.breakpoint_matches(BpPhase::Response, &targets, "");
+        if want_break {
+            self.store.update(id, |f| {
+                f.state = FlowState::Paused;
+                f.paused_phase = Some("response".into());
+                f.response = Some(ResponseMessage {
+                    status: work_status,
+                    headers: work_headers.clone(),
+                    body: if is_text { work_body.clone().into_bytes() } else { display_body.clone() },
+                    body_is_text: is_text,
+                });
+            });
+            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                (self.emit)("flow-paused", &u);
+            }
+            match self.await_resolution(id, BpPhase::Response).await {
+                Some(Resolution::Execute { status, headers, body, .. }) => {
+                    if let Some(sc) = status {
+                        work_status = sc;
+                    }
+                    work_headers = headers;
+                    if is_text {
+                        work_body = body;
+                    }
+                }
+                Some(Resolution::Abort(reason)) => {
+                    self.store.update(id, |f| {
+                        f.state = FlowState::Error;
+                        f.paused_phase = None;
+                        f.error = Some(reason.clone());
+                    });
+                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                        (self.emit)("flow-updated", &u);
+                        self.persist(&u);
+                    }
+                    return build_abort_response(&reason);
+                }
+                // Respond has no meaning in the response phase; treat as continue.
+                Some(Resolution::Respond { .. }) | None => {}
+            }
+            self.store.update(id, |f| {
+                f.state = FlowState::Pending;
+                f.paused_phase = None;
+            });
         }
 
         let out_body: Vec<u8> = if is_text { work_body.clone().into_bytes() } else { bytes.clone() };
@@ -708,6 +899,9 @@ pub async fn start(
     active_project: SharedProject,
     data_dir: PathBuf,
     db: Option<DbHandle>,
+    breakpoints: SharedBreakpoints,
+    intercept: SharedIntercept,
+    pending: BreakpointRegistry,
 ) -> Result<ProxyHandle> {
     let ca = load_or_create_ca(&ca_dir)?;
     let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
@@ -728,6 +922,9 @@ pub async fn start(
         active_project,
         data_dir,
         db,
+        breakpoints,
+        intercept,
+        pending,
     };
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -759,13 +956,39 @@ mod tests {
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::Duration;
 
-    fn scripting(rules: Vec<Rule>) -> (ScriptClient, SharedRules, SharedLibrary, SharedProject) {
+    fn scripting(
+        rules: Vec<Rule>,
+    ) -> (
+        ScriptClient,
+        SharedRules,
+        SharedLibrary,
+        SharedProject,
+        SharedBreakpoints,
+        SharedIntercept,
+        BreakpointRegistry,
+    ) {
         (
             spawn_engine(Duration::from_millis(500)),
             Arc::new(RwLock::new(rules)),
             Arc::new(RwLock::new(String::new())),
             Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(vec![])),
+            Arc::new(RwLock::new(true)),
+            Arc::new(Mutex::new(std::collections::HashMap::new())),
         )
+    }
+
+    fn breakpoint(pattern: &str, on_request: bool, on_response: bool) -> crate::breakpoints::Breakpoint {
+        crate::breakpoints::Breakpoint {
+            id: "b".into(),
+            name: "b".into(),
+            enabled: true,
+            pattern: pattern.into(),
+            method: None,
+            on_request,
+            on_response,
+            project_id: None,
+        }
     }
 
     fn temp_ca() -> PathBuf {
@@ -836,8 +1059,8 @@ mod tests {
         let ca_dir =
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l, p) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -871,8 +1094,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -926,8 +1149,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -963,8 +1186,8 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
-        let (s, r, l, p) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1043,9 +1266,9 @@ mod tests {
             Phase::Request,
             "request.headers['X-Debug'] = 'yes';",
         )];
-        let (s, r, l, p) = scripting(rules);
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1084,9 +1307,9 @@ mod tests {
             Phase::Request,
             r#"ctx.mock({ status: 201, body: 'mocked!' });"#,
         )];
-        let (s, r, l, p) = scripting(rules);
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1098,6 +1321,152 @@ mod tests {
         let resp = client.get("http://127.0.0.1:1/x").send().await.unwrap();
         assert_eq!(resp.status(), 201);
         assert_eq!(resp.text().await.unwrap(), "mocked!");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A request breakpoint holds the flow; resolving Execute with an edited header
+    // sends the edit to the upstream echo server.
+    #[tokio::test]
+    async fn request_breakpoint_execute_applies_edit() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        // Resolver task: wait until the flow is paused, then Execute with an edit.
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                let paused = store2.all().into_iter().find(|f| f.state == FlowState::Paused);
+                if let Some(f) = paused {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None,
+                            status: None,
+                            headers: vec![("X-Debug".into(), "edited".into())],
+                            body: String::new(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let echoed = client.get(format!("http://{upstream_addr}/api"))
+            .send().await.unwrap().text().await.unwrap();
+        assert!(echoed.to_lowercase().contains("x-debug: edited"), "edit not applied: {echoed}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Abort resolution short-circuits with 502.
+    #[tokio::test]
+    async fn request_breakpoint_abort_returns_502() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
+                        let _ = tx.send(Resolution::Abort("nope".into()));
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let status = client.get(format!("http://{upstream_addr}/api"))
+            .send().await.unwrap().status();
+        assert_eq!(status, 502);
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A response breakpoint edits status + body before the client receives it.
+    #[tokio::test]
+    async fn response_breakpoint_execute_edits_response() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 1024];
+                    let _ = sock.read(&mut b).await;
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\norig").await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.paused_phase.as_deref() == Some("response")) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None,
+                            status: Some(418),
+                            headers: vec![("Content-Type".into(), "text/plain".into())],
+                            body: "edited".into(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
+        assert_eq!(resp.status(), 418);
+        assert_eq!(resp.text().await.unwrap(), "edited");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
@@ -1130,9 +1499,9 @@ mod tests {
             Phase::Handler,
             "const r = send(request); r.body = r.body.toUpperCase(); return r;",
         )];
-        let (s, r, l, p) = scripting(rules);
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1191,9 +1560,9 @@ mod tests {
             Phase::Handler,
             "return send(request);",
         )];
-        let (s, r, l, p) = scripting(rules);
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1263,10 +1632,10 @@ mod tests {
         let upstream_addr = echo_upstream().await;
         let store = FlowStore::new(10);
         let emit: EmitFn = Arc::new(|_e, _f| {});
-        let (s, r, l, p) = scripting(vec![]);
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1300,10 +1669,10 @@ mod tests {
         let mut proj_rule = rule("proj-rule", "127.0.0.1/*", Phase::Request, "request.headers['X-Proj'] = '1';");
         proj_rule.project_id = Some("proj".into());
         let global_rule = rule("global-rule", "127.0.0.1/*", Phase::Request, "request.headers['X-Global'] = '1';");
-        let (s, r, l, p) = scripting(vec![proj_rule, global_rule]);
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![proj_rule, global_rule]);
         *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1366,9 +1735,9 @@ mod tests {
 
         let store = FlowStore::new(10);
         let emit: EmitFn = Arc::new(|_e, _f| {});
-        let (s, r, l, p) = scripting(vec![]); // без правил — обычный путь
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None)
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending)
             .await
             .unwrap();
         let bound = handle.local_addr();

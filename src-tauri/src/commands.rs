@@ -25,6 +25,12 @@ pub struct AppState {
     pub scripts: crate::scripting::ScriptClient,
     /// Persistent flow DB (SQLite). Initialized once in the Tauri setup hook.
     pub db: OnceLock<DbHandle>,
+    /// Live breakpoint definitions, shared with the proxy handler.
+    pub breakpoints: Arc<RwLock<Vec<crate::breakpoints::Breakpoint>>>,
+    /// Master intercept switch (enables/disables all breakpoints).
+    pub intercept: Arc<RwLock<bool>>,
+    /// Flows currently held on a breakpoint, keyed by (flow id, phase).
+    pub pending_breakpoints: crate::proxy::BreakpointRegistry,
 }
 
 impl AppState {
@@ -37,6 +43,9 @@ impl AppState {
             active_project: Arc::new(RwLock::new(None)),
             scripts: crate::scripting::spawn_engine(std::time::Duration::from_secs(1)),
             db: OnceLock::new(),
+            breakpoints: Arc::new(RwLock::new(Vec::new())),
+            intercept: Arc::new(RwLock::new(true)),
+            pending_breakpoints: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -93,8 +102,10 @@ pub async fn start_proxy(
     let rdir = rules_dir(&app)?;
     let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
     let loaded_library = rules::load_library(&rdir).map_err(|e| e.to_string())?;
+    let loaded_bps = crate::breakpoints::load_breakpoints(&rdir).map_err(|e| e.to_string())?;
     *state.rules.write().unwrap() = loaded_rules;
     *state.library.write().unwrap() = loaded_library;
+    *state.breakpoints.write().unwrap() = loaded_bps;
     let pfile = projects::load_projects(&data_dir(&app)?).map_err(|e| e.to_string())?;
     *state.active_project.write().unwrap() = pfile
         .active_id
@@ -111,6 +122,9 @@ pub async fn start_proxy(
         state.active_project.clone(),
         data_dir(&app)?,
         state.db.get().cloned(),
+        state.breakpoints.clone(),
+        state.intercept.clone(),
+        state.pending_breakpoints.clone(),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -193,6 +207,114 @@ pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Re
     rules::save_rules(&dir, &rules).map_err(|e| e.to_string())?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
+}
+
+// ── Брейкпоинты ──
+
+#[tauri::command]
+pub fn list_breakpoints(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
+    let loaded = crate::breakpoints::load_breakpoints(&rules_dir(&app)?).map_err(|e| e.to_string())?;
+    *state.breakpoints.write().unwrap() = loaded.clone();
+    Ok(loaded)
+}
+
+#[tauri::command]
+pub fn save_breakpoint(
+    app: AppHandle,
+    breakpoint: crate::breakpoints::Breakpoint,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
+    let dir = rules_dir(&app)?;
+    let mut bps = crate::breakpoints::load_breakpoints(&dir).map_err(|e| e.to_string())?;
+    if let Some(existing) = bps.iter_mut().find(|b| b.id == breakpoint.id) {
+        *existing = breakpoint;
+    } else {
+        bps.push(breakpoint);
+    }
+    crate::breakpoints::save_breakpoints(&dir, &bps).map_err(|e| e.to_string())?;
+    *state.breakpoints.write().unwrap() = bps.clone();
+    Ok(bps)
+}
+
+#[tauri::command]
+pub fn delete_breakpoint(
+    app: AppHandle,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
+    let dir = rules_dir(&app)?;
+    let mut bps = crate::breakpoints::load_breakpoints(&dir).map_err(|e| e.to_string())?;
+    bps.retain(|b| b.id != id);
+    crate::breakpoints::save_breakpoints(&dir, &bps).map_err(|e| e.to_string())?;
+    *state.breakpoints.write().unwrap() = bps.clone();
+    Ok(bps)
+}
+
+#[tauri::command]
+pub fn set_intercept(enabled: bool, state: State<'_, AppState>) {
+    *state.intercept.write().unwrap() = enabled;
+}
+
+#[tauri::command]
+pub fn get_intercept(state: State<'_, AppState>) -> bool {
+    *state.intercept.read().unwrap()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedPayload {
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub status: Option<u16>,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[tauri::command]
+pub fn resolve_breakpoint(
+    id: u64,
+    phase: String,
+    action: String,
+    edited: EditedPayload,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use crate::proxy::{BpPhase, Resolution};
+    let bp_phase = match phase.as_str() {
+        "request" => BpPhase::Request,
+        "response" => BpPhase::Response,
+        _ => return Err("bad phase".into()),
+    };
+    let resolution = match action.as_str() {
+        "execute" => Resolution::Execute {
+            method: edited.method,
+            status: edited.status,
+            headers: edited.headers,
+            body: edited.body,
+        },
+        "abort" => Resolution::Abort(edited.reason.unwrap_or_else(|| "aborted".into())),
+        "respond" => Resolution::Respond {
+            status: edited.status.unwrap_or(200),
+            headers: edited.headers,
+            body: edited.body,
+        },
+        _ => return Err("bad action".into()),
+    };
+    let tx = state.pending_breakpoints.lock().unwrap().remove(&(id, bp_phase));
+    match tx {
+        Some(tx) => {
+            let _ = tx.send(resolution);
+            Ok(())
+        }
+        None => Err("no pending breakpoint".into()),
+    }
 }
 
 #[tauri::command]
@@ -350,4 +472,28 @@ pub async fn send_request(
     tokio::task::spawn_blocking(move || crate::httpsend::send_http(&request, via_proxy))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::proxy::{BpPhase, BreakpointRegistry, Resolution};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn resolve_sends_into_registry() {
+        let pending: BreakpointRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel::<Resolution>();
+        pending.lock().unwrap().insert((7, BpPhase::Request), tx);
+
+        let taken = pending.lock().unwrap().remove(&(7, BpPhase::Request));
+        assert!(taken.is_some());
+        let _ = taken.unwrap().send(Resolution::Abort("x".into()));
+
+        match rx.await.unwrap() {
+            Resolution::Abort(r) => assert_eq!(r, "x"),
+            _ => panic!("wrong resolution"),
+        }
+    }
 }
