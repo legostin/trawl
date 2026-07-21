@@ -41,10 +41,17 @@ pub struct Plugin {
     pub author: String,
     /// "owner/repo".
     pub repo: String,
+    /// Git host, e.g. "github.com" or "github.example.org".
+    #[serde(default = "default_host")]
+    pub host: String,
     /// Git ref (tag/branch/commit) the bundle was fetched from.
     #[serde(rename = "ref")]
     pub git_ref: String,
     pub enabled: bool,
+}
+
+fn default_host() -> String {
+    "github.com".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -73,12 +80,14 @@ pub fn save_plugins(data_dir: &Path, file: &PluginsFile) -> Result<()> {
     Ok(())
 }
 
-/// Normalize a user-entered repo reference into `("owner/repo", "ref")`.
-/// Accepts `owner/repo`, `owner/repo@ref`, full GitHub URLs, and `.../tree/<ref>`.
-/// An explicit `reference` argument wins; otherwise `@ref`/`tree/<ref>`; else `main`.
-pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String) {
+/// Normalize a user-entered repo reference into `(host, "owner/repo", "ref")`.
+/// Accepts `owner/repo`, `owner/repo@ref`, full URLs (github.com or a GHE host),
+/// and `.../tree/<ref>`. A leading segment containing a dot is treated as a host;
+/// otherwise the host defaults to github.com. An explicit `reference` argument
+/// wins; otherwise `@ref`/`tree/<ref>`; else `main`.
+pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String, String) {
     let mut s = input.trim();
-    for p in ["https://", "http://", "www.", "github.com/"] {
+    for p in ["https://", "http://", "www."] {
         s = s.trim_start_matches(p);
     }
     let (repo_part, ref_at) = match s.split_once('@') {
@@ -86,7 +95,12 @@ pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String) 
         None => (s, None),
     };
     let cleaned = repo_part.trim_matches('/');
-    let parts: Vec<&str> = cleaned.split('/').filter(|p| !p.is_empty()).collect();
+    let mut parts: Vec<&str> = cleaned.split('/').filter(|p| !p.is_empty()).collect();
+    let host = if parts.first().is_some_and(|p| p.contains('.')) {
+        parts.remove(0).to_string()
+    } else {
+        "github.com".to_string()
+    };
     let mut tree_ref = None;
     let repo = if parts.len() >= 4 && parts[2] == "tree" {
         tree_ref = Some(parts[3].to_string());
@@ -94,7 +108,7 @@ pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String) 
     } else if parts.len() >= 2 {
         format!("{}/{}", parts[0], parts[1])
     } else {
-        cleaned.to_string()
+        parts.join("/")
     };
     let repo = repo.trim_end_matches(".git").to_string();
     let git_ref = reference
@@ -103,16 +117,39 @@ pub fn normalize_repo(input: &str, reference: Option<&str>) -> (String, String) 
         .or(tree_ref)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
-    (repo, git_ref)
+    (host, repo, git_ref)
+}
+
+/// API base for a host: github.com uses api.github.com, GHE uses `/api/v3`.
+pub fn api_url(host: &str, repo: &str, path: &str) -> String {
+    if host == "github.com" {
+        format!("https://api.github.com/repos/{repo}/{path}")
+    } else {
+        format!("https://{host}/api/v3/repos/{repo}/{path}")
+    }
+}
+
+// Placeholder encoders until the git-browse task replaces them with real
+// percent-encoding (paths in the contracts repo contain spaces and Cyrillic).
+fn encode_seg(s: &str) -> String {
+    s.to_string()
+}
+fn encode_path(p: &str) -> String {
+    p.to_string()
 }
 
 /// GitHub Contents API URL. Unlike raw.githubusercontent.com (Fastly-cached ~5min),
 /// the API returns fresh content, so freshly-pushed plugin versions are seen at once.
 /// Files must be ≤ 1 MB (plugin bundles are tiny).
-fn api_content_url(repo: &str, git_ref: &str, file: &str) -> String {
-    format!(
-        "https://api.github.com/repos/{repo}/contents/{}?ref={git_ref}",
-        file.trim_start_matches('/')
+fn api_content_url(host: &str, repo: &str, git_ref: &str, file: &str) -> String {
+    api_url(
+        host,
+        repo,
+        &format!(
+            "contents/{}?ref={}",
+            encode_path(file.trim_start_matches('/')),
+            encode_seg(git_ref)
+        ),
     )
 }
 
@@ -132,9 +169,18 @@ fn http_get_text(url: &str) -> Result<String, String> {
     resp.text().map_err(|e| e.to_string())
 }
 
-fn fetch_manifest_blocking(repo: &str, git_ref: &str) -> Result<PluginManifest, String> {
-    let text = http_get_text(&api_content_url(repo, git_ref, "trawl-plugin.json"))?;
+fn fetch_manifest_blocking(host: &str, repo: &str, git_ref: &str) -> Result<PluginManifest, String> {
+    let text = http_get_text(&api_content_url(host, repo, git_ref, "trawl-plugin.json"))?;
     serde_json::from_str::<PluginManifest>(&text).map_err(|e| format!("invalid manifest: {e}"))
+}
+
+/// Resolve the effective host: one parsed out of the repo input wins; otherwise
+/// an explicit `host` argument (stored plugin records pass it); else github.com.
+fn effective_host(parsed: String, explicit: Option<String>) -> String {
+    if parsed != "github.com" {
+        return parsed;
+    }
+    explicit.filter(|s| !s.trim().is_empty()).unwrap_or(parsed)
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -147,9 +193,11 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub async fn fetch_plugin_manifest(
     repo: String,
     reference: Option<String>,
+    host: Option<String>,
 ) -> Result<PluginManifest, String> {
-    let (repo, git_ref) = normalize_repo(&repo, reference.as_deref());
-    tokio::task::spawn_blocking(move || fetch_manifest_blocking(&repo, &git_ref))
+    let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
+    let host = effective_host(parsed_host, host);
+    tokio::task::spawn_blocking(move || fetch_manifest_blocking(&host, &repo, &git_ref))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -159,16 +207,19 @@ pub async fn install_plugin(
     app: AppHandle,
     repo: String,
     reference: Option<String>,
+    host: Option<String>,
 ) -> Result<Vec<Plugin>, String> {
-    let (repo, git_ref) = normalize_repo(&repo, reference.as_deref());
+    let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
+    let host = effective_host(parsed_host, host);
     let data = data_dir(&app)?;
 
     // Fetch manifest + bundle off the async runtime.
+    let host_c = host.clone();
     let repo_c = repo.clone();
     let ref_c = git_ref.clone();
     let (manifest, bundle) = tokio::task::spawn_blocking(move || {
-        let m = fetch_manifest_blocking(&repo_c, &ref_c)?;
-        let code = http_get_text(&api_content_url(&repo_c, &ref_c, &m.entry))?;
+        let m = fetch_manifest_blocking(&host_c, &repo_c, &ref_c)?;
+        let code = http_get_text(&api_content_url(&host_c, &repo_c, &ref_c, &m.entry))?;
         Ok::<_, String>((m, code))
     })
     .await
@@ -192,6 +243,7 @@ pub async fn install_plugin(
         description: manifest.description,
         author: manifest.author,
         repo,
+        host,
         git_ref,
         enabled: true,
     };
@@ -278,14 +330,17 @@ mod tests {
 
     #[test]
     fn normalize_plain_repo_defaults_to_main() {
-        assert_eq!(normalize_repo("owner/repo", None), ("owner/repo".into(), "main".into()));
+        assert_eq!(
+            normalize_repo("owner/repo", None),
+            ("github.com".into(), "owner/repo".into(), "main".into())
+        );
     }
 
     #[test]
     fn normalize_at_ref() {
         assert_eq!(
             normalize_repo("owner/repo@v1.2.3", None),
-            ("owner/repo".into(), "v1.2.3".into())
+            ("github.com".into(), "owner/repo".into(), "v1.2.3".into())
         );
     }
 
@@ -293,11 +348,11 @@ mod tests {
     fn normalize_full_url_and_tree_ref() {
         assert_eq!(
             normalize_repo("https://github.com/owner/repo", None),
-            ("owner/repo".into(), "main".into())
+            ("github.com".into(), "owner/repo".into(), "main".into())
         );
         assert_eq!(
             normalize_repo("https://github.com/owner/repo/tree/dev", None),
-            ("owner/repo".into(), "dev".into())
+            ("github.com".into(), "owner/repo".into(), "dev".into())
         );
     }
 
@@ -305,7 +360,35 @@ mod tests {
     fn explicit_reference_wins_and_git_suffix_stripped() {
         assert_eq!(
             normalize_repo("owner/repo.git@v1", Some("main")),
-            ("owner/repo".into(), "main".into())
+            ("github.com".into(), "owner/repo".into(), "main".into())
+        );
+    }
+
+    #[test]
+    fn normalize_extracts_enterprise_host() {
+        assert_eq!(
+            normalize_repo("github.example.org/acme/trawl-plugin-contracts", None),
+            (
+                "github.example.org".into(),
+                "acme/trawl-plugin-contracts".into(),
+                "main".into()
+            )
+        );
+        assert_eq!(
+            normalize_repo("https://github.example.org/acme/dev-contracts/tree/KL-30089", None),
+            ("github.example.org".into(), "acme/dev-contracts".into(), "KL-30089".into())
+        );
+    }
+
+    #[test]
+    fn api_url_per_host() {
+        assert_eq!(
+            api_url("github.com", "o/r", "contents/trawl-plugin.json"),
+            "https://api.github.com/repos/o/r/contents/trawl-plugin.json"
+        );
+        assert_eq!(
+            api_url("github.example.org", "o/r", "branches"),
+            "https://github.example.org/api/v3/repos/o/r/branches"
         );
     }
 
@@ -333,6 +416,7 @@ mod tests {
                 description: String::new(),
                 author: String::new(),
                 repo: "o/r".into(),
+                host: "github.com".into(),
                 git_ref: "main".into(),
                 enabled: true,
             }],
