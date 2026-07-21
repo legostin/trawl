@@ -64,6 +64,8 @@ pub fn run() {
             plugins::read_plugin_bundle,
             plugins::plugin_storage_get,
             plugins::plugin_storage_set,
+            plugins::git_host_token_set,
+            plugins::git_host_token_has,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
             setup_actions::trust_ca_command,
