@@ -45,6 +45,12 @@ interface TrawlCtx {
   mock(response: TrawlMock): void;
   /** Abort the request with a 502 error. */
   abort(reason?: string): void;
+  /**
+   * Pause the flow on a breakpoint: it is held in-flight and surfaced in the
+   * Traffic view for live editing until you Execute, Respond, or Abort it.
+   * Works in the request and response phases.
+   */
+  breakpoint(): void;
 }
 
 /** Context of the current flow. */
