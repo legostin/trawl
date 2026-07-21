@@ -15,6 +15,8 @@ export interface Plugin {
   description: string;
   author: string;
   repo: string;
+  /** Git host, e.g. "github.com" or a GitHub Enterprise domain. */
+  host: string;
   ref: string;
   enabled: boolean;
 }
@@ -50,7 +52,7 @@ interface PluginsState {
   /** pluginId → newer version available in its repo (from the last check). */
   updates: Record<string, string>;
   load: () => Promise<void>;
-  fetchManifest: (repo: string, reference?: string) => Promise<PluginManifest>;
+  fetchManifest: (repo: string, reference?: string, host?: string) => Promise<PluginManifest>;
   install: (repo: string, reference?: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
   setEnabled: (id: string, enabled: boolean) => Promise<void>;
@@ -71,8 +73,8 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   flowActions: [],
   updates: {},
   load: async () => set({ installed: await invoke<Plugin[]>("list_plugins") }),
-  fetchManifest: (repo, reference) =>
-    invoke<PluginManifest>("fetch_plugin_manifest", { repo, reference }),
+  fetchManifest: (repo, reference, host) =>
+    invoke<PluginManifest>("fetch_plugin_manifest", { repo, reference, host }),
   install: async (repo, reference) => {
     const installed = await invoke<Plugin[]>("install_plugin", { repo, reference });
     set({ installed });
@@ -112,6 +114,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
           const m = await invoke<PluginManifest>("fetch_plugin_manifest", {
             repo: p.repo,
             reference: p.ref,
+            host: p.host,
           });
           if (cmpVersions(m.version, p.version) > 0) found[p.id] = m.version;
         } catch {
@@ -124,7 +127,11 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   update: async (id) => {
     const p = get().installed.find((x) => x.id === id);
     if (!p) return;
-    const installed = await invoke<Plugin[]>("install_plugin", { repo: p.repo, reference: p.ref });
+    const installed = await invoke<Plugin[]>("install_plugin", {
+      repo: p.repo,
+      reference: p.ref,
+      host: p.host,
+    });
     const updates = { ...get().updates };
     delete updates[id];
     set({ installed, updates });

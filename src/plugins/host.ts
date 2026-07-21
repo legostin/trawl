@@ -24,7 +24,7 @@ import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
 import type { ActiveProject, EnvVar, FlowAction, RegisteredMode, TrawlHost } from "./api";
 
-const HOST_VERSION = "1.2.0";
+const HOST_VERSION = "1.3.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -87,6 +87,12 @@ export function installHost(): void {
       },
       onChange: (cb: (project: ActiveProject | null) => void) =>
         bus.on("project:changed", () => cb(activeProject())),
+    },
+    gitHosts: {
+      token: (host: string) => invoke<string | null>("git_host_token_get", { host }),
+      hasToken: (host: string) => invoke<boolean>("git_host_token_has", { host }),
+      setToken: (host: string, token: string) =>
+        invoke<void>("git_host_token_set", { host, token }),
     },
     storage: {
       get: (key: string) => invoke<string | null>("plugin_storage_get", { key }),

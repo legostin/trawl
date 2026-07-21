@@ -63,6 +63,15 @@ export interface TrawlProjects {
   onChange(cb: (project: ActiveProject | null) => void): () => void;
 }
 
+/** Per-host git access tokens (entered once at plugin-install time). Plugins
+ *  run with full app access, so browsing logic lives in plugins; the host only
+ *  stores tokens and hands them out. */
+export interface TrawlGitHosts {
+  token(host: string): Promise<string | null>;
+  hasToken(host: string): Promise<boolean>;
+  setToken(host: string, token: string): Promise<void>;
+}
+
 /** Project-scoped JSON key/value storage for plugins (persisted to disk). */
 export interface TrawlStorage {
   get(key: string): Promise<string | null>;
@@ -104,6 +113,7 @@ export interface TrawlHost {
   reports: PluginReports;
   http: TrawlHttp;
   projects: TrawlProjects;
+  gitHosts: TrawlGitHosts;
   storage: TrawlStorage;
   ui: TrawlUi;
   util: TrawlUtil;
