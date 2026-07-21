@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { useLayout, type Mode } from "../layout";
 import { usePlugins } from "../plugins";
+import { useFlows } from "../store";
+import { PulseDot } from "./PulseDot";
 import { cn } from "@/lib/utils";
 
 type IconType = LucideIcon | React.ComponentType<{ className?: string }>;
@@ -29,6 +31,7 @@ export function Sidebar() {
   const toggle = useLayout((s) => s.toggleSidebar);
   const pluginModes = usePlugins((s) => s.modes);
   const updateCount = usePlugins((s) => Object.keys(s.updates).length);
+  const pausedCount = useFlows((s) => s.flows.filter((f) => f.state === "paused").length);
 
   const modes: ModeItem[] = [
     ...BUILTIN,
@@ -49,7 +52,14 @@ export function Sidebar() {
 
       <nav className="flex flex-1 flex-col gap-1 p-2">
         {modes.map((m) => (
-          <NavItem key={m.id} item={m} active={mode === m.id} collapsed={collapsed} onClick={() => setMode(m.id)} />
+          <NavItem
+            key={m.id}
+            item={m}
+            active={mode === m.id}
+            collapsed={collapsed}
+            pulse={m.id === "traffic" && pausedCount > 0}
+            onClick={() => setMode(m.id)}
+          />
         ))}
       </nav>
 
@@ -95,12 +105,14 @@ function NavItem({
   active,
   collapsed,
   badge,
+  pulse,
   onClick,
 }: {
   item: ModeItem;
   active: boolean;
   collapsed: boolean;
   badge?: boolean;
+  pulse?: boolean;
   onClick: () => void;
 }) {
   const Icon = item.icon;
@@ -118,12 +130,19 @@ function NavItem({
     >
       <span className="relative shrink-0">
         <Icon className="size-4" />
-        {badge && (
-          <span className="absolute -right-1 -top-1 size-2 rounded-full bg-http-amber ring-2 ring-card" />
+        {pulse ? (
+          <span className="absolute -right-1 -top-1">
+            <PulseDot />
+          </span>
+        ) : (
+          badge && (
+            <span className="absolute -right-1 -top-1 size-2 rounded-full bg-http-amber ring-2 ring-card" />
+          )
         )}
       </span>
       {!collapsed && <span className="truncate">{item.label}</span>}
-      {badge && !collapsed && <span className="ml-auto size-2 rounded-full bg-http-amber" />}
+      {pulse && !collapsed && <PulseDot className="ml-auto" />}
+      {badge && !pulse && !collapsed && <span className="ml-auto size-2 rounded-full bg-http-amber" />}
     </button>
   );
 }
