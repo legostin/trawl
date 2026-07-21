@@ -41,6 +41,8 @@ pub enum BpPhase {
 pub enum Resolution {
     Execute {
         method: Option<String>,
+        /// Edited request path+query (request phase only); None = unchanged.
+        path: Option<String>,
         status: Option<u16>,
         headers: Vec<(String, String)>,
         body: String,
@@ -135,6 +137,15 @@ fn text_of(body: &[u8], is_text: bool) -> String {
         String::from_utf8_lossy(body).to_string()
     } else {
         String::new()
+    }
+}
+
+/// Rebuilds a request URI with a new path+query, preserving scheme+authority
+/// (absolute-form for MITM'd requests). Falls back to origin-form otherwise.
+fn rebuild_uri(orig: &hudsucker::hyper::Uri, path: &str) -> Option<hudsucker::hyper::Uri> {
+    match (orig.scheme_str(), orig.authority()) {
+        (Some(scheme), Some(auth)) => format!("{scheme}://{auth}{path}").parse().ok(),
+        _ => path.parse().ok(),
     }
 }
 
@@ -447,9 +458,9 @@ impl HttpHandler for CaptureHandler {
             Err(_) => Vec::new(),
         };
         let orig_headers = headers_to_vec(&parts.headers);
-        let full_url = parts.uri.to_string();
+        let mut full_url = parts.uri.to_string();
         let uri = &parts.uri;
-        let url = UrlParts {
+        let mut url = UrlParts {
             scheme: uri.scheme_str().unwrap_or("http").to_string(),
             host: uri.host().unwrap_or_default().to_string(),
             port: uri.port_u16().unwrap_or(80),
@@ -474,6 +485,7 @@ impl HttpHandler for CaptureHandler {
         let mut req_method = parts.method.to_string();
         let mut req_headers = orig_headers.clone();
         let mut req_body_text = text_of(&display_body, is_text);
+        let mut edited_path: Option<String> = None;
         let mut preinserted = false;
 
         // ── БРЕЙКПОИНТ ФАЗЫ ЗАПРОСА: срабатывает до всех правил ──
@@ -499,9 +511,16 @@ impl HttpHandler for CaptureHandler {
             (self.emit)("flow-paused", &flow);
 
             match self.await_resolution(id, BpPhase::Request).await {
-                Some(Resolution::Execute { method, headers, body, .. }) => {
+                Some(Resolution::Execute { method, path, headers, body, .. }) => {
                     if let Some(m) = method {
                         req_method = m;
+                    }
+                    if let Some(p) = path {
+                        url.path = p.clone();
+                        full_url = rebuild_uri(&parts.uri, &p)
+                            .map(|u| u.to_string())
+                            .unwrap_or(full_url);
+                        edited_path = Some(p);
                     }
                     req_headers = headers;
                     if is_text {
@@ -511,6 +530,7 @@ impl HttpHandler for CaptureHandler {
                         f.state = FlowState::Pending;
                         f.paused_phase = None;
                         f.method = req_method.clone();
+                        f.url.path = url.path.clone();
                         f.request.headers = req_headers.clone();
                         if is_text {
                             f.request.body = req_body_text.clone().into_bytes();
@@ -780,6 +800,11 @@ impl HttpHandler for CaptureHandler {
                 let mut new_parts = parts;
                 if let Ok(method) = hudsucker::hyper::Method::from_bytes(req_method.as_bytes()) {
                     new_parts.method = method;
+                }
+                if let Some(p) = &edited_path {
+                    if let Some(u) = rebuild_uri(&new_parts.uri, p) {
+                        new_parts.uri = u;
+                    }
                 }
                 new_parts.headers = build_header_map(&work_headers, out_body.len(), is_text);
                 Request::from_parts(new_parts, Body::from(Full::new(Bytes::from(out_body)))).into()
@@ -1443,6 +1468,7 @@ mod tests {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
                         let _ = tx.send(Resolution::Execute {
                             method: None,
+                            path: None,
                             status: None,
                             headers: vec![("X-Debug".into(), "edited".into())],
                             body: String::new(),
@@ -1489,7 +1515,7 @@ mod tests {
                 if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
                         let _ = tx.send(Resolution::Execute {
-                            method: None, status: None,
+                            method: None, path: None, status: None,
                             headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
                         });
                         break;
@@ -1536,7 +1562,7 @@ mod tests {
                 if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
                         let _ = tx.send(Resolution::Execute {
-                            method: None, status: None,
+                            method: None, path: None, status: None,
                             headers: vec![("X-Bp".into(), "hit".into())], body: String::new(),
                         });
                         break;
@@ -1552,6 +1578,53 @@ mod tests {
         let echoed = client.get(format!("http://{upstream_addr}/api"))
             .send().await.unwrap().text().await.unwrap();
         assert!(echoed.to_lowercase().contains("x-bp: hit"), "scheme-prefixed breakpoint did not fire: {echoed}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // A request breakpoint can edit the path+query; the edited path reaches upstream.
+    #[tokio::test]
+    async fn request_breakpoint_execute_edits_query() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.state == FlowState::Paused) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Request)) {
+                        let _ = tx.send(Resolution::Execute {
+                            method: None,
+                            path: Some("/api?edited=1".into()),
+                            status: None,
+                            headers: f.request.headers.clone(),
+                            body: String::new(),
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let echoed = client.get(format!("http://{upstream_addr}/api?edited=0"))
+            .send().await.unwrap().text().await.unwrap();
+        assert!(echoed.contains("/api?edited=1"), "edited query not sent upstream: {echoed}");
+        assert!(!echoed.contains("edited=0"), "original query should be replaced: {echoed}");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
@@ -1633,6 +1706,7 @@ mod tests {
                     if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
                         let _ = tx.send(Resolution::Execute {
                             method: None,
+                            path: None,
                             status: Some(418),
                             headers: vec![("Content-Type".into(), "text/plain".into())],
                             body: "edited".into(),
