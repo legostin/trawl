@@ -26,6 +26,8 @@ use crate::scripting::ScriptClient;
 use crate::store::FlowStore;
 
 pub type EmitFn = Arc<dyn Fn(&str, &Flow) + Send + Sync>;
+/// Delivers a script notification payload to the app (Tauri event `script-notify`).
+pub type NotifyFn = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
 pub type SharedRules = Arc<RwLock<Vec<Rule>>>;
 pub type SharedLibrary = Arc<RwLock<String>>;
 pub type SharedProject = Arc<RwLock<Option<Project>>>;
@@ -68,6 +70,8 @@ pub type BreakpointRegistry = Arc<Mutex<HashMap<(u64, BpPhase), oneshot::Sender<
 struct CaptureHandler {
     store: FlowStore,
     emit: EmitFn,
+    notify: NotifyFn,
+    secret_fn: crate::scripting::SecretFn,
     current_id: Option<u64>,
     ca_pem: String,
     started: std::time::Instant,
@@ -89,6 +93,23 @@ impl CaptureHandler {
     fn persist(&self, flow: &Flow) {
         if let Some(db) = &self.db {
             db.record(flow, self.active_scope().as_deref());
+        }
+    }
+
+    /// Forward notify() calls collected by a rule script to the app.
+    fn emit_notifications(&self, res: &crate::scripting::ScriptResult, rule_name: &str, flow_id: u64) {
+        for n in &res.notifications {
+            let mut p = serde_json::Map::new();
+            p.insert("text".into(), n.get("text").cloned().unwrap_or_else(|| "".into()));
+            for k in ["channel", "title"] {
+                if let Some(v) = n.get(k).filter(|v| !v.is_null()) {
+                    p.insert(k.into(), v.clone());
+                }
+            }
+            p.insert("source".into(), "rule".into());
+            p.insert("ruleName".into(), rule_name.into());
+            p.insert("flowId".into(), flow_id.into());
+            (self.notify)(serde_json::Value::Object(p));
         }
     }
 }
@@ -700,17 +721,19 @@ impl HttpHandler for CaptureHandler {
             .to_string();
             let prelude = self.library.read().unwrap().clone();
             let script = hrule.script.clone();
+            let secret_fn = self.secret_fn.clone();
             let res = tokio::task::spawn_blocking(move || {
                 crate::scripting::execute_handler(
                     &prelude,
                     &script,
                     &input,
                     std::time::Duration::from_secs(30),
-                    std::sync::Arc::new(|_: &str| None),
+                    secret_fn,
                 )
             })
             .await
             .unwrap_or_else(|_| crate::scripting::ScriptResult::error("handler panicked"));
+            self.emit_notifications(&res, &hrule.name, id);
             if let Some(e) = &res.env {
                 self.apply_env(e);
             }
@@ -815,6 +838,7 @@ impl HttpHandler for CaptureHandler {
                 })
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
+                self.emit_notifications(&res, &rule.name, id);
                 if let Some(e) = res.env.clone() {
                     env = e;
                 }
@@ -1030,6 +1054,7 @@ impl HttpHandler for CaptureHandler {
                 })
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
+                self.emit_notifications(&res, &rule.name, id);
                 if let Some(e) = res.env.clone() {
                     env = e;
                 }
@@ -1187,6 +1212,8 @@ pub async fn start(
     addr: SocketAddr,
     store: FlowStore,
     emit: EmitFn,
+    notify: NotifyFn,
+    secret_fn: crate::scripting::SecretFn,
     ca_dir: PathBuf,
     scripts: ScriptClient,
     rules: SharedRules,
@@ -1210,6 +1237,8 @@ pub async fn start(
     let handler = CaptureHandler {
         store,
         emit,
+        notify,
+        secret_fn,
         current_id: None,
         ca_pem: ca.cert_pem,
         started: std::time::Instant::now(),
@@ -1359,7 +1388,7 @@ mod tests {
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start(proxy_addr, store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1394,7 +1423,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1449,7 +1478,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1486,7 +1515,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1567,7 +1596,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1608,7 +1637,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1625,6 +1654,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
+    fn notify_noop() -> NotifyFn {
+        Arc::new(|_| {})
+    }
+    fn secret_none() -> crate::scripting::SecretFn {
+        Arc::new(|_: &str| None)
+    }
+
+    // A rule's notify() call is forwarded to the app's NotifyFn with the
+    // expected `script-notify` payload shape.
+    #[tokio::test]
+    async fn rule_notify_reaches_notify_fn() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![rule(
+            "notifier",
+            "*",
+            Phase::Request,
+            "notify('hello', { channel: 'ops' });",
+        )];
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
+        let ca_dir = temp_ca();
+
+        let (ntx, mut nrx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+        let notify: NotifyFn = Arc::new(move |p| {
+            let _ = ntx.send(p);
+        });
+
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(),
+            store.clone(),
+            emit,
+            notify,
+            secret_none(),
+            ca_dir.clone(),
+            s,
+            r,
+            l,
+            p,
+            ca_dir.clone(),
+            None,
+            bps,
+            icept,
+            pending,
+            Arc::new(RwLock::new(0)),
+            Arc::new(RwLock::new(false)),
+        )
+        .await
+        .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let _ = client
+            .get(format!("http://{upstream_addr}/api"))
+            .send()
+            .await
+            .unwrap();
+
+        let p = tokio::time::timeout(std::time::Duration::from_secs(5), nrx.recv())
+            .await
+            .expect("notification not emitted")
+            .unwrap();
+        assert_eq!(p["text"], "hello");
+        assert_eq!(p["channel"], "ops");
+        assert_eq!(p["source"], "rule");
+        assert_eq!(p["ruleName"], "notifier");
+        assert!(p["flowId"].is_u64());
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
     // A request breakpoint holds the flow; resolving Execute with an edited header
     // sends the edit to the upstream echo server.
     #[tokio::test]
@@ -1636,7 +1740,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1686,7 +1790,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1733,7 +1837,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("http://{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1776,7 +1880,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1825,7 +1929,7 @@ mod tests {
         let pother = Arc::new(RwLock::new(false));
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending, timeout, pother,
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1852,7 +1956,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1905,7 +2009,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1958,7 +2062,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint("handler.test/*", false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2018,7 +2122,7 @@ mod tests {
         *bps.write().unwrap() = vec![bp];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2076,7 +2180,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2144,7 +2248,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2205,7 +2309,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2278,7 +2382,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2315,7 +2419,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![proj_rule, global_rule]);
         *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2380,7 +2484,7 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
