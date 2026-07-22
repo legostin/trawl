@@ -214,10 +214,12 @@ await host.secrets.remove("TG_BOT_TOKEN");
 ### `ui` / `util` — render like the host
 
 ```ts
-const { BodyViewer, HeadersTable, MethodBadge, StatusBadge } = host.ui;
+const { BodyViewer, HeadersTable, MethodBadge, StatusBadge, Button, Input, Select } = host.ui;
 host.util.bodyText(flow.request);   // decoded body text
 host.util.buildCurl(flow);          // cURL string
 ```
+
+Use the themed form components (`Button`, `Input`, `Select`) and badges (`MethodBadge`, `StatusBadge`) to keep plugins styled consistently with the host. `BodyViewer` and `HeadersTable` render request/response bodies and headers respectively; `ScriptEditor` is a Monaco-backed code editor wired to the host's completion setup.
 
 ---
 
@@ -277,9 +279,15 @@ host.events.describe("my-plugin:did-thing", {
   description: "Fired after the thing is done",
   payloadType: "{ id: string; ok: boolean }",   // TS type expression
   source: "my-plugin",
+  params: [
+    { name: "id", type: "string", doc: "Unique identifier" },
+    { name: "ok", type: "boolean", doc: "Success flag" },
+  ],
 });
-host.events.known();  // [{ type, description?, payloadType?, source?, lastPayload? }]
+host.events.known();  // [{ type, description?, payloadType?, source?, params?, lastPayload? }]
 ```
+
+The `params` field documents individual payload fields for subscription UIs and type hints — a field array of `{ name: string; type: string; doc?: string }`.
 
 The bus also remembers the **last payload** of every event, so undeclared
 events still get structure-based hints.
@@ -290,6 +298,15 @@ events still get structure-based hints.
 | --- | --- | --- |
 | `flow:added` | `Flow` | A new request/response was captured. |
 | `flow:updated` | `Flow` | A captured flow changed (e.g. response arrived, breakpoint resolved). |
+| `flow:error` | `Flow` | A captured flow reached the "error" state (proxy or script failure). |
+| `breakpoint:hit` | `Flow` | A flow paused at a breakpoint, awaiting resolution. |
+| `breakpoint:resolved` | `Flow` | A paused flow was resumed (edited or passed through). |
+| `breakpoint:timeout` | `Flow` | A paused flow auto-continued after the breakpoint timeout elapsed. |
+| `rule:applied` | `{ ruleName, phase, flowId, method, host, path }` | A rule ran successfully against a flow. |
+| `rule:error` | `{ ruleName, phase, flowId, method, host, path, error }` | A rule's script threw while running against a flow. |
+| `plugin:installed` | `{ id, name, version }` | A plugin finished installing. |
+| `plugin:removed` | `{ id }` | A plugin was uninstalled. |
+| `update:available` | `{ version, notes? }` | A newer app version is available. |
 | `capture:started` | — | The proxy started. |
 | `capture:stopped` | — | The proxy stopped. |
 | `filter:changed` | filter object | The traffic search/filter changed. |
