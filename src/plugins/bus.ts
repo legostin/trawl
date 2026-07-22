@@ -55,7 +55,7 @@ export class EventBus {
     const types = new Set([...this.meta.keys(), ...this.last.keys()]);
     return [...types]
       .sort()
-      .map((type) => ({ type, ...this.meta.get(type), lastPayload: this.last.get(type) }));
+      .map((type) => ({ ...this.meta.get(type), type, lastPayload: this.last.get(type) }));
   }
 }
 
