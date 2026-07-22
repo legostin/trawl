@@ -1,11 +1,17 @@
 //! MCP server: config, state, lifecycle.
 
 pub mod core_tools;
+pub mod plugin_bridge;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rand::RngCore;
+use rmcp::service::Peer;
+use rmcp::RoleServer;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_PORT: u16 = 9910;
@@ -55,6 +61,62 @@ pub fn save_config(dir: &Path, cfg: &McpConfig) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(dir.join("mcp.json"), text).map_err(|e| e.to_string())
+}
+
+/// Подключённые MCP-клиенты — для notifications/tools/list_changed.
+pub struct PeerRegistry {
+    peers: Mutex<HashMap<u64, Peer<RoleServer>>>,
+    counter: AtomicU64,
+}
+
+impl PeerRegistry {
+    pub fn new() -> Self {
+        PeerRegistry { peers: Mutex::new(HashMap::new()), counter: AtomicU64::new(0) }
+    }
+
+    pub fn add(&self, peer: Peer<RoleServer>) {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        self.peers.lock().unwrap().insert(id, peer);
+    }
+
+    /// Шлёт tools/list_changed всем живым пирам; мёртвые выбрасывает.
+    /// Пустой реестр — no-op (важно для тестов без async-runtime).
+    pub fn notify_tools_changed(self: &Arc<Self>) {
+        let snapshot: Vec<(u64, Peer<RoleServer>)> = self
+            .peers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        if snapshot.is_empty() {
+            return;
+        }
+        let reg = self.clone();
+        tauri::async_runtime::spawn(async move {
+            for (id, peer) in snapshot {
+                if peer.notify_tool_list_changed().await.is_err() {
+                    reg.peers.lock().unwrap().remove(&id);
+                }
+            }
+        });
+    }
+}
+
+pub struct McpState {
+    pub bridge: Arc<plugin_bridge::PluginBridge>,
+    pub peers: Arc<PeerRegistry>,
+    pub last_error: Mutex<Option<String>>,
+}
+
+impl McpState {
+    pub fn new() -> Self {
+        McpState {
+            bridge: Arc::new(plugin_bridge::PluginBridge::new()),
+            peers: Arc::new(PeerRegistry::new()),
+            last_error: Mutex::new(None),
+        }
+    }
 }
 
 #[cfg(test)]
