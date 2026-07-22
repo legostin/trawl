@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Core work in an isolated **git worktree**, merged to `main` at the end; plugin in `/Users/legostin/claude-projects/trawl-plugin-notifications`, pushed to GitHub at the end.
-- Versions: host API `HOST_VERSION` → **"1.7.0"**; app → **0.6.0** (package.json, src-tauri/Cargo.toml + Cargo.lock, src-tauri/tauri.conf.json); plugin → **0.2.0** with `"apiVersion": "1.7.0"` in `trawl-plugin.json` and package.json.
+- Versions: host API `HOST_VERSION` → **"1.7.0"**; app → **0.7.0** (0.6.x taken by MCP server + Settings tab) (package.json, src-tauri/Cargo.toml + Cargo.lock, src-tauri/tauri.conf.json); plugin → **0.2.0** with `"apiVersion": "1.7.0"` in `trawl-plugin.json` and package.json.
 - New Tauri events (backend): `flow-resumed`, `breakpoint-timeout` (Flow payload via existing `EmitFn`); `rule-applied`, `rule-error` (JSON payload via `AppEventFn`). Existing `script-notify` moves onto `AppEventFn` unchanged in shape.
 - Bus events + payloads exactly as the spec table defines them (`breakpoint:hit|resolved|timeout`, `rule:applied|error`, `flow:error`, `plugin:installed|removed`, `update:available`).
 - `EventMeta` gains `params?: { name: string; type: string; doc?: string }[]`.
@@ -129,7 +129,7 @@ Use the existing `rule()` test helper and upstream/proxy scaffolding; the channe
 
 **Files:** `docs/plugins.md`, `package.json`, `src-tauri/Cargo.toml`(+lock), `src-tauri/tauri.conf.json`
 
-- [ ] Extend the host-emitted events table with the 8 new rows (payload column matches the spec); document `params` in the registry section (one sentence + the `EventParam` shape) and the new `ui.Button/Input/Select`. Bump app version 0.5.0 → **0.6.0** (3 files + `cargo check` to refresh the lock). Verify `pnpm build` + `cargo check`. Commit `docs: v2 events + params registry; bump 0.6.0`.
+- [ ] Extend the host-emitted events table with the 8 new rows (payload column matches the spec); document `params` in the registry section (one sentence + the `EventParam` shape) and the new `ui.Button/Input/Select`. Bump app version 0.6.1 → **0.7.0** (3 files + `cargo check` to refresh the lock). Verify `pnpm build` + `cargo check`. Commit `docs: v2 events + params registry; bump 0.7.0`.
 
 ---
 
