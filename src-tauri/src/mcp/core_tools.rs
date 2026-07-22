@@ -270,6 +270,19 @@ pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> 
 
 // ── helpers ──
 
+/// Truncates a string to a byte limit without splitting UTF-8 characters.
+/// Returns None if no truncation is needed.
+fn truncate_utf8(s: &str, max: usize) -> Option<String> {
+    if s.len() <= max {
+        return None;
+    }
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Some(s[..cut].to_string())
+}
+
 fn u64_arg(args: &Value, key: &str) -> Option<u64> {
     args.get(key).and_then(|v| v.as_u64())
 }
@@ -531,8 +544,7 @@ fn tool_send_request(_deps: &Deps, args: &Value) -> Result<Value, String> {
     let resp = crate::httpsend::send_http(&req, via_proxy);
     let mut v = serde_json::to_value(&resp).map_err(|e| e.to_string())?;
     if let Some(b) = v.get("body").and_then(|b| b.as_str()) {
-        if b.len() > max {
-            let cut: String = b.chars().take(max).collect();
+        if let Some(cut) = truncate_utf8(b, max) {
             v["body"] = json!(cut);
             v["truncated"] = json!(true);
         }
@@ -564,6 +576,19 @@ mod tests {
         );
         f.applied_rules = vec!["r1".into()];
         f
+    }
+
+    #[test]
+    fn truncate_utf8_cuts_by_bytes_at_char_boundary() {
+        // ASCII: exactly at limit — no truncation
+        assert_eq!(truncate_utf8("hello", 5), None);
+        // ASCII: cut by bytes
+        assert_eq!(truncate_utf8("hello", 4).as_deref(), Some("hell"));
+        // Multi-byte char at boundary — backtrack, no replacement char
+        assert_eq!(truncate_utf8("héllo", 2).as_deref(), Some("h"));
+        // Body shorter than limit in bytes, even if fewer chars
+        assert_eq!(truncate_utf8("ééé", 6), None); // 6 bytes exactly
+        assert_eq!(truncate_utf8("ééé", 5).as_deref(), Some("éé")); // 5 bytes → backtrack to boundary at 4
     }
 
     #[test]
