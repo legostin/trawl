@@ -110,9 +110,9 @@ pub async fn start_proxy(
     let emit: proxy::EmitFn = std::sync::Arc::new(move |event: &str, flow: &Flow| {
         let _ = app_for_emit.emit(event, flow.clone());
     });
-    let app_for_notify = app.clone();
+    let app_for_event = app.clone();
     let app_event: proxy::AppEventFn = std::sync::Arc::new(move |event: &str, payload: serde_json::Value| {
-        let _ = app_for_notify.emit(event, payload);
+        let _ = app_for_event.emit(event, payload);
     });
     let secret_fn: crate::scripting::SecretFn =
         std::sync::Arc::new(|name: &str| crate::secrets::get(name).ok().flatten());
