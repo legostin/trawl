@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 
+/// Resolves a named secret for scripts. Injected so tests avoid the real Keychain.
+pub type SecretFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptResult {
@@ -24,6 +27,9 @@ pub struct ScriptResult {
     /// Изменённый скриптом env (пишется обратно в проект).
     #[serde(default)]
     pub env: Option<serde_json::Value>,
+    /// notify(...) calls collected during the run.
+    #[serde(default)]
+    pub notifications: Vec<serde_json::Value>,
 }
 
 impl ScriptResult {
@@ -36,6 +42,7 @@ impl ScriptResult {
             reason: None,
             error: Some(msg.into()),
             env: None,
+            notifications: Vec::new(),
         }
     }
 }
@@ -67,7 +74,7 @@ impl ScriptClient {
 }
 
 /// Поднимает движок на выделенном потоке (QuickJS-рантайм не Send через await).
-pub fn spawn_engine(timeout: Duration) -> ScriptClient {
+pub fn spawn_engine(timeout: Duration, secrets: SecretFn) -> ScriptClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<ScriptJob>();
 
     std::thread::Builder::new()
@@ -80,6 +87,14 @@ pub fn spawn_engine(timeout: Duration) -> ScriptClient {
                 rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= *d.lock().unwrap())));
             }
             let ctx = Context::full(&rt).expect("create quickjs context");
+            ctx.with(|c| {
+                let sfn = secrets.clone();
+                let f = Function::new(c.clone(), move |name: String| -> Option<String> {
+                    sfn(&name)
+                })
+                .expect("bind secret fn");
+                c.globals().set("__native_secret", f).expect("set secret fn");
+            });
 
             while let Some(job) = rx.blocking_recv() {
                 *deadline.lock().unwrap() = Instant::now() + timeout;
@@ -125,6 +140,8 @@ function bearer(token){setHeader(request,'authorization','Bearer '+token);}
 function queryParam(req,name){var q=(req.path||'').split('?')[1]||'';var parts=q.split('&');for(var i=0;i<parts.length;i++){var kv=parts[i].split('=');if(decodeURIComponent(kv[0])===name)return decodeURIComponent((kv[1]||'').replace(/\+/g,' '));}return undefined;}
 function sendJsonRequest(req){var r=send(req);try{r.data=JSON.parse(r.body||'null');}catch(e){r.data=null;}return r;}
 function sendWithRetry(req,opts){opts=opts||{};var max=opts.retries||3;var delay=opts.delay||1000;var r=send(req);var n=0;while(n<max&&(r.status===429||r.status>=500)){sleep(delay);r=send(req);n++;}return r;}
+function secret(name){var v=__native_secret(String(name));return (v===undefined||v===null)?null:v;}
+function notify(text,opts){opts=opts||{};ctx.__notifications.push({text:String(text),channel:opts.channel,title:opts.title});}
 "#;
 
 fn build_source(prelude: &str, script: &str) -> String {
@@ -139,6 +156,7 @@ fn build_source(prelude: &str, script: &str) -> String {
     ctx.mock = function(resp) {{ ctx.__action = "mock"; ctx.__mock = resp; }};
     ctx.abort = function(reason) {{ ctx.__action = "abort"; ctx.__reason = reason || "aborted"; }};
     ctx.breakpoint = function() {{ ctx.__action = "breakpoint"; }};
+    ctx.__notifications = [];
     if (!ctx.env) ctx.env = {{}};
     const request = ctx.request;
     const response = ctx.response;
@@ -153,7 +171,8 @@ fn build_source(prelude: &str, script: &str) -> String {
       response: ctx.response,
       mock: ctx.__mock || null,
       reason: ctx.__reason || null,
-      env: ctx.env
+      env: ctx.env,
+      notifications: ctx.__notifications
     }});
   }} catch (e) {{
     return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
@@ -241,6 +260,7 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
   try {{
     const ctx = JSON.parse(__input);
     if (!ctx.env) ctx.env = {{}};
+    ctx.__notifications = [];
     const request = ctx.request;
     const env = ctx.env;
     function send(req) {{ return JSON.parse(__native_send(JSON.stringify(req || request))); }}
@@ -248,9 +268,9 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
     {prelude}
     const __out = (function() {{ {script} }})();
     if (__out === undefined || __out === null) {{
-      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env }});
+      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env, notifications: ctx.__notifications }});
     }}
-    return JSON.stringify({{ action: "respond", response: __out, env: ctx.env }});
+    return JSON.stringify({{ action: "respond", response: __out, env: ctx.env, notifications: ctx.__notifications }});
   }} catch (e) {{
     return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
   }}
@@ -266,6 +286,7 @@ pub fn execute_handler(
     script: &str,
     input_json: &str,
     js_timeout: Duration,
+    secrets: SecretFn,
 ) -> ScriptResult {
     let rt = match Runtime::new() {
         Ok(r) => r,
@@ -300,6 +321,14 @@ pub fn execute_handler(
             Err(e) => return ScriptResult::error(format!("bind sleep: {e}")),
         };
         let _ = g.set("__native_sleep", sleep_fn);
+        let sfn = secrets.clone();
+        let secret_fn = match Function::new(c.clone(), move |name: String| -> Option<String> {
+            sfn(&name)
+        }) {
+            Ok(f) => f,
+            Err(e) => return ScriptResult::error(format!("bind secret: {e}")),
+        };
+        let _ = g.set("__native_secret", secret_fn);
 
         let src = build_handler_source(prelude, script);
         match c.eval::<String, _>(src) {
@@ -322,8 +351,61 @@ mod tests {
     use super::*;
 
     async fn run(script: &str, input: &str) -> ScriptResult {
-        let client = spawn_engine(Duration::from_millis(500));
+        let client = spawn_engine(Duration::from_millis(500), Arc::new(|_: &str| None));
         client.run(String::new(), script.to_string(), input.to_string()).await
+    }
+
+    #[tokio::test]
+    async fn secret_reads_from_resolver_and_missing_is_null() {
+        let secrets: SecretFn =
+            Arc::new(|name| (name == "TOKEN").then(|| "s3cr3t".to_string()));
+        let client = spawn_engine(Duration::from_millis(500), secrets);
+        let res = client
+            .run(
+                String::new(),
+                "request.tok = secret('TOKEN'); request.miss = secret('NOPE');".into(),
+                r#"{"request":{}}"#.into(),
+            )
+            .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["tok"], "s3cr3t");
+        assert!(req["miss"].is_null());
+    }
+
+    #[tokio::test]
+    async fn notify_collects_notifications() {
+        let res = run(
+            "notify('hello', { channel: 'ops', title: 'T' }); notify('plain');",
+            r#"{"request":{}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.notifications.len(), 2);
+        assert_eq!(res.notifications[0]["text"], "hello");
+        assert_eq!(res.notifications[0]["channel"], "ops");
+        assert_eq!(res.notifications[0]["title"], "T");
+        assert_eq!(res.notifications[1]["text"], "plain");
+    }
+
+    #[tokio::test]
+    async fn handler_supports_secret_and_notify() {
+        let secrets: SecretFn = Arc::new(|_| Some("tok".to_string()));
+        let res = tokio::task::spawn_blocking(move || {
+            execute_handler(
+                "",
+                "notify('from handler'); return { status: 200, headers: {}, body: secret('X') };",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+                secrets,
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+        assert_eq!(res.response.unwrap()["body"], "tok");
+        assert_eq!(res.notifications.len(), 1);
+        assert_eq!(res.notifications[0]["text"], "from handler");
     }
 
     #[tokio::test]
@@ -396,7 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn infinite_loop_times_out() {
-        let client = spawn_engine(Duration::from_millis(150));
+        let client = spawn_engine(Duration::from_millis(150), Arc::new(|_: &str| None));
         let res = client
             .run(String::new(), "while(true){}".into(), r#"{"request":{}}"#.into())
             .await;
@@ -425,7 +507,13 @@ mod tests {
             r#"{{"request":{{"method":"GET","url":"http://{addr}/","headers":{{}},"body":""}}}}"#
         );
         let res = tokio::task::spawn_blocking(move || {
-            execute_handler("", "return send(request);", &input, Duration::from_secs(5))
+            execute_handler(
+                "",
+                "return send(request);",
+                &input,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+            )
         })
         .await
         .unwrap();
@@ -444,6 +532,7 @@ mod tests {
                 "return { status: 201, headers: {}, body: 'hi' };",
                 r#"{"request":{}}"#,
                 Duration::from_secs(5),
+                Arc::new(|_: &str| None),
             )
         })
         .await
@@ -467,7 +556,13 @@ mod tests {
     #[tokio::test]
     async fn handler_without_return_is_error() {
         let res = tokio::task::spawn_blocking(|| {
-            execute_handler("", "const x = 1;", r#"{"request":{}}"#, Duration::from_secs(5))
+            execute_handler(
+                "",
+                "const x = 1;",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+            )
         })
         .await
         .unwrap();

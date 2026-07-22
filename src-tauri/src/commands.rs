@@ -45,7 +45,10 @@ impl AppState {
             rules: Arc::new(RwLock::new(Vec::new())),
             library: Arc::new(RwLock::new(String::new())),
             active_project: Arc::new(RwLock::new(None)),
-            scripts: crate::scripting::spawn_engine(std::time::Duration::from_secs(1)),
+            scripts: crate::scripting::spawn_engine(
+                std::time::Duration::from_secs(1),
+                Arc::new(|name: &str| crate::secrets::get(name).ok().flatten()),
+            ),
             db: OnceLock::new(),
             breakpoints: Arc::new(RwLock::new(Vec::new())),
             intercept: Arc::new(RwLock::new(true)),
