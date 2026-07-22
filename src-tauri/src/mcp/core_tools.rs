@@ -162,6 +162,84 @@ pub fn core_tools() -> Vec<ToolDef> {
             description: "Set the active project (null id clears it). Capture and rules are scoped by the active project.",
             schema: obj(json!({ "id": { "type": ["string", "null"] } }), &[]),
         },
+        ToolDef {
+            name: "list_breakpoints",
+            description: "List breakpoint definitions (glob pattern, method, request/response phase).",
+            schema: obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "save_breakpoint",
+            description: "Create or update a breakpoint definition. Omit breakpoint.id to create. Fails on a conflicting enabled breakpoint (same pattern+method+phase).",
+            schema: obj(
+                json!({
+                    "breakpoint": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "name": { "type": "string" },
+                            "enabled": { "type": "boolean", "description": "default true" },
+                            "pattern": { "type": "string", "description": "glob over host+path" },
+                            "method": { "type": ["string", "null"], "description": "HTTP method filter, null = any" },
+                            "onRequest": { "type": "boolean" },
+                            "onResponse": { "type": "boolean" },
+                            "projectId": { "type": ["string", "null"] }
+                        },
+                        "required": ["name", "pattern", "onRequest", "onResponse"]
+                    }
+                }),
+                &["breakpoint"],
+            ),
+        },
+        ToolDef {
+            name: "delete_breakpoint",
+            description: "Delete a breakpoint definition by id.",
+            schema: obj(json!({ "id": { "type": "string" } }), &["id"]),
+        },
+        ToolDef {
+            name: "list_paused",
+            description: "Flows currently paused on a breakpoint, with full request/response so you can decide what to edit. Resolve with resolve_breakpoint.",
+            schema: obj(json!({ "maxBodyBytes": { "type": "integer", "description": "default 50000" } }), &[]),
+        },
+        ToolDef {
+            name: "resolve_breakpoint",
+            description: "Resolve a paused flow. action: execute (forward with edits), respond (answer without forwarding), abort. For execute/respond, `headers` REPLACES the full header list — take it from list_paused and modify. body is a string; bodyBase64 overrides it for binary.",
+            schema: obj(
+                json!({
+                    "flowId": { "type": "integer" },
+                    "phase": { "type": "string", "enum": ["request", "response"] },
+                    "action": { "type": "string", "enum": ["execute", "respond", "abort"] },
+                    "edits": {
+                        "type": "object",
+                        "properties": {
+                            "method": { "type": "string" },
+                            "path": { "type": "string", "description": "request path+query (request phase)" },
+                            "status": { "type": "integer" },
+                            "headers": { "type": "array", "items": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "string" }] } },
+                            "body": { "type": "string" },
+                            "bodyBase64": { "type": "string" },
+                            "reason": { "type": "string", "description": "abort reason" }
+                        }
+                    }
+                }),
+                &["flowId", "phase", "action"],
+            ),
+        },
+        ToolDef {
+            name: "send_request",
+            description: "Send a one-shot HTTP request (like the UI composer). viaProxy=true routes it through the local proxy so it shows up in the capture.",
+            schema: obj(
+                json!({
+                    "method": { "type": "string" },
+                    "url": { "type": "string" },
+                    "headers": { "type": "array", "items": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "string" }] } },
+                    "body": { "type": "string" },
+                    "bodyB64": { "type": "string", "description": "base64 raw body, overrides body" },
+                    "viaProxy": { "type": "boolean", "description": "default false" },
+                    "maxBodyBytes": { "type": "integer", "description": "default 50000" }
+                }),
+                &["method", "url"],
+            ),
+        },
     ]
 }
 
@@ -180,6 +258,12 @@ pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> 
         "save_project" => tool_save_project(deps, args),
         "delete_project" => tool_delete_project(deps, args),
         "set_active_project" => tool_set_active_project(deps, args),
+        "list_breakpoints" => tool_list_breakpoints(deps),
+        "save_breakpoint" => tool_save_breakpoint(deps, args),
+        "delete_breakpoint" => tool_delete_breakpoint(deps, args),
+        "list_paused" => tool_list_paused(deps, args),
+        "resolve_breakpoint" => tool_resolve_breakpoint(deps, args),
+        "send_request" => tool_send_request(deps, args),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -388,6 +472,74 @@ fn tool_set_active_project(deps: &Deps, args: &Value) -> Result<Value, String> {
     Ok(json!({ "active": resolved.map(|p| json!({ "id": p.id, "name": p.name })) }))
 }
 
+fn tool_list_breakpoints(deps: &Deps) -> Result<Value, String> {
+    let bps = crate::breakpoints::load_breakpoints(&deps.rules_dir).map_err(|e| e.to_string())?;
+    Ok(json!({ "breakpoints": bps }))
+}
+
+fn tool_save_breakpoint(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let mut raw = args.get("breakpoint").cloned().ok_or("missing breakpoint")?;
+    if raw.get("id").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
+        raw["id"] = json!(super::gen_id());
+    }
+    if raw.get("enabled").is_none() {
+        raw["enabled"] = json!(true);
+    }
+    let bp: crate::breakpoints::Breakpoint =
+        serde_json::from_value(raw).map_err(|e| format!("bad breakpoint: {e}"))?;
+    let bps = crate::breakpoints::upsert_breakpoint(&deps.rules_dir, bp)?;
+    *deps.state.breakpoints.write().unwrap() = bps.clone();
+    Ok(json!({ "breakpoints": bps }))
+}
+
+fn tool_delete_breakpoint(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = str_arg(args, "id").ok_or("missing id")?;
+    let bps = crate::breakpoints::remove_breakpoint(&deps.rules_dir, &id)?;
+    *deps.state.breakpoints.write().unwrap() = bps.clone();
+    Ok(json!({ "breakpoints": bps }))
+}
+
+fn tool_list_paused(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let max = u64_arg(args, "maxBodyBytes").unwrap_or(50_000) as usize;
+    let paused: Vec<Value> = deps
+        .state
+        .store
+        .all()
+        .iter()
+        .filter(|f| f.state == crate::model::FlowState::Paused)
+        .map(|f| flow_to_json(f, max))
+        .collect();
+    Ok(json!({ "paused": paused }))
+}
+
+fn tool_resolve_breakpoint(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = u64_arg(args, "flowId").ok_or("missing flowId")?;
+    let phase = str_arg(args, "phase").ok_or("missing phase")?;
+    let action = str_arg(args, "action").ok_or("missing action")?;
+    let edited: crate::commands::EditedPayload =
+        serde_json::from_value(args.get("edits").cloned().unwrap_or_else(|| json!({})))
+            .map_err(|e| format!("bad edits: {e}"))?;
+    crate::commands::resolve_breakpoint_core(&deps.state.pending_breakpoints, id, &phase, &action, edited)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn tool_send_request(_deps: &Deps, args: &Value) -> Result<Value, String> {
+    let req: crate::httpsend::SendRequest =
+        serde_json::from_value(args.clone()).map_err(|e| format!("bad request: {e}"))?;
+    let via_proxy = args.get("viaProxy").and_then(|v| v.as_bool()).unwrap_or(false);
+    let max = u64_arg(args, "maxBodyBytes").unwrap_or(50_000) as usize;
+    let resp = crate::httpsend::send_http(&req, via_proxy);
+    let mut v = serde_json::to_value(&resp).map_err(|e| e.to_string())?;
+    if let Some(b) = v.get("body").and_then(|b| b.as_str()) {
+        if b.len() > max {
+            let cut: String = b.chars().take(max).collect();
+            v["body"] = json!(cut);
+            v["truncated"] = json!(true);
+        }
+    }
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +716,65 @@ mod tests {
 
         let listed = dispatch(&deps, "list_projects", &json!({})).unwrap();
         assert!(listed["projects"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn breakpoint_tools_roundtrip() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let out = dispatch(&deps, "save_breakpoint", &json!({
+            "breakpoint": { "name": "B", "pattern": "*/login", "onRequest": true, "onResponse": false }
+        })).unwrap();
+        let id = out["breakpoints"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(state.breakpoints.read().unwrap().len(), 1);
+        dispatch(&deps, "delete_breakpoint", &json!({ "id": id })).unwrap();
+        assert!(state.breakpoints.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_paused_returns_only_paused_flows() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = sample_flow(1, b"x", true);
+        f.state = crate::model::FlowState::Paused;
+        f.paused_phase = Some("request".into());
+        state.store.insert(f);
+        state.store.insert(sample_flow(2, b"y", true));
+        let deps = test_deps(&state, tmp.path());
+        let v = dispatch(&deps, "list_paused", &json!({})).unwrap();
+        let paused = v["paused"].as_array().unwrap();
+        assert_eq!(paused.len(), 1);
+        assert_eq!(paused[0]["id"], json!(1));
+        assert_eq!(paused[0]["pausedPhase"], json!("request"));
+    }
+
+    #[tokio::test]
+    async fn resolve_breakpoint_tool_sends_resolution() {
+        use crate::proxy::{BpPhase, Resolution};
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.pending_breakpoints.lock().unwrap().insert((7, BpPhase::Request), tx);
+        let deps = test_deps(&state, tmp.path());
+        dispatch(&deps, "resolve_breakpoint", &json!({
+            "flowId": 7, "phase": "request", "action": "abort",
+            "edits": { "reason": "nope" }
+        })).unwrap();
+        match rx.await.unwrap() {
+            Resolution::Abort(r) => assert_eq!(r, "nope"),
+            _ => panic!("wrong resolution"),
+        }
+    }
+
+    #[test]
+    fn resolve_breakpoint_missing_flow_errors() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let err = dispatch(&deps, "resolve_breakpoint", &json!({
+            "flowId": 1, "phase": "request", "action": "abort", "edits": {}
+        })).unwrap_err();
+        assert!(err.contains("no pending breakpoint"), "err was: {err}");
     }
 }
