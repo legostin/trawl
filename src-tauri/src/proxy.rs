@@ -26,8 +26,9 @@ use crate::scripting::ScriptClient;
 use crate::store::FlowStore;
 
 pub type EmitFn = Arc<dyn Fn(&str, &Flow) + Send + Sync>;
-/// Delivers a script notification payload to the app (Tauri event `script-notify`).
-pub type NotifyFn = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
+/// Delivers a named app event payload to the app (e.g. Tauri events
+/// `script-notify`, `rule-applied`, `rule-error`).
+pub type AppEventFn = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 pub type SharedRules = Arc<RwLock<Vec<Rule>>>;
 pub type SharedLibrary = Arc<RwLock<String>>;
 pub type SharedProject = Arc<RwLock<Option<Project>>>;
@@ -70,7 +71,7 @@ pub type BreakpointRegistry = Arc<Mutex<HashMap<(u64, BpPhase), oneshot::Sender<
 struct CaptureHandler {
     store: FlowStore,
     emit: EmitFn,
-    notify: NotifyFn,
+    app_event: AppEventFn,
     secret_fn: crate::scripting::SecretFn,
     current_id: Option<u64>,
     ca_pem: String,
@@ -109,8 +110,33 @@ impl CaptureHandler {
             p.insert("source".into(), "rule".into());
             p.insert("ruleName".into(), rule_name.into());
             p.insert("flowId".into(), flow_id.into());
-            (self.notify)(serde_json::Value::Object(p));
+            (self.app_event)("script-notify", serde_json::Value::Object(p));
         }
+    }
+
+    /// Report a rule outcome ("rule-applied" / "rule-error") to the app.
+    fn emit_rule_event(
+        &self,
+        event: &str,
+        rule_name: &str,
+        phase: &str,
+        flow_id: u64,
+        method: &str,
+        host: &str,
+        path: &str,
+        error: Option<&str>,
+    ) {
+        let mut p = serde_json::Map::new();
+        p.insert("ruleName".into(), rule_name.into());
+        p.insert("phase".into(), phase.into());
+        p.insert("flowId".into(), flow_id.into());
+        p.insert("method".into(), method.into());
+        p.insert("host".into(), host.into());
+        p.insert("path".into(), path.into());
+        if let Some(e) = error {
+            p.insert("error".into(), e.into());
+        }
+        (self.app_event)(event, serde_json::Value::Object(p));
     }
 }
 
@@ -336,6 +362,7 @@ impl CaptureHandler {
                 });
                 if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                     (self.emit)("flow-updated", &u);
+                    (self.emit)("breakpoint-timeout", &u);
                 }
                 None
             }
@@ -392,7 +419,9 @@ impl CaptureHandler {
         if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
             (self.emit)("flow-paused", &u);
         }
-        let out = match self.await_resolution(id, BpPhase::Response).await {
+        let resolution = self.await_resolution(id, BpPhase::Response).await;
+        let explicit = resolution.is_some();
+        let out = match resolution {
             Some(Resolution::Execute { status: st, headers: h, body: b, body_bytes: bb, .. }) => {
                 Ok((st.unwrap_or(status), h, bb.unwrap_or_else(|| b.into_bytes())))
             }
@@ -406,6 +435,11 @@ impl CaptureHandler {
             f.state = FlowState::Pending;
             f.paused_phase = None;
         });
+        if explicit {
+            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                (self.emit)("flow-resumed", &u);
+            }
+        }
         out
     }
 
@@ -661,6 +695,7 @@ impl HttpHandler for CaptureHandler {
                     });
                     if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                         (self.emit)("flow-updated", &u);
+                        (self.emit)("flow-resumed", &u);
                     }
                 }
                 Some(Resolution::Abort(reason)) => {
@@ -671,6 +706,7 @@ impl HttpHandler for CaptureHandler {
                     });
                     if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                         (self.emit)("flow-updated", &u);
+                        (self.emit)("flow-resumed", &u);
                         self.persist(&u);
                     }
                     return RequestOrResponse::Response(build_abort_response(&reason));
@@ -692,6 +728,7 @@ impl HttpHandler for CaptureHandler {
                     });
                     if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                         (self.emit)("flow-updated", &u);
+                        (self.emit)("flow-resumed", &u);
                         self.persist(&u);
                     }
                     return RequestOrResponse::Response(build_bytes_response(status, &headers, bytes));
@@ -734,6 +771,16 @@ impl HttpHandler for CaptureHandler {
             .await
             .unwrap_or_else(|_| crate::scripting::ScriptResult::error("handler panicked"));
             self.emit_notifications(&res, &hrule.name, id);
+            if res.action == "respond" {
+                self.emit_rule_event(
+                    "rule-applied", &hrule.name, "handler", id, &req_method, &url.host, &url.path, None,
+                );
+            } else {
+                self.emit_rule_event(
+                    "rule-error", &hrule.name, "handler", id, &req_method, &url.host, &url.path,
+                    res.error.as_deref(),
+                );
+            }
             if let Some(e) = &res.env {
                 self.apply_env(e);
             }
@@ -844,6 +891,9 @@ impl HttpHandler for CaptureHandler {
                 }
                 match res.action.as_str() {
                     "continue" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "request", id, &req_method, &url.host, &url.path, None,
+                        );
                         if let Some(rv) = &res.request {
                             if let Some(h) = rv.get("headers") {
                                 work_headers = json_to_headers(h);
@@ -855,6 +905,9 @@ impl HttpHandler for CaptureHandler {
                         applied.push(rule.name.clone());
                     }
                     "mock" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "request", id, &req_method, &url.host, &url.path, None,
+                        );
                         if let Some(m) = res.mock {
                             directive = Directive::Mock(m);
                         }
@@ -862,11 +915,17 @@ impl HttpHandler for CaptureHandler {
                         break;
                     }
                     "abort" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "request", id, &req_method, &url.host, &url.path, None,
+                        );
                         directive = Directive::Abort(res.reason.unwrap_or_else(|| "aborted".into()));
                         applied.push(rule.name.clone());
                         break;
                     }
                     "breakpoint" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "request", id, &req_method, &url.host, &url.path, None,
+                        );
                         if let Some(rv) = &res.request {
                             if let Some(h) = rv.get("headers") {
                                 work_headers = json_to_headers(h);
@@ -879,7 +938,13 @@ impl HttpHandler for CaptureHandler {
                         applied.push(rule.name.clone());
                         break;
                     }
-                    _ => script_error = res.error,
+                    _ => {
+                        self.emit_rule_event(
+                            "rule-error", &rule.name, "request", id, &req_method, &url.host, &url.path,
+                            res.error.as_deref(),
+                        );
+                        script_error = res.error;
+                    }
                 }
             }
             self.apply_env(&env);
@@ -913,6 +978,7 @@ impl HttpHandler for CaptureHandler {
             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                 (self.emit)("flow-paused", &u);
             }
+            let mut explicit_resume = false;
             match self.await_resolution(id, BpPhase::Request).await {
                 Some(Resolution::Execute { method, headers, body, .. }) => {
                     if let Some(m) = method {
@@ -923,8 +989,12 @@ impl HttpHandler for CaptureHandler {
                         work_body = body;
                     }
                     directive = Directive::Continue;
+                    explicit_resume = true;
                 }
-                Some(Resolution::Abort(reason)) => directive = Directive::Abort(reason),
+                Some(Resolution::Abort(reason)) => {
+                    directive = Directive::Abort(reason);
+                    explicit_resume = true;
+                }
                 Some(Resolution::Respond { status, headers, body, body_bytes }) => {
                     let bytes = body_bytes.unwrap_or_else(|| body.into_bytes());
                     let is_text = looks_textual(&headers);
@@ -942,6 +1012,7 @@ impl HttpHandler for CaptureHandler {
                     });
                     if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                         (self.emit)("flow-updated", &u);
+                        (self.emit)("flow-resumed", &u);
                         self.persist(&u);
                     }
                     return RequestOrResponse::Response(build_bytes_response(status, &headers, bytes));
@@ -959,6 +1030,9 @@ impl HttpHandler for CaptureHandler {
             });
             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                 (self.emit)("flow-updated", &u);
+                if explicit_resume {
+                    (self.emit)("flow-resumed", &u);
+                }
             }
         }
 
@@ -1022,15 +1096,16 @@ impl HttpHandler for CaptureHandler {
         let found = self.store.all().into_iter().find(|f| f.id == id);
         let flow_method = found.as_ref().map(|f| f.method.clone()).unwrap_or_default();
         let flow_url = found.map(|f| f.url);
-        let (targets, host_str) = match &flow_url {
+        let (targets, host_str, path_str) = match &flow_url {
             Some(u) => (
                 vec![
                     format!("{}{}", u.host, u.path),
                     format!("{}:{}{}", u.host, u.port, u.path),
                 ],
                 u.host.clone(),
+                u.path.clone(),
             ),
-            None => (vec![], String::new()),
+            None => (vec![], String::new(), String::new()),
         };
         let rules = self.matching(Phase::Response, &targets);
         let mut work_status = status;
@@ -1060,6 +1135,9 @@ impl HttpHandler for CaptureHandler {
                 }
                 match res.action.as_str() {
                     "continue" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "response", id, &flow_method, &host_str, &path_str, None,
+                        );
                         if let Some(rv) = &res.response {
                             if let Some(s) = rv.get("status").and_then(|s| s.as_u64()) {
                                 work_status = s as u16;
@@ -1074,6 +1152,9 @@ impl HttpHandler for CaptureHandler {
                         applied.push(rule.name.clone());
                     }
                     "breakpoint" => {
+                        self.emit_rule_event(
+                            "rule-applied", &rule.name, "response", id, &flow_method, &host_str, &path_str, None,
+                        );
                         if let Some(rv) = &res.response {
                             if let Some(s) = rv.get("status").and_then(|s| s.as_u64()) {
                                 work_status = s as u16;
@@ -1088,7 +1169,13 @@ impl HttpHandler for CaptureHandler {
                         rule_break = true;
                         applied.push(rule.name.clone());
                     }
-                    _ => script_error = res.error,
+                    _ => {
+                        self.emit_rule_event(
+                            "rule-error", &rule.name, "response", id, &flow_method, &host_str, &path_str,
+                            res.error.as_deref(),
+                        );
+                        script_error = res.error;
+                    }
                 }
             }
             self.apply_env(&env);
@@ -1112,6 +1199,7 @@ impl HttpHandler for CaptureHandler {
             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                 (self.emit)("flow-paused", &u);
             }
+            let mut explicit_resume = false;
             match self.await_resolution(id, BpPhase::Response).await {
                 Some(Resolution::Execute { status, headers, body, body_bytes, .. }) => {
                     if let Some(sc) = status {
@@ -1123,6 +1211,7 @@ impl HttpHandler for CaptureHandler {
                     } else if is_text {
                         work_body = body;
                     }
+                    explicit_resume = true;
                 }
                 Some(Resolution::Abort(reason)) => {
                     self.store.update(id, |f| {
@@ -1132,6 +1221,7 @@ impl HttpHandler for CaptureHandler {
                     });
                     if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                         (self.emit)("flow-updated", &u);
+                        (self.emit)("flow-resumed", &u);
                         self.persist(&u);
                     }
                     return build_abort_response(&reason);
@@ -1143,6 +1233,11 @@ impl HttpHandler for CaptureHandler {
                 f.state = FlowState::Pending;
                 f.paused_phase = None;
             });
+            if explicit_resume {
+                if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    (self.emit)("flow-resumed", &u);
+                }
+            }
         }
 
         let substituted = sub_bytes.is_some();
@@ -1212,7 +1307,7 @@ pub async fn start(
     addr: SocketAddr,
     store: FlowStore,
     emit: EmitFn,
-    notify: NotifyFn,
+    app_event: AppEventFn,
     secret_fn: crate::scripting::SecretFn,
     ca_dir: PathBuf,
     scripts: ScriptClient,
@@ -1237,7 +1332,7 @@ pub async fn start(
     let handler = CaptureHandler {
         store,
         emit,
-        notify,
+        app_event,
         secret_fn,
         current_id: None,
         ca_pem: ca.cert_pem,
@@ -1388,7 +1483,7 @@ mod tests {
             std::env::temp_dir().join(format!("httpcatch-proxy-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start(proxy_addr, store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start(proxy_addr, store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1423,7 +1518,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1478,7 +1573,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-gz-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1515,7 +1610,7 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-https-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1596,7 +1691,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1637,7 +1732,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -1654,15 +1749,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    fn notify_noop() -> NotifyFn {
-        Arc::new(|_| {})
+    fn app_event_noop() -> AppEventFn {
+        Arc::new(|_, _| {})
     }
     fn secret_none() -> crate::scripting::SecretFn {
         Arc::new(|_: &str| None)
     }
 
-    // A rule's notify() call is forwarded to the app's NotifyFn with the
-    // expected `script-notify` payload shape.
+    // A rule's notify() call is forwarded to the app's AppEventFn as a
+    // ("script-notify", payload) event.
     #[tokio::test]
     async fn rule_notify_reaches_notify_fn() {
         let upstream_addr = echo_upstream().await;
@@ -1677,16 +1772,16 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
 
-        let (ntx, mut nrx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
-        let notify: NotifyFn = Arc::new(move |p| {
-            let _ = ntx.send(p);
+        let (ntx, mut nrx) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+        let app_event: AppEventFn = Arc::new(move |event: &str, payload: serde_json::Value| {
+            let _ = ntx.send((event.to_string(), payload));
         });
 
         let handle = start(
             "127.0.0.1:0".parse().unwrap(),
             store.clone(),
             emit,
-            notify,
+            app_event,
             secret_none(),
             ca_dir.clone(),
             s,
@@ -1715,15 +1810,110 @@ mod tests {
             .await
             .unwrap();
 
-        let p = tokio::time::timeout(std::time::Duration::from_secs(5), nrx.recv())
-            .await
-            .expect("notification not emitted")
-            .unwrap();
+        // The rule both notifies and applies cleanly, so two events arrive on
+        // the channel; find the "script-notify" one.
+        let mut p = None;
+        for _ in 0..2 {
+            let (event, payload) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), nrx.recv())
+                    .await
+                    .expect("notification not emitted")
+                    .unwrap();
+            if event == "script-notify" {
+                p = Some(payload);
+                break;
+            }
+        }
+        let p = p.expect("script-notify not emitted");
         assert_eq!(p["text"], "hello");
         assert_eq!(p["channel"], "ops");
         assert_eq!(p["source"], "rule");
         assert_eq!(p["ruleName"], "notifier");
         assert!(p["flowId"].is_u64());
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // Two request-phase rules: one applies cleanly ("ok"), the next throws
+    // ("boom"). Both outcomes are reported to the app via AppEventFn as
+    // ("rule-applied", ...) / ("rule-error", ...) events.
+    #[tokio::test]
+    async fn rule_apply_and_error_reach_app_event_fn() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![
+            rule("ok", "*", Phase::Request, "setHeader(request,'X-A','1');"),
+            rule("boom", "*", Phase::Request, "throw new Error('kaput');"),
+        ];
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
+        let ca_dir = temp_ca();
+
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+        let app_event: AppEventFn = Arc::new(move |event: &str, payload: serde_json::Value| {
+            let _ = etx.send((event.to_string(), payload));
+        });
+
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(),
+            store.clone(),
+            emit,
+            app_event,
+            secret_none(),
+            ca_dir.clone(),
+            s,
+            r,
+            l,
+            p,
+            ca_dir.clone(),
+            None,
+            bps,
+            icept,
+            pending,
+            Arc::new(RwLock::new(0)),
+            Arc::new(RwLock::new(false)),
+        )
+        .await
+        .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let _ = client
+            .get(format!("http://{upstream_addr}/api"))
+            .send()
+            .await
+            .unwrap();
+
+        let mut applied: Option<serde_json::Value> = None;
+        let mut errored: Option<serde_json::Value> = None;
+        for _ in 0..2 {
+            let (event, payload) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), erx.recv())
+                    .await
+                    .expect("app event not emitted")
+                    .unwrap();
+            match event.as_str() {
+                "rule-applied" => applied = Some(payload),
+                "rule-error" => errored = Some(payload),
+                other => panic!("unexpected app event {other}"),
+            }
+        }
+
+        let applied = applied.expect("rule-applied not emitted");
+        assert_eq!(applied["ruleName"], "ok");
+        assert_eq!(applied["phase"], "request");
+        assert_eq!(applied["method"], "GET");
+        assert!(applied["flowId"].is_u64());
+        assert!(applied["host"].is_string());
+        assert!(applied["path"].is_string());
+
+        let errored = errored.expect("rule-error not emitted");
+        assert_eq!(errored["ruleName"], "boom");
+        assert!(errored["error"].as_str().unwrap().contains("kaput"));
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
@@ -1735,12 +1925,15 @@ mod tests {
     async fn request_breakpoint_execute_applies_edit() {
         let upstream_addr = echo_upstream().await;
         let store = FlowStore::new(10);
-        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let emit: EmitFn = Arc::new(move |e: &str, _f: &Flow| {
+            let _ = etx.send(e.to_string());
+        });
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1774,6 +1967,14 @@ mod tests {
             .send().await.unwrap().text().await.unwrap();
         assert!(echoed.to_lowercase().contains("x-debug: edited"), "edit not applied: {echoed}");
 
+        // Resolving the paused flow with an explicit Execute resolution must
+        // surface a "flow-resumed" event to the app.
+        let mut events = Vec::new();
+        while let Ok(e) = erx.try_recv() {
+            events.push(e);
+        }
+        assert!(events.contains(&"flow-resumed".to_string()), "events: {events:?}");
+
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
@@ -1790,7 +1991,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1837,7 +2038,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("http://{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1880,7 +2081,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1922,14 +2123,17 @@ mod tests {
     async fn breakpoint_auto_continues_on_timeout() {
         let upstream_addr = echo_upstream().await;
         let store = FlowStore::new(10);
-        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let emit: EmitFn = Arc::new(move |e: &str, _f: &Flow| {
+            let _ = etx.send(e.to_string());
+        });
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let timeout = Arc::new(RwLock::new(1u64)); // 1s auto-continue
         let pother = Arc::new(RwLock::new(false));
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending, timeout, pother,
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -1941,6 +2145,15 @@ mod tests {
         let status = client.get(format!("http://{upstream_addr}/api"))
             .send().await.unwrap().status();
         assert_eq!(status, 200, "flow should auto-continue after the timeout");
+
+        // The auto-continue path must surface "breakpoint-timeout" (not
+        // "flow-resumed", which is reserved for explicit resolutions).
+        let mut events = Vec::new();
+        while let Ok(e) = erx.try_recv() {
+            events.push(e);
+        }
+        assert!(events.contains(&"breakpoint-timeout".to_string()), "events: {events:?}");
+        assert!(!events.contains(&"flow-resumed".to_string()), "events: {events:?}");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
@@ -1956,7 +2169,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), true, false)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2009,7 +2222,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2062,7 +2275,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint("handler.test/*", false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2122,7 +2335,7 @@ mod tests {
         *bps.write().unwrap() = vec![bp];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2180,7 +2393,7 @@ mod tests {
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
         let ca_dir = temp_ca();
         let handle = start(
-            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(),
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
             s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
         ).await.unwrap();
         let bound = handle.local_addr();
@@ -2248,7 +2461,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2309,7 +2522,7 @@ mod tests {
         )];
         let (s, r, l, p, bps, icept, pending) = scripting(rules);
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2382,7 +2595,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *p.write().unwrap() = Some(project("proj", &["tracked.example"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2419,7 +2632,7 @@ mod tests {
         let (s, r, l, p, bps, icept, pending) = scripting(vec![proj_rule, global_rule]);
         *p.write().unwrap() = Some(project("proj", &["127.0.0.1"]));
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
@@ -2484,7 +2697,7 @@ mod tests {
         let emit: EmitFn = Arc::new(|_e, _f| {});
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // без правил — обычный путь
         let ca_dir = temp_ca();
-        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, notify_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
