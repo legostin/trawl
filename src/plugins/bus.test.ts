@@ -42,3 +42,35 @@ describe("EventBus", () => {
     expect(ok).toHaveBeenCalledOnce();
   });
 });
+
+describe("event registry", () => {
+  it("known() lists described events with their meta", () => {
+    const b = new EventBus();
+    b.describe("core:x", { description: "d", payloadType: "{ a: number }", source: "core" });
+    expect(b.known()).toEqual([
+      {
+        type: "core:x",
+        description: "d",
+        payloadType: "{ a: number }",
+        source: "core",
+        lastPayload: undefined,
+      },
+    ]);
+  });
+
+  it("emit() records the last payload, and undeclared events appear in known()", () => {
+    const b = new EventBus();
+    b.emit("p:evt", { n: 1 });
+    b.emit("p:evt", { n: 2 });
+    expect(b.known()).toEqual([{ type: "p:evt", lastPayload: { n: 2 } }]);
+  });
+
+  it("declared meta merges with the observed payload, sorted by type", () => {
+    const b = new EventBus();
+    b.describe("b:evt", { payloadType: "{ ok: boolean }" });
+    b.emit("b:evt", { ok: true });
+    b.emit("a:evt", 42);
+    expect(b.known().map((e) => e.type)).toEqual(["a:evt", "b:evt"]);
+    expect(b.known()[1]).toMatchObject({ payloadType: "{ ok: boolean }", lastPayload: { ok: true } });
+  });
+});
