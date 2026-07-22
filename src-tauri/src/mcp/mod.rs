@@ -2,6 +2,7 @@
 
 pub mod core_tools;
 pub mod plugin_bridge;
+pub mod server;
 
 use std::collections::HashMap;
 use std::fs;
@@ -107,6 +108,7 @@ pub struct McpState {
     pub bridge: Arc<plugin_bridge::PluginBridge>,
     pub peers: Arc<PeerRegistry>,
     pub last_error: Mutex<Option<String>>,
+    pub server: Mutex<Option<server::ServerHandle>>,
 }
 
 impl McpState {
@@ -115,8 +117,62 @@ impl McpState {
             bridge: Arc::new(plugin_bridge::PluginBridge::new()),
             peers: Arc::new(PeerRegistry::new()),
             last_error: Mutex::new(None),
+            server: Mutex::new(None),
         }
     }
+}
+
+/// Останавливает и (если enabled) заново поднимает сервер по конфигу.
+pub async fn apply_config(app: &tauri::AppHandle, cfg: &McpConfig) {
+    use tauri::Manager;
+    let mcp = app.state::<McpState>();
+    if let Some(h) = mcp.server.lock().unwrap().take() {
+        h.stop();
+    }
+    *mcp.last_error.lock().unwrap() = None;
+    if !cfg.enabled {
+        return;
+    }
+    match server::start_server(app.clone(), cfg.clone()).await {
+        Ok(h) => *mcp.server.lock().unwrap() = Some(h),
+        Err(e) => *mcp.last_error.lock().unwrap() = Some(e),
+    }
+}
+
+#[tauri::command]
+pub fn mcp_get_config(app: tauri::AppHandle) -> Result<McpConfig, String> {
+    Ok(load_config(&crate::commands::data_dir(&app)?))
+}
+
+#[tauri::command]
+pub async fn mcp_set_config(app: tauri::AppHandle, enabled: bool, port: u16) -> Result<McpConfig, String> {
+    let dir = crate::commands::data_dir(&app)?;
+    let mut cfg = load_config(&dir);
+    cfg.enabled = enabled;
+    cfg.port = port;
+    save_config(&dir, &cfg)?;
+    apply_config(&app, &cfg).await;
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub async fn mcp_regen_token(app: tauri::AppHandle) -> Result<McpConfig, String> {
+    let dir = crate::commands::data_dir(&app)?;
+    let mut cfg = load_config(&dir);
+    cfg.token = gen_token();
+    save_config(&dir, &cfg)?;
+    apply_config(&app, &cfg).await;
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn mcp_server_status(state: tauri::State<'_, McpState>) -> serde_json::Value {
+    let server = state.server.lock().unwrap();
+    serde_json::json!({
+        "running": server.is_some(),
+        "addr": server.as_ref().map(|h| h.addr.to_string()),
+        "error": *state.last_error.lock().unwrap(),
+    })
 }
 
 #[cfg(test)]

@@ -24,11 +24,22 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::new())
+        .manage(mcp::McpState::new())
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<AppState>();
             if let Err(e) = commands::init_db(app.handle(), &state) {
                 eprintln!("failed to initialize flow DB: {e}");
+            }
+            match commands::data_dir(app.handle()) {
+                Ok(dir) => {
+                    let cfg = mcp::load_config(&dir);
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        mcp::apply_config(&handle, &cfg).await;
+                    });
+                }
+                Err(e) => eprintln!("mcp: no data dir: {e}"),
             }
             Ok(())
         })
@@ -86,6 +97,14 @@ pub fn run() {
             setup_actions::install_ca_ios_simulator,
             setup_actions::ios_simulator_booted,
             setup_actions::launch_chrome_proxy,
+            mcp::mcp_get_config,
+            mcp::mcp_set_config,
+            mcp::mcp_regen_token,
+            mcp::mcp_server_status,
+            mcp::plugin_bridge::mcp_register_tool,
+            mcp::plugin_bridge::mcp_unregister_tool,
+            mcp::plugin_bridge::mcp_clear_plugin_tools,
+            mcp::plugin_bridge::mcp_tool_result,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
