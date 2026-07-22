@@ -117,8 +117,8 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     const before = new Set(get().installed.map((p) => p.id));
     const installed = await invoke<Plugin[]>("install_plugin", { repo, reference });
     set({ installed });
-    const added = installed.find((p) => !before.has(p.id));
-    if (added) {
+    // A manifest with dependencies can install several new plugins at once.
+    for (const added of installed.filter((p) => !before.has(p.id))) {
       bus.emit("plugin:installed", { id: added.id, name: added.name, version: added.version });
     }
   },
