@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import yaml from "js-yaml";
+import { load as loadYaml } from "js-yaml";
 import { useLayout } from "./layout";
 import type { FlowAction, RegisteredMode } from "./plugins/api";
 
@@ -20,7 +20,7 @@ export interface CatalogEntry {
 /** Fetch and parse the public plugin catalog (raw YAML fetched by the backend). */
 export async function fetchCatalog(): Promise<CatalogEntry[]> {
   const text = await invoke<string>("fetch_plugin_catalog");
-  const doc = yaml.load(text) as { plugins?: CatalogEntry[] } | null;
+  const doc = loadYaml(text) as { plugins?: CatalogEntry[] } | null;
   return (doc?.plugins ?? []).filter((p) => p && p.id && p.repo);
 }
 
