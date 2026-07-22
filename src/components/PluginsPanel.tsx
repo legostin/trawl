@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, ArrowUpCircle, KeyRound, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
-import { usePlugins } from "@/plugins";
+import { usePlugins, fetchCatalog, catalogInstallRepo, type CatalogEntry } from "@/plugins";
 import { loadEnabledPlugins, loadPlugin } from "@/plugins/loader";
 import { useToast } from "../toast";
 import { Button } from "./ui/button";
@@ -23,6 +23,8 @@ export function PluginsPanel() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   /** First path segment of the input that looks like a non-github.com domain. */
   const ghost = (() => {
@@ -33,7 +35,23 @@ export function PluginsPanel() {
 
   useEffect(() => {
     void load().then(() => usePlugins.getState().checkUpdates());
+    void fetchCatalog()
+      .then(setCatalog)
+      .catch((e) => setCatalogError(e instanceof Error ? e.message : String(e)));
   }, [load]);
+
+  const installCatalog = async (e: CatalogEntry) => {
+    setBusy(true);
+    try {
+      await install(catalogInstallRepo(e));
+      await loadEnabledPlugins();
+      show(`Installed ${e.name}`);
+    } catch (err) {
+      show(`Install failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const runCheck = async () => {
     setChecking(true);
@@ -224,6 +242,52 @@ export function PluginsPanel() {
           ))}
         </ul>
       )}
+
+      <div className="mt-8">
+        <h3 className="mb-1 text-sm font-semibold">Catalog</h3>
+        <p className="mb-3 text-xs text-muted-foreground">Public plugins you can install with one click.</p>
+        {catalogError ? (
+          <p className="text-xs text-muted-foreground">Couldn’t load the catalog: {catalogError}</p>
+        ) : catalog.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {catalog.map((e) => {
+              const isInstalled = installed.some((p) => p.id === e.id || p.repo === e.repo);
+              return (
+                <li
+                  key={e.id}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-sm font-medium">{e.name}</span>
+                      {e.author && <span className="text-[10px] text-muted-foreground">by {e.author}</span>}
+                      {e.tags?.map((t) => (
+                        <span key={t} className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="truncate font-mono text-xs text-muted-foreground">{catalogInstallRepo(e)}</div>
+                    {e.description && (
+                      <div className="mt-0.5 text-xs text-muted-foreground">{e.description}</div>
+                    )}
+                  </div>
+                  {isInstalled ? (
+                    <span className="shrink-0 text-xs text-http-green">Installed</span>
+                  ) : (
+                    <Button size="sm" disabled={busy} onClick={() => void installCatalog(e)}>
+                      <Package />
+                      Install
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

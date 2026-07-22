@@ -286,6 +286,28 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 // ── Tauri commands ──
 
+/// Raw URL of the public plugin catalog (YAML). Updatable without an app release.
+const CATALOG_URL: &str =
+    "https://raw.githubusercontent.com/legostin/trawl/main/plugins.yaml";
+
+/// Fetch the public plugin catalog as raw YAML text (parsed in the frontend).
+#[tauri::command]
+pub async fn fetch_plugin_catalog() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("trawl-plugin-installer")
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client.get(CATALOG_URL).send().map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {} for plugin catalog", resp.status()));
+        }
+        resp.text().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn fetch_plugin_manifest(
     app: AppHandle,

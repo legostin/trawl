@@ -1,0 +1,18 @@
+# Trawl public plugin catalog.
+# Shown in the app's Plugins tab. Add an entry and push — no app release needed.
+# Fields: id, name, description, author, repo ("owner/repo"), host (optional,
+# defaults to github.com), tags (optional).
+plugins:
+  - id: http-client
+    name: HTTP Client
+    description: Postman-style HTTP client — send and edit requests, and open captured requests from traffic.
+    author: legostin
+    repo: legostin/trawl-plugin-http-client
+    tags: [http, client, requests]
+
+  - id: contract-check
+    name: Contracts
+    description: Compare responses of saved/captured requests against reference templates — structural JSON diffs, ignore masks, live traffic checks, and history.
+    author: legostin
+    repo: legostin/trawl-plugin-contract-check
+    tags: [testing, contracts, diff]
