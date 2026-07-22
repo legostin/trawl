@@ -23,6 +23,10 @@ import { buildCurl } from "@/lib/curl";
 import { BodyViewer } from "@/components/BodyViewer";
 import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
+import { ScriptEditor } from "@/components/ScriptEditor";
+import { analyzeJson, fieldsToType } from "@/lib/analyze";
+import { setEventPayloadType } from "@/monaco-setup";
+import { listSecrets, getSecret, setSecret, deleteSecret } from "@/secrets";
 import { bus } from "./bus";
 import type {
   ActiveProject,
@@ -33,7 +37,7 @@ import type {
   TrawlHost,
 } from "./api";
 
-const HOST_VERSION = "1.5.0";
+const HOST_VERSION = "1.6.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -64,6 +68,8 @@ export function installHost(): void {
       on: (t, cb) => bus.on(t, cb),
       off: (t, cb) => bus.off(t, cb),
       emit: (t, p) => bus.emit(t, p),
+      describe: (t, m) => bus.describe(t, m),
+      known: () => bus.known(),
     },
     flows: {
       query: (f, limit, offset) => queryFlows(scoped(f), limit, offset),
@@ -121,10 +127,20 @@ export function installHost(): void {
       set: (key: string, value: string) =>
         invoke<void>("plugin_storage_set", { key, value }),
     },
-    ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge },
+    secrets: {
+      list: () => listSecrets(),
+      get: (name: string) => getSecret(name),
+      set: (name: string, value: string) => setSecret(name, value),
+      remove: (name: string) => deleteSecret(name),
+    },
+    ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge, ScriptEditor },
     util: {
       bodyText: (msg) => bodyToText(msg),
       buildCurl: (flow) => buildCurl(flow),
+      inferTypeBody: (samples: unknown[]) => fieldsToType(analyzeJson(samples)),
+      inferFields: (samples: unknown[]) =>
+        analyzeJson(samples).map(({ path, type, example }) => ({ path, type, example })),
+      setPayloadType: (typeBody: string) => setEventPayloadType(typeBody),
     },
     openUrl: (url: string) => openUrl(url),
     registerMode: (mode: RegisteredMode) => usePlugins.getState().registerMode(mode),
@@ -141,6 +157,45 @@ export function installHost(): void {
   // Bridge Tauri capture events into the plugin bus.
   void listen("flow-added", (e) => bus.emit("flow:added", e.payload));
   void listen("flow-updated", (e) => bus.emit("flow:updated", e.payload));
+
+  // Script notify() → plugin bus (delivery is a plugin concern, e.g. Telegram).
+  void listen("script-notify", (e) => bus.emit("notify:send", e.payload));
+
+  const FLOW_TYPE = `{
+    id: number; timestamp: number; method: string;
+    url: { scheme: string; host: string; port: number; path: string };
+    request: { headers: [string, string][]; body: number[] | string; bodyIsText: boolean };
+    response: { status: number; headers: [string, string][]; body: number[] | string; bodyIsText: boolean } | null;
+    state: string; error: string | null; appliedRules: string[];
+  }`;
+  bus.describe("flow:added", {
+    description: "A new request/response was captured",
+    payloadType: FLOW_TYPE,
+    source: "core",
+  });
+  bus.describe("flow:updated", {
+    description: "A captured flow changed (response arrived, breakpoint resolved)",
+    payloadType: FLOW_TYPE,
+    source: "core",
+  });
+  bus.describe("capture:started", { description: "The proxy started", source: "core" });
+  bus.describe("capture:stopped", { description: "The proxy stopped", source: "core" });
+  bus.describe("filter:changed", {
+    description: "The traffic search/filter changed",
+    payloadType: "{ [key: string]: any }",
+    source: "core",
+  });
+  bus.describe("project:changed", {
+    description: "The active project selector changed",
+    payloadType: "string | null",
+    source: "core",
+  });
+  bus.describe("notify:send", {
+    description: "Deliver a notification (emitted by rule notify() and plugins)",
+    payloadType:
+      "{ text: string; channel?: string; title?: string; source?: string; ruleName?: string; flowId?: number }",
+    source: "core",
+  });
 
   // Bridge relevant store changes into the bus (bidirectional: plugins can also emit).
   let lastFilter = useFlows.getState().filter;

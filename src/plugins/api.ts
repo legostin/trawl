@@ -7,6 +7,9 @@ import type * as React from "react";
 import type { AggBucket, FlowQuery, FlowRow, GroupBy, Report } from "@/db";
 import type { SendRequest, SendResponse } from "@/http";
 import type { Flow, HttpMessage, ResponseMessage } from "@/types";
+import type { EventInfo, EventMeta } from "./bus";
+
+export type { EventInfo, EventMeta } from "./bus";
 
 export interface RegisteredMode {
   id: string;
@@ -31,11 +34,23 @@ export interface TrawlUi {
   HeadersTable: React.ComponentType<{ headers: [string, string][]; emptyText?: string }>;
   MethodBadge: React.ComponentType<{ method: string; className?: string }>;
   StatusBadge: React.ComponentType<{ status: number | undefined; className?: string }>;
+  /** Monaco-backed code editor wired to the host's completion setup. */
+  ScriptEditor: React.ComponentType<{
+    value: string;
+    onChange: (v: string) => void;
+    language?: string;
+  }>;
 }
 
 export interface TrawlUtil {
   bodyText(msg: HttpMessage | ResponseMessage | null): string;
   buildCurl(flow: Flow): string;
+  /** TS type expression inferred from sample values (for setPayloadType). */
+  inferTypeBody(samples: unknown[]): string;
+  /** Flat field list (path/type/example) inferred from sample values. */
+  inferFields(samples: unknown[]): { path: string; type: string; example?: string }[];
+  /** Type the global `payload` in Monaco editors (subscription condition hints). */
+  setPayloadType(typeBody: string): void;
 }
 
 export interface TrawlHttp {
@@ -91,11 +106,22 @@ export interface TrawlStorage {
   set(key: string, value: string): Promise<void>;
 }
 
+/** App-wide named secrets (macOS Keychain). Shared with rule scripts (secret()). */
+export interface TrawlSecrets {
+  list(): Promise<string[]>;
+  get(name: string): Promise<string | null>;
+  set(name: string, value: string): Promise<void>;
+  remove(name: string): Promise<void>;
+}
+
 export interface PluginEvents {
-  /** Subscribe to an event; returns an unsubscribe fn. */
   on(type: string, cb: (payload: unknown) => void): () => void;
   off(type: string, cb: (payload: unknown) => void): void;
   emit(type: string, payload?: unknown): void;
+  /** Declare an event + payload type so other plugins get hints for it. */
+  describe(type: string, meta: EventMeta): void;
+  /** Declared and observed events (with last payloads) for subscription UIs. */
+  known(): EventInfo[];
 }
 
 export interface PluginFlows {
@@ -129,6 +155,7 @@ export interface TrawlHost {
   gitHosts: TrawlGitHosts;
   rules: TrawlRules;
   storage: TrawlStorage;
+  secrets: TrawlSecrets;
   ui: TrawlUi;
   util: TrawlUtil;
   registerMode(mode: RegisteredMode): void;
