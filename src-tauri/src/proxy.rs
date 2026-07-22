@@ -394,6 +394,11 @@ impl CaptureHandler {
     /// produced inside `handle_request` (handler rules) that never reach
     /// `handle_response`. The flow MUST already be in the store. Ok = send it,
     /// Err(reason) = abort. Response phase only, so a String body is fine.
+    /// Returns the resolved (status, headers, body) or an abort reason, plus
+    /// whether the pause was resolved by an explicit Resolution (Execute/
+    /// Respond/Abort) — as opposed to a dropped sender or auto-continue
+    /// timeout. The caller uses that flag to emit "flow-resumed" only once
+    /// the final resolved response has been written back to the store.
     async fn break_response(
         &self,
         id: u64,
@@ -402,9 +407,9 @@ impl CaptureHandler {
         status: u16,
         headers: Vec<(String, String)>,
         body: String,
-    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), String> {
+    ) -> (Result<(u16, Vec<(String, String)>, Vec<u8>), String>, bool) {
         if !self.breakpoint_matches(BpPhase::Response, targets, method) {
-            return Ok((status, headers, body.into_bytes()));
+            return (Ok((status, headers, body.into_bytes())), false);
         }
         self.store.update(id, |f| {
             f.state = FlowState::Paused;
@@ -435,12 +440,7 @@ impl CaptureHandler {
             f.state = FlowState::Pending;
             f.paused_phase = None;
         });
-        if explicit {
-            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
-                (self.emit)("flow-resumed", &u);
-            }
-        }
-        out
+        (out, explicit)
     }
 
     fn matching_handler(&self, targets: &[String]) -> Option<Rule> {
@@ -819,7 +819,7 @@ impl HttpHandler for CaptureHandler {
 
                     // Response breakpoint fires on the handler's synthetic response too.
                     match self.break_response(id, &targets, &req_method, status, headers, body_str).await {
-                        Ok((status, headers, body_bytes)) => {
+                        (Ok((status, headers, body_bytes)), explicit) => {
                             let is_text = looks_textual(&headers);
                             self.store.update(id, |f| {
                                 f.response = Some(ResponseMessage {
@@ -832,17 +832,23 @@ impl HttpHandler for CaptureHandler {
                             });
                             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                                 (self.emit)("flow-updated", &u);
+                                if explicit {
+                                    (self.emit)("flow-resumed", &u);
+                                }
                                 self.persist(&u);
                             }
                             return RequestOrResponse::Response(build_bytes_response(status, &headers, body_bytes));
                         }
-                        Err(reason) => {
+                        (Err(reason), explicit) => {
                             self.store.update(id, |f| {
                                 f.state = FlowState::Error;
                                 f.error = Some(reason.clone());
                             });
                             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                                 (self.emit)("flow-updated", &u);
+                                if explicit {
+                                    (self.emit)("flow-resumed", &u);
+                                }
                                 self.persist(&u);
                             }
                             return RequestOrResponse::Response(build_abort_response(&reason));
@@ -1226,8 +1232,12 @@ impl HttpHandler for CaptureHandler {
                     }
                     return build_abort_response(&reason);
                 }
-                // Respond has no meaning in the response phase; treat as continue.
-                Some(Resolution::Respond { .. }) | None => {}
+                // Respond has no meaning in the response phase (value-wise treated
+                // as continue), but it's still an explicit resolution — report it.
+                Some(Resolution::Respond { .. }) => {
+                    explicit_resume = true;
+                }
+                None => {}
             }
             self.store.update(id, |f| {
                 f.state = FlowState::Pending;
@@ -2258,12 +2268,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
+    // A response-phase breakpoint resolved with Resolution::Respond has no
+    // effect on the outgoing bytes (treated as continue, per the existing
+    // value-handling), but it IS an explicit resolution and must still emit
+    // "flow-resumed" — distinguishing it from an auto-continue timeout.
+    #[tokio::test]
+    async fn response_breakpoint_respond_resolution_emits_flow_resumed() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = upstream.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut b = [0u8; 1024];
+                    let _ = sock.read(&mut b).await;
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\norig").await;
+                });
+            }
+        });
+
+        let store = FlowStore::new(10);
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let emit: EmitFn = Arc::new(move |e: &str, _f: &Flow| {
+            let _ = etx.send(e.to_string());
+        });
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
+        let ca_dir = temp_ca();
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(), store.clone(), emit, app_event_noop(), secret_none(), ca_dir.clone(),
+            s, r, l, p, ca_dir.clone(), None, bps, icept, pending.clone(), Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)),
+        ).await.unwrap();
+        let bound = handle.local_addr();
+
+        let pending2 = pending.clone();
+        let store2 = store.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(f) = store2.all().into_iter().find(|f| f.paused_phase.as_deref() == Some("response")) {
+                    if let Some(tx) = pending2.lock().unwrap().remove(&(f.id, BpPhase::Response)) {
+                        let _ = tx.send(Resolution::Respond {
+                            status: 999, // ignored in the response phase
+                            headers: vec![],
+                            body: "ignored".into(),
+                            body_bytes: None,
+                        });
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build().unwrap();
+        let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
+        // Respond has no meaning here — original upstream response passes through.
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.unwrap(), "orig");
+
+        let mut events = Vec::new();
+        while let Ok(e) = erx.try_recv() {
+            events.push(e);
+        }
+        assert!(events.contains(&"flow-resumed".to_string()), "events: {events:?}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
     // A response breakpoint fires on a handler rule's synthetic response too —
     // even though it never passes through handle_response.
     #[tokio::test]
     async fn response_breakpoint_fires_on_handler_response() {
         let store = FlowStore::new(10);
-        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<(String, Flow)>();
+        let emit: EmitFn = Arc::new(move |e: &str, f: &Flow| {
+            let _ = etx.send((e.to_string(), f.clone()));
+        });
         // Handler returns a synthetic response (no upstream) on 1.2.3.4.
         let rules = vec![rule(
             "mock-handler",
@@ -2304,6 +2388,24 @@ mod tests {
         let resp = client.get("http://handler.test/x").send().await.unwrap();
         assert_eq!(resp.status(), 418, "response breakpoint did not fire on handler response");
         assert_eq!(resp.text().await.unwrap(), "edited");
+
+        // The "flow-resumed" event must carry the FINAL resolved response
+        // (status 418 / "edited"), not a stale pre-resolution snapshot.
+        let mut resumed: Option<Flow> = None;
+        let mut events = Vec::new();
+        while let Ok((e, f)) = erx.try_recv() {
+            events.push(e.clone());
+            if e == "flow-resumed" {
+                resumed = Some(f);
+            }
+        }
+        let resumed = match resumed {
+            Some(f) => f,
+            None => panic!("flow-resumed not emitted; events: {events:?}"),
+        };
+        let resp_msg = resumed.response.expect("resumed flow has no response");
+        assert_eq!(resp_msg.status, 418);
+        assert_eq!(String::from_utf8_lossy(&resp_msg.body), "edited");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
