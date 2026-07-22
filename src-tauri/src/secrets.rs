@@ -94,7 +94,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use keyring::credential::{CredentialApi, CredentialBuilder, CredentialBuilderApi};
+    use keyring::credential::{CredentialApi, CredentialBuilderApi};
 
     /// Custom in-memory credential store for testing.
     /// Persists passwords across Entry::new() calls via a shared HashMap.
