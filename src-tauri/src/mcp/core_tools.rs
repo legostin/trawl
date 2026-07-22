@@ -90,6 +90,78 @@ pub fn core_tools() -> Vec<ToolDef> {
                 &[],
             ),
         },
+        ToolDef {
+            name: "list_rules",
+            description: "List rewrite rules (glob pattern over host+path, phase, JS script). Optional projectId filter.",
+            schema: obj(json!({ "projectId": { "type": "string" } }), &[]),
+        },
+        ToolDef {
+            name: "save_rule",
+            description: "Create or update a rule. Omit rule.id to create (id is generated). phase: request | response | both | handler. Script API: call get_scripting_reference first. Fails if an enabled rule with the same pattern+phase exists.",
+            schema: obj(
+                json!({
+                    "rule": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "name": { "type": "string" },
+                            "enabled": { "type": "boolean", "description": "default true" },
+                            "pattern": { "type": "string", "description": "glob over host+path, e.g. api.example.com/*" },
+                            "phase": { "type": "string", "enum": ["request", "response", "both", "handler"] },
+                            "script": { "type": "string" },
+                            "projectId": { "type": ["string", "null"] }
+                        },
+                        "required": ["name", "pattern", "phase", "script"]
+                    }
+                }),
+                &["rule"],
+            ),
+        },
+        ToolDef {
+            name: "delete_rule",
+            description: "Delete a rule by id.",
+            schema: obj(json!({ "id": { "type": "string" } }), &["id"]),
+        },
+        ToolDef {
+            name: "get_scripting_reference",
+            description: "Rule scripting reference: ctx API typings, stdlib typings and the shared library source. Read before writing rule scripts.",
+            schema: obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "list_projects",
+            description: "List projects (host include/exclude globs, env vars) and the active project id.",
+            schema: obj(json!({}), &[]),
+        },
+        ToolDef {
+            name: "save_project",
+            description: "Create or update a project. Omit project.id to create.",
+            schema: obj(
+                json!({
+                    "project": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "name": { "type": "string" },
+                            "includeHosts": { "type": "array", "items": { "type": "string" } },
+                            "excludeHosts": { "type": "array", "items": { "type": "string" } },
+                            "env": { "type": "array", "items": { "type": "object", "properties": { "key": { "type": "string" }, "value": { "type": "string" } }, "required": ["key", "value"] } }
+                        },
+                        "required": ["name"]
+                    }
+                }),
+                &["project"],
+            ),
+        },
+        ToolDef {
+            name: "delete_project",
+            description: "Delete a project by id.",
+            schema: obj(json!({ "id": { "type": "string" } }), &["id"]),
+        },
+        ToolDef {
+            name: "set_active_project",
+            description: "Set the active project (null id clears it). Capture and rules are scoped by the active project.",
+            schema: obj(json!({ "id": { "type": ["string", "null"] } }), &[]),
+        },
     ]
 }
 
@@ -100,6 +172,14 @@ pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> 
         "get_flow" => tool_get_flow(deps, args),
         "flow_count" => tool_flow_count(deps, args),
         "aggregate_flows" => tool_aggregate_flows(deps, args),
+        "list_rules" => tool_list_rules(deps, args),
+        "save_rule" => tool_save_rule(deps, args),
+        "delete_rule" => tool_delete_rule(deps, args),
+        "get_scripting_reference" => tool_scripting_reference(deps),
+        "list_projects" => tool_list_projects(deps),
+        "save_project" => tool_save_project(deps, args),
+        "delete_project" => tool_delete_project(deps, args),
+        "set_active_project" => tool_set_active_project(deps, args),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -222,6 +302,92 @@ fn tool_aggregate_flows(deps: &Deps, args: &Value) -> Result<Value, String> {
     Ok(json!({ "buckets": buckets, "groupBy": group_by }))
 }
 
+const SCRIPT_API_DTS: &str = include_str!("../../../src/scripting/apiTypes.ts");
+const SCRIPT_STDLIB: &str = include_str!("../../../src/scripting/stdlib.ts");
+
+fn tool_list_rules(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let rules = crate::rules::load_rules(&deps.rules_dir).map_err(|e| e.to_string())?;
+    let filter = str_arg(args, "projectId");
+    let rules: Vec<_> = rules
+        .into_iter()
+        .filter(|r| filter.as_deref().map(|p| r.project_id.as_deref() == Some(p)).unwrap_or(true))
+        .collect();
+    Ok(json!({ "rules": rules }))
+}
+
+fn tool_save_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let mut raw = args.get("rule").cloned().ok_or("missing rule")?;
+    if raw.get("id").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
+        raw["id"] = json!(super::gen_id());
+    }
+    if raw.get("enabled").is_none() {
+        raw["enabled"] = json!(true);
+    }
+    let rule: crate::rules::Rule = serde_json::from_value(raw).map_err(|e| format!("bad rule: {e}"))?;
+    let rules = crate::rules::upsert_rule(&deps.rules_dir, rule)?;
+    *deps.state.rules.write().unwrap() = rules.clone();
+    Ok(json!({ "rules": rules }))
+}
+
+fn tool_delete_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = str_arg(args, "id").ok_or("missing id")?;
+    let rules = crate::rules::remove_rule(&deps.rules_dir, &id)?;
+    *deps.state.rules.write().unwrap() = rules.clone();
+    Ok(json!({ "rules": rules }))
+}
+
+fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
+    let library = crate::rules::load_library(&deps.rules_dir).unwrap_or_default();
+    Ok(json!({
+        "apiTypes": SCRIPT_API_DTS,
+        "stdlib": SCRIPT_STDLIB,
+        "librarySource": library,
+    }))
+}
+
+fn tool_list_projects(deps: &Deps) -> Result<Value, String> {
+    let file = crate::projects::load_projects(&deps.data_dir).map_err(|e| e.to_string())?;
+    serde_json::to_value(&file).map_err(|e| e.to_string())
+}
+
+fn tool_save_project(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let mut raw = args.get("project").cloned().ok_or("missing project")?;
+    if raw.get("id").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true) {
+        raw["id"] = json!(super::gen_id());
+    }
+    for key in ["includeHosts", "excludeHosts", "env"] {
+        if raw.get(key).is_none() {
+            raw[key] = json!([]);
+        }
+    }
+    let project: crate::projects::Project =
+        serde_json::from_value(raw).map_err(|e| format!("bad project: {e}"))?;
+    let file = crate::projects::upsert_project(&deps.data_dir, project.clone())?;
+    // как в UI-команде: правка активного проекта обновляет общую ячейку
+    let mut active = deps.state.active_project.write().unwrap();
+    if active.as_ref().map(|p| &p.id) == Some(&project.id) {
+        *active = Some(project);
+    }
+    serde_json::to_value(&file).map_err(|e| e.to_string())
+}
+
+fn tool_delete_project(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = str_arg(args, "id").ok_or("missing id")?;
+    let file = crate::projects::remove_project(&deps.data_dir, &id)?;
+    let mut active = deps.state.active_project.write().unwrap();
+    if active.as_ref().map(|p| p.id.as_str()) == Some(id.as_str()) {
+        *active = None;
+    }
+    serde_json::to_value(&file).map_err(|e| e.to_string())
+}
+
+fn tool_set_active_project(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = str_arg(args, "id");
+    let resolved = crate::projects::set_active(&deps.data_dir, id)?;
+    *deps.state.active_project.write().unwrap() = resolved.clone();
+    Ok(json!({ "active": resolved.map(|p| json!({ "id": p.id, "name": p.name })) }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +498,71 @@ mod tests {
         for def in core_tools() {
             assert_eq!(def.schema["type"], json!("object"), "tool {}", def.name);
         }
+    }
+
+    #[test]
+    fn save_rule_generates_id_and_updates_shared_state() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let out = dispatch(&deps, "save_rule", &json!({
+            "rule": { "name": "R", "pattern": "api.test/*", "phase": "request", "script": "" }
+        })).unwrap();
+        let rules = out["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["enabled"], json!(true));
+        assert_eq!(rules[0]["id"].as_str().unwrap().len(), 16);
+        // разделяемое состояние обновилось — прокси увидит правило сразу
+        assert_eq!(state.rules.read().unwrap().len(), 1);
+
+        let id = rules[0]["id"].as_str().unwrap().to_string();
+        dispatch(&deps, "delete_rule", &json!({ "id": id })).unwrap();
+        assert!(state.rules.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_rule_conflict_is_returned_as_error() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        dispatch(&deps, "save_rule", &json!({
+            "rule": { "name": "A", "pattern": "x/*", "phase": "both", "script": "" }
+        })).unwrap();
+        let err = dispatch(&deps, "save_rule", &json!({
+            "rule": { "name": "B", "pattern": "x/*", "phase": "request", "script": "" }
+        })).unwrap_err();
+        assert!(err.contains("Conflicts"), "err was: {err}");
+    }
+
+    #[test]
+    fn scripting_reference_contains_api_and_library() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let v = dispatch(&deps, "get_scripting_reference", &json!({})).unwrap();
+        assert!(v["apiTypes"].as_str().unwrap().contains("API_DTS"));
+        assert!(v["stdlib"].as_str().unwrap().contains("STD_DTS"));
+        assert!(v["librarySource"].is_string());
+    }
+
+    #[test]
+    fn project_tools_roundtrip() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let out = dispatch(&deps, "save_project", &json!({
+            "project": { "name": "P", "includeHosts": ["api.test"] }
+        })).unwrap();
+        let id = out["projects"][0]["id"].as_str().unwrap().to_string();
+
+        let act = dispatch(&deps, "set_active_project", &json!({ "id": id })).unwrap();
+        assert_eq!(act["active"]["name"], json!("P"));
+        assert_eq!(state.active_project.read().unwrap().as_ref().unwrap().name, "P");
+
+        dispatch(&deps, "delete_project", &json!({ "id": id })).unwrap();
+        assert!(state.active_project.read().unwrap().is_none());
+
+        let listed = dispatch(&deps, "list_projects", &json!({})).unwrap();
+        assert!(listed["projects"].as_array().unwrap().is_empty());
     }
 }
