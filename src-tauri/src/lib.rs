@@ -10,6 +10,7 @@ mod projects;
 mod proxy;
 mod rules;
 mod scripting;
+mod secrets;
 mod snippets;
 mod setup_actions;
 mod store;
@@ -77,6 +78,10 @@ pub fn run() {
             plugins::git_host_token_set,
             plugins::git_host_token_has,
             plugins::git_host_token_get,
+            secrets::secrets_list,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
             setup_actions::reveal_ca_cert,
             setup_actions::trust_ca_macos,
             setup_actions::trust_ca_command,
