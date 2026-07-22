@@ -107,6 +107,12 @@ pub async fn start_proxy(
     let emit: proxy::EmitFn = std::sync::Arc::new(move |event: &str, flow: &Flow| {
         let _ = app_for_emit.emit(event, flow.clone());
     });
+    let app_for_notify = app.clone();
+    let notify: proxy::NotifyFn = std::sync::Arc::new(move |payload: serde_json::Value| {
+        let _ = app_for_notify.emit("script-notify", payload);
+    });
+    let secret_fn: crate::scripting::SecretFn =
+        std::sync::Arc::new(|name: &str| crate::secrets::get(name).ok().flatten());
     // Подтянуть актуальные правила, библиотеку и активный проект перед стартом.
     let rdir = rules_dir(&app)?;
     let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
@@ -127,6 +133,8 @@ pub async fn start_proxy(
         addr,
         state.store.clone(),
         emit,
+        notify,
+        secret_fn,
         ca_dir(&app)?,
         state.scripts.clone(),
         state.rules.clone(),
