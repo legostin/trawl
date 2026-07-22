@@ -15,7 +15,7 @@
 - Core work happens in an **isolated git worktree** of `http-catch` (per `superpowers:using-git-worktrees`), merged to `main` at the end.
 - The plugin is a **new repo** at `/Users/legostin/claude-projects/trawl-plugin-notifications` (git init, no worktree).
 - Host API version bumps to **`1.6.0`** (`HOST_VERSION` in `src/plugins/host.ts`, `apiVersion` in the plugin manifest).
-- App version bumps to **0.4.0** (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`).
+- App version bumps to **0.5.0** (0.4.0 is already taken by the plugin-catalog release) (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`).
 - Secrets scope: **global named**, Keychain service **`trawl`**, account = secret name. Names index in `<app-data>/secrets.json` (Keychain cannot enumerate).
 - Deviation from spec noted during planning: the registry field is named **`payloadType`** (a TS *type expression*, e.g. `"{ a: number }"`), not a full `.d.ts` string — one mechanism serves both declared and inferred types (`fieldsToType` output).
 - Rust commands run from `src-tauri/`: `cargo test`. Frontend: `pnpm test` (vitest), `pnpm build` (tsc + vite). Plugin repo: `pnpm test`, `pnpm build`.
@@ -1034,7 +1034,7 @@ events still get structure-based hints.
 
 - [ ] **Step 2: `README.md`** — in the features list add one line: rule scripts can send notifications (`notify()`) delivered by the notifications plugin, and read Keychain secrets (`secret()`).
 
-- [ ] **Step 3: Version bump to 0.4.0** in `package.json` (`"version"`), `src-tauri/Cargo.toml` (`[package] version`), `src-tauri/tauri.conf.json` (`"version"`).
+- [ ] **Step 3: Version bump to 0.5.0** in `package.json` (`"version"`), `src-tauri/Cargo.toml` (`[package] version`), `src-tauri/tauri.conf.json` (`"version"`).
 
 - [ ] **Step 4: Verify + commit**
 
@@ -1042,7 +1042,7 @@ Run: `pnpm build && (cd src-tauri && cargo check)`
 
 ```bash
 git add docs/plugins.md README.md package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
-git commit -m "docs: secrets + event registry + notify contract; bump 0.4.0"
+git commit -m "docs: secrets + event registry + notify contract; bump 0.5.0"
 ```
 
 ---
