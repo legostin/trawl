@@ -45,8 +45,8 @@ vX.Y.Z* button when a newer release is available.
 - **Request detail**: Query / Form / Headers / Body / Cookies tabs, cURL export,
   and one-click mocks.
 - **JavaScript rules** (request / response / handler phases) in a Monaco editor
-  with autocomplete, saved library functions, and synchronous `send()` /
-  `sleep()`.
+  with autocomplete, saved library functions, synchronous `send()` / `sleep()`,
+  access to Keychain secrets via `secret()`, and notifications via `notify()`.
 - **Interactive breakpoints** — pause a matching request or response in flight,
   edit method / URL / query / headers / body (with JSON/format-aware editing and
   file substitution), then **Execute**, **Abort**, or **Respond locally**.
