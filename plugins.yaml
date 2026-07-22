@@ -16,3 +16,10 @@ plugins:
     author: legostin
     repo: legostin/trawl-plugin-schema-check
     tags: [testing, schema, diff]
+
+  - id: notifications
+    name: Notifications
+    description: Subscribe to any core or plugin event and deliver messages to Telegram — templates with payload hints, JS conditions, throttling, and notify() from rule scripts.
+    author: legostin
+    repo: legostin/trawl-plugin-notifications
+    tags: [telegram, notifications, events]
