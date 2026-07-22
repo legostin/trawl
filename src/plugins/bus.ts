@@ -1,11 +1,20 @@
 type Handler = (payload: unknown) => void;
 
+/** A single documented field of an event's payload (for the subscription UI). */
+export interface EventParam {
+  name: string;
+  type: string;
+  doc?: string;
+}
+
 export interface EventMeta {
   description?: string;
   /** TS type expression for the payload, e.g. "{ a: number }" — fed to Monaco. */
   payloadType?: string;
   /** Self-reported origin ("core" or a plugin id). */
   source?: string;
+  /** Documented payload fields, for richer subscription-UI hints than payloadType alone. */
+  params?: EventParam[];
 }
 
 export interface EventInfo extends EventMeta {
