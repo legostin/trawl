@@ -123,11 +123,17 @@ impl<R: tauri::Runtime> ServerHandler for TrawlMcp<R> {
 pub struct ServerHandle {
     pub addr: SocketAddr,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tauri::async_runtime::JoinHandle<()>,
 }
 
 impl ServerHandle {
-    pub fn stop(self) {
+    /// Отправляет graceful-shutdown сигнал и дожидается, пока задача с
+    /// `axum::serve` реально завершится и слушатель порта освободится —
+    /// иначе немедленный ребайнд на тот же порт (regen token, set config)
+    /// может словить EADDRINUSE, пока старый listener ещё жив.
+    pub async fn stop(self) {
         let _ = self.shutdown.send(());
+        let _ = self.task.await;
     }
 }
 
@@ -172,14 +178,14 @@ pub async fn start_server<R: tauri::Runtime>(
         }),
     );
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    tauri::async_runtime::spawn(async move {
+    let task = tauri::async_runtime::spawn(async move {
         let _ = axum::serve(listener, router)
             .with_graceful_shutdown(async {
                 let _ = rx.await;
             })
             .await;
     });
-    Ok(ServerHandle { addr, shutdown: tx })
+    Ok(ServerHandle { addr, shutdown: tx, task })
 }
 
 #[cfg(test)]
@@ -228,5 +234,22 @@ mod tests {
             .await
             .unwrap();
         assert!(r.status().is_success(), "status was {}", r.status());
+    }
+
+    #[tokio::test]
+    async fn restart_on_same_port_rebinds() {
+        let app = tauri::test::mock_builder()
+            .manage(crate::commands::AppState::new())
+            .manage(crate::mcp::McpState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let cfg = McpConfig { enabled: true, port: 0, token: "secret".into() };
+        let h1 = start_server(app.handle().clone(), cfg.clone()).await.unwrap();
+        let port = h1.addr.port();
+        h1.stop().await;
+        let cfg2 = McpConfig { enabled: true, port, token: "secret".into() };
+        let h2 = start_server(app.handle().clone(), cfg2).await
+            .expect("rebind on same port after stop must succeed");
+        h2.stop().await;
     }
 }
