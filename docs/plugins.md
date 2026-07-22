@@ -201,7 +201,7 @@ await host.gitHosts.setToken("github.example.org", t);
 
 ### `secrets` — app-wide named secrets
 
-Stored in the macOS Keychain, managed in **Setup → Secrets**. Shared with rule
+Stored in the macOS Keychain, managed in **Settings → Secrets**. Shared with rule
 scripts (`secret('NAME')`).
 
 ```ts
@@ -223,7 +223,7 @@ host.util.buildCurl(flow);          // cURL string
 
 ## MCP tools
 
-Trawl runs a local MCP server (Setup → MCP server) that AI agents connect to.
+Trawl runs a local MCP server (Settings → MCP server) that AI agents connect to.
 A plugin can contribute its own tools:
 
 ```ts

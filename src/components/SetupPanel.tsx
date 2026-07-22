@@ -29,8 +29,6 @@ import {
   type SetupInfo,
 } from "../setup";
 import { CopyableCommand } from "./CopyableCommand";
-import { SecretsSection } from "./SecretsSection";
-import { McpSection } from "./McpSection";
 import { Button } from "./ui/button";
 import { Segmented } from "./ui/segmented";
 import { cn } from "@/lib/utils";
@@ -146,9 +144,6 @@ export function SetupPanel() {
         chromeLaunched={chromeLaunched}
         httpsSeen={httpsSeen}
       />
-
-      <SecretsSection />
-      <McpSection />
     </div>
   );
 }
