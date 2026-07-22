@@ -193,6 +193,48 @@ mod tests {
     use super::*;
     use crate::mcp::McpConfig;
 
+    // `list_tools` needs a live `RequestContext<RoleServer>`, which rmcp only
+    // hands out from inside a real session (it carries a `Peer` tied to the
+    // transport) — there's no public constructor to fake one in a unit test.
+    // So we test the two things list_tools actually assembles instead: the
+    // core tool table's size, and that a plugin tool registered into the
+    // bridge (the same `McpState` the handler reads via `app.state::<McpState>()`)
+    // is discoverable by its `full_name()` — i.e. it would be included in the
+    // `tools` vec that list_tools builds by chaining core_tools() with
+    // `mcp.bridge.tools.read()`.
+    #[test]
+    fn core_tool_count_and_registered_plugin_tool_are_discoverable() {
+        assert_eq!(
+            core_tools::core_tools().len(),
+            19,
+            "core tool count changed — list_tools's static half moved without updating this test"
+        );
+
+        let app = tauri::test::mock_builder()
+            .manage(crate::commands::AppState::new())
+            .manage(crate::mcp::McpState::new())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let mcp = app.state::<McpState>();
+        mcp.bridge.register(super::super::plugin_bridge::PluginTool {
+            plugin_id: "demo-plugin".into(),
+            name: "plugin_tool".into(),
+            description: "A demo plugin tool".into(),
+            input_schema: serde_json::json!({ "type": "object" }),
+            timeout_ms: None,
+        });
+
+        // What list_tools iterates over (`mcp.bridge.tools.read().unwrap()`)
+        // now contains the registered tool, keyed by its full_name().
+        let found = mcp
+            .bridge
+            .find("demo-plugin_plugin_tool")
+            .expect("registered plugin tool should be findable by full_name");
+        assert_eq!(found.plugin_id, "demo-plugin");
+        assert_eq!(found.name, "plugin_tool");
+    }
+
     fn init_payload() -> serde_json::Value {
         serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
