@@ -23,7 +23,7 @@ export function SecretsSection() {
 
   const add = async () => {
     const n = name.trim();
-    if (!n || !value) return;
+    if (!n || !value.trim()) return;
     try {
       await setSecret(n, value);
       setName("");
@@ -51,7 +51,7 @@ export function SecretsSection() {
             <span className="font-mono">{n}</span>
             <span className="flex items-center gap-2">
               <span className="text-muted-foreground">••••••••</span>
-              <Button variant="ghost" size="sm" onClick={() => void deleteSecret(n).then(refresh)}>
+              <Button variant="ghost" size="sm" onClick={() => void deleteSecret(n).then(refresh).catch((e) => setError(String(e)))}>
                 Delete
               </Button>
             </span>
