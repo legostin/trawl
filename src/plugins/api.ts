@@ -115,6 +115,7 @@ export interface TrawlSecrets {
 }
 
 export interface PluginEvents {
+  /** Subscribe to an event; returns an unsubscribe fn. */
   on(type: string, cb: (payload: unknown) => void): () => void;
   off(type: string, cb: (payload: unknown) => void): void;
   emit(type: string, payload?: unknown): void;
