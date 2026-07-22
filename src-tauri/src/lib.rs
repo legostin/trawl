@@ -3,6 +3,7 @@ mod ca;
 mod commands;
 mod db;
 mod httpsend;
+mod mcp;
 mod model;
 mod net;
 mod plugins;
