@@ -75,6 +75,43 @@ pub fn save_breakpoints(dir: &Path, bps: &[Breakpoint]) -> Result<()> {
     Ok(())
 }
 
+/// Вставляет/обновляет брейкпоинт с той же валидацией, что UI-команда.
+pub fn upsert_breakpoint(dir: &Path, breakpoint: Breakpoint) -> Result<Vec<Breakpoint>, String> {
+    let mut bps = load_breakpoints(dir).map_err(|e| e.to_string())?;
+    // Hard validation: no two enabled breakpoints with the same scope + pattern +
+    // method that also pause the same phase (both request, or both response).
+    if breakpoint.enabled {
+        if let Some(other) = bps.iter().find(|b| {
+            b.id != breakpoint.id
+                && b.enabled
+                && b.project_id == breakpoint.project_id
+                && b.pattern == breakpoint.pattern
+                && b.method == breakpoint.method
+                && ((b.on_request && breakpoint.on_request)
+                    || (b.on_response && breakpoint.on_response))
+        }) {
+            return Err(format!(
+                "Conflicts with enabled breakpoint “{}” — same pattern, method and phase. Disable it first.",
+                other.name
+            ));
+        }
+    }
+    if let Some(existing) = bps.iter_mut().find(|b| b.id == breakpoint.id) {
+        *existing = breakpoint;
+    } else {
+        bps.push(breakpoint);
+    }
+    save_breakpoints(dir, &bps).map_err(|e| e.to_string())?;
+    Ok(bps)
+}
+
+pub fn remove_breakpoint(dir: &Path, id: &str) -> Result<Vec<Breakpoint>, String> {
+    let mut bps = load_breakpoints(dir).map_err(|e| e.to_string())?;
+    bps.retain(|b| b.id != id);
+    save_breakpoints(dir, &bps).map_err(|e| e.to_string())?;
+    Ok(bps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +146,23 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].pattern, "api.example.com/*");
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn upsert_breakpoint_rejects_same_pattern_method_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Breakpoint {
+            id: "a".into(), name: "A".into(), enabled: true,
+            pattern: "*/login".into(), method: None,
+            on_request: true, on_response: false, project_id: None,
+        };
+        upsert_breakpoint(dir.path(), a).unwrap();
+        let b = Breakpoint {
+            id: "b".into(), name: "B".into(), enabled: true,
+            pattern: "*/login".into(), method: None,
+            on_request: true, on_response: false, project_id: None,
+        };
+        let err = upsert_breakpoint(dir.path(), b).unwrap_err();
+        assert!(err.contains("Conflicts"), "err was: {err}");
     }
 }

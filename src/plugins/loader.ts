@@ -1,13 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { usePlugins } from "@/plugins";
+import { clearPluginTools, setLoadingPlugin } from "./mcpBridge";
 
 /** Load a cached plugin bundle by injecting it as a classic script (IIFE self-registers).
  *  Re-loading replaces any previous injection for the same plugin, so updates and
  *  enable/disable can be applied live (the re-run re-registers the mode). */
 async function loadBundle(id: string): Promise<void> {
   const code = await invoke<string>("read_plugin_bundle", { id });
+  await clearPluginTools(id);
   const blob = new Blob([code], { type: "text/javascript" });
   const url = URL.createObjectURL(blob);
+  setLoadingPlugin(id);
   try {
     document
       .querySelectorAll(`script[data-trawl-plugin="${CSS.escape(id)}"]`)
@@ -21,6 +24,7 @@ async function loadBundle(id: string): Promise<void> {
       document.head.appendChild(script);
     });
   } finally {
+    setLoadingPlugin(null);
     URL.revokeObjectURL(url);
   }
 }

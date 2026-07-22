@@ -122,10 +122,16 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     delete updates[id];
     leaveModeIfActive(id);
     set({ installed, updates, modes: get().modes.filter((m) => m.id !== id) });
+    const { clearPluginTools } = await import("./plugins/mcpBridge");
+    await clearPluginTools(id);
   },
   setEnabled: async (id, enabled) => {
     const installed = await invoke<Plugin[]>("set_plugin_enabled", { id, enabled });
     set({ installed });
+    if (!enabled) {
+      const { clearPluginTools } = await import("./plugins/mcpBridge");
+      await clearPluginTools(id);
+    }
   },
   registerMode: (mode) =>
     set((s) => ({

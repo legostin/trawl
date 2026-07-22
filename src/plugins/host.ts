@@ -28,6 +28,7 @@ import { analyzeJson, fieldsToType } from "@/lib/analyze";
 import { setEventPayloadType } from "@/monaco-setup";
 import { listSecrets, getSecret, setSecret, deleteSecret } from "@/secrets";
 import { bus } from "./bus";
+import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
 import type {
   ActiveProject,
   EnvVar,
@@ -133,6 +134,7 @@ export function installHost(): void {
       set: (name: string, value: string) => setSecret(name, value),
       remove: (name: string) => deleteSecret(name),
     },
+    mcp: { registerTool, unregisterTool },
     ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge, ScriptEditor },
     util: {
       bodyText: (msg) => bodyToText(msg),
@@ -153,6 +155,7 @@ export function installHost(): void {
   window.React = React;
   window.ReactJSXRuntime = JsxRuntime;
   window.__TRAWL__ = host;
+  initMcpBridge();
 
   // Bridge Tauri capture events into the plugin bus.
   void listen("flow-added", (e) => bus.emit("flow:added", e.payload));
