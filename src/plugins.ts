@@ -1,7 +1,33 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import yaml from "js-yaml";
 import { useLayout } from "./layout";
 import type { FlowAction, RegisteredMode } from "./plugins/api";
+
+/** An entry in the public plugin catalog (`plugins.yaml`). */
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  author?: string;
+  /** "owner/repo". */
+  repo: string;
+  /** Git host; defaults to github.com. */
+  host?: string;
+  tags?: string[];
+}
+
+/** Fetch and parse the public plugin catalog (raw YAML fetched by the backend). */
+export async function fetchCatalog(): Promise<CatalogEntry[]> {
+  const text = await invoke<string>("fetch_plugin_catalog");
+  const doc = yaml.load(text) as { plugins?: CatalogEntry[] } | null;
+  return (doc?.plugins ?? []).filter((p) => p && p.id && p.repo);
+}
+
+/** The repo string to install a catalog entry (host-prefixed for non-github hosts). */
+export function catalogInstallRepo(e: CatalogEntry): string {
+  return e.host && e.host !== "github.com" ? `${e.host}/${e.repo}` : e.repo;
+}
 
 /** If a mode is being removed while it's active, fall back to the traffic mode. */
 function leaveModeIfActive(id: string) {

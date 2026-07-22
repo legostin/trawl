@@ -65,6 +65,7 @@ pub fn run() {
             commands::list_reports,
             commands::delete_report,
             commands::send_request,
+            plugins::fetch_plugin_catalog,
             plugins::fetch_plugin_manifest,
             plugins::install_plugin,
             plugins::list_plugins,
