@@ -52,6 +52,11 @@ impl FlowStore {
         self.inner.flows.lock().unwrap().iter().cloned().collect()
     }
 
+    /// Number of flows currently held, without cloning them.
+    pub fn len(&self) -> usize {
+        self.inner.flows.lock().unwrap().len()
+    }
+
     pub fn get(&self, id: u64) -> Option<Flow> {
         self.inner.flows.lock().unwrap().iter().find(|f| f.id == id).cloned()
     }
@@ -104,6 +109,17 @@ mod tests {
         assert!(ok);
         assert_eq!(s.all()[0].method, "POST");
         assert!(!s.update(999, |_| {}));
+    }
+
+    #[test]
+    fn len_counts_without_cloning() {
+        let s = FlowStore::new(10);
+        assert_eq!(s.len(), 0);
+        for id in 1..=5 {
+            s.insert(sample(id));
+        }
+        assert_eq!(s.len(), 5);
+        assert_eq!(s.len(), s.all().len());
     }
 
     #[test]

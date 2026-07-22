@@ -362,7 +362,7 @@ fn tool_get_status(deps: &Deps) -> Result<Value, String> {
         "lanIp": crate::net::lan_ip().map(|ip| ip.to_string()),
         "intercept": *deps.state.intercept.read().unwrap(),
         "activeProject": active.map(|p| json!({ "id": p.id, "name": p.name })),
-        "flowsInMemory": deps.state.store.all().len(),
+        "flowsInMemory": deps.state.store.len(),
         "flowsInDb": db_count,
     }))
 }
