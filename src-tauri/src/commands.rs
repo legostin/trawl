@@ -68,7 +68,10 @@ pub fn init_db(app: &AppHandle, state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-pub fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+/// Generic over the Tauri runtime so it works both with the real webview
+/// (production) and `tauri::test::MockRuntime` (used by the MCP server's
+/// integration test, which is generic over `R: tauri::Runtime`).
+pub fn data_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<std::path::PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
@@ -80,7 +83,7 @@ fn ca_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .join("ca"))
 }
 
-pub fn rules_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+pub fn rules_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<std::path::PathBuf, String> {
     Ok(app
         .path()
         .app_data_dir()
