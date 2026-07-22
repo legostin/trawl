@@ -125,7 +125,13 @@ fn reader(deps: &Deps) -> Result<crate::db::Db, String> {
 
 fn body_json(headers: &[(String, String)], body: &[u8], is_text: bool, max: usize, status: Option<u16>) -> Value {
     let mut v = if is_text {
-        let cut = body.len().min(max);
+        let mut cut = body.len().min(max);
+        if cut < body.len() {
+            // Don't cut mid-UTF-8 character: continuation bytes have pattern 10xxxxxx
+            while cut > 0 && (body[cut] & 0xC0) == 0x80 {
+                cut -= 1;
+            }
+        }
         json!({
             "headers": headers,
             "body": String::from_utf8_lossy(&body[..cut]),
@@ -307,6 +313,18 @@ mod tests {
         assert_eq!(cnt["count"], json!(1));
         let agg = dispatch(&deps, "aggregate_flows", &json!({ "groupBy": "host" })).unwrap();
         assert_eq!(agg["buckets"][0]["key"], json!("api.test"));
+    }
+
+    #[test]
+    fn flow_to_json_truncates_multibyte_utf8_at_char_boundary() {
+        // "héllo" is 6 bytes: h(1) + é(2) + l(1) + l(1) + o(1)
+        let body = "héllo".as_bytes().to_vec();
+        let f = sample_flow(1, &body, true);
+        // Truncate to 2 bytes: should yield just "h", not "h\u{FFFD}"
+        let v = flow_to_json(&f, 2);
+        assert_eq!(v["request"]["body"], json!("h"), "should not contain replacement character");
+        assert_eq!(v["request"]["truncated"], json!(true));
+        assert_eq!(v["request"]["bodySize"], json!(6));
     }
 
     #[test]
