@@ -12,6 +12,7 @@ import { PluginMode } from "./PluginMode";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
+import { SettingsPanel } from "./SettingsPanel";
 import { RulesView } from "./RulesView";
 import { BreakpointsView } from "./BreakpointsView";
 import { FilterBar } from "./FilterBar";
@@ -30,7 +31,8 @@ export function AppShell() {
   const pluginModes = usePlugins((s) => s.modes);
   useKeyboardShortcuts();
 
-  const builtin = mode === "traffic" || mode === "setup" || mode === "plugins";
+  const builtin =
+    mode === "traffic" || mode === "setup" || mode === "settings" || mode === "plugins";
   const isUnknownMode = !builtin && !pluginModes.some((m) => m.id === mode);
 
   useEffect(() => {
@@ -87,6 +89,10 @@ export function AppShell() {
 
           <Pane show={mode === "setup"}>
             <SetupPanel />
+          </Pane>
+
+          <Pane show={mode === "settings"}>
+            <SettingsPanel />
           </Pane>
 
           <Pane show={mode === "plugins"}>

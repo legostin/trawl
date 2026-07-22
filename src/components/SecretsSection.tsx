@@ -35,7 +35,7 @@ export function SecretsSection() {
   };
 
   return (
-    <section className="mt-8">
+    <section>
       <h3 className="mb-1 text-base font-semibold">Secrets</h3>
       <p className="mb-3 text-sm text-muted-foreground">
         App-wide named secrets, stored in the macOS Keychain. Available to rule scripts via{" "}

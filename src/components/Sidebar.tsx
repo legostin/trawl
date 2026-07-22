@@ -6,6 +6,7 @@ import {
   PlugZap,
   Puzzle,
   Radio,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 import { useLayout, type Mode } from "../layout";
@@ -69,6 +70,12 @@ export function Sidebar() {
           active={mode === "setup"}
           collapsed={collapsed}
           onClick={() => setMode("setup")}
+        />
+        <NavItem
+          item={{ id: "settings", label: "Settings", icon: Settings }}
+          active={mode === "settings"}
+          collapsed={collapsed}
+          onClick={() => setMode("settings")}
         />
         <NavItem
           item={{ id: "plugins", label: "Plugins", icon: Blocks }}
