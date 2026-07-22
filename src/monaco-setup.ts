@@ -56,4 +56,15 @@ export function setResponseDataType(typeBody: string) {
 // Default until a rule is selected.
 setResponseDataType("{ [key: string]: any }");
 
+let payloadDisposable: { dispose: () => void } | null = null;
+
+/** Types the global `payload` for event-subscription editors (plugins). */
+export function setEventPayloadType(typeBody: string) {
+  payloadDisposable?.dispose();
+  payloadDisposable = jsDefaults.addExtraLib(
+    `declare const payload: ${typeBody};`,
+    "ts:trawl-event-payload.d.ts",
+  );
+}
+
 export { monaco };

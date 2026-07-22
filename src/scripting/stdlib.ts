@@ -50,6 +50,14 @@ declare function sendWithRetry(
   req?: TrawlRequest,
   opts?: { retries?: number; delay?: number },
 ): TrawlResponse;
+
+/** Read an app-wide named secret (Settings → Secrets, macOS Keychain). Null when missing. */
+declare function secret(name: string): string | null;
+/**
+ * Queue a notification for delivery (e.g. Telegram via the notifications
+ * plugin). Emitted to plugins as the "notify:send" bus event after the rule runs.
+ */
+declare function notify(text: string, opts?: { channel?: string; title?: string }): void;
 `;
 
 /** One entry per built-in function, for the Function-library reference list. */
@@ -78,5 +86,10 @@ export const STD_FUNCTIONS: StdFn[] = [
     signature: "sendWithRetry(request, { retries, delay })",
     doc: "Send with retry on 429/5xx.",
     phase: "handler",
+  },
+  { signature: "secret(name): string | null", doc: "Read an app-wide named secret (Keychain)." },
+  {
+    signature: "notify(text, { channel, title })",
+    doc: "Queue a notification — delivered by the notifications plugin.",
   },
 ];
