@@ -126,8 +126,13 @@ impl McpState {
 pub async fn apply_config(app: &tauri::AppHandle, cfg: &McpConfig) {
     use tauri::Manager;
     let mcp = app.state::<McpState>();
-    if let Some(h) = mcp.server.lock().unwrap().take() {
-        h.stop();
+    // `take()` результат биндим в локальную переменную, чтобы MutexGuard
+    // дропнулся до await — иначе non-Send guard живёт через точку
+    // приостановки и держится дольше, чем нужно, блокируя другие обращения
+    // к mcp.server на время shutdown.
+    let old = mcp.server.lock().unwrap().take();
+    if let Some(h) = old {
+        h.stop().await;
     }
     *mcp.last_error.lock().unwrap() = None;
     if !cfg.enabled {
