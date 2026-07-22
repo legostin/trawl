@@ -706,6 +706,7 @@ impl HttpHandler for CaptureHandler {
                     &script,
                     &input,
                     std::time::Duration::from_secs(30),
+                    std::sync::Arc::new(|_: &str| None),
                 )
             })
             .await
@@ -1266,7 +1267,7 @@ mod tests {
         BreakpointRegistry,
     ) {
         (
-            spawn_engine(Duration::from_millis(500)),
+            spawn_engine(Duration::from_millis(500), Arc::new(|_: &str| None)),
             Arc::new(RwLock::new(rules)),
             Arc::new(RwLock::new(String::new())),
             Arc::new(RwLock::new(None)),
