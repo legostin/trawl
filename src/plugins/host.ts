@@ -71,13 +71,32 @@ const FLOW_PARAMS: EventParam[] = [
   { name: "method", type: "string", doc: "HTTP method" },
   { name: "url.host", type: "string", doc: "Request host" },
   { name: "url.path", type: "string", doc: "Request path" },
-  { name: "state", type: "string", doc: 'Flow state, e.g. "done", "paused", "error"' },
+  {
+    name: "state",
+    type: "string",
+    doc: '"pending" | "completed" | "error" | "paused"',
+  },
   { name: "error", type: "string | null", doc: 'Error message, set when state is "error"' },
   { name: "appliedRules", type: "string[]", doc: "Names of rules applied to this flow" },
   {
     name: "response.status",
     type: "number | undefined",
     doc: "Response status code, once a response has arrived",
+  },
+  {
+    name: "pausedPhase",
+    type: '"request" | "response" | null',
+    doc: "Phase the flow is/was paused in, while held on a breakpoint",
+  },
+  {
+    name: "timings.sent",
+    type: "number | null",
+    doc: "Ms offset the request was sent, null until known",
+  },
+  {
+    name: "timings.done",
+    type: "number | null",
+    doc: "Ms offset the flow completed, null until known",
   },
 ];
 
@@ -259,6 +278,8 @@ export function installHost(): void {
     request: { headers: [string, string][]; body: number[] | string; bodyIsText: boolean };
     response: { status: number; headers: [string, string][]; body: number[] | string; bodyIsText: boolean } | null;
     state: string; error: string | null; appliedRules: string[];
+    timings: { sent: number | null; ttfb: number | null; done: number | null };
+    pausedPhase?: "request" | "response" | null;
   }`;
   const RULE_TYPE =
     "{ ruleName: string; phase: string; flowId: number; method: string; host: string; path: string }";
@@ -399,11 +420,14 @@ export function installHost(): void {
     }
   });
 
-  let lastUpdateStatus = useUpdater.getState().status;
+  // Dedupe by version (not just status transition) — a status can flip away
+  // from "available" and back (or re-notify) without a new version ever
+  // showing up, and we only want to tell plugins about it once.
+  let lastEmittedUpdateVersion: string | null = null;
   useUpdater.subscribe((s) => {
-    if (s.status === "available" && lastUpdateStatus !== "available") {
+    if (s.status === "available" && s.version !== lastEmittedUpdateVersion) {
+      lastEmittedUpdateVersion = s.version;
       bus.emit("update:available", { version: s.version, notes: s.notes });
     }
-    lastUpdateStatus = s.status;
   });
 }

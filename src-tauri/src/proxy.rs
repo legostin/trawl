@@ -778,7 +778,7 @@ impl HttpHandler for CaptureHandler {
             } else {
                 self.emit_rule_event(
                     "rule-error", &hrule.name, "handler", id, &req_method, &url.host, &url.path,
-                    res.error.as_deref(),
+                    Some(res.error.as_deref().unwrap_or("unknown error")),
                 );
             }
             if let Some(e) = &res.env {
@@ -947,7 +947,7 @@ impl HttpHandler for CaptureHandler {
                     _ => {
                         self.emit_rule_event(
                             "rule-error", &rule.name, "request", id, &req_method, &url.host, &url.path,
-                            res.error.as_deref(),
+                            Some(res.error.as_deref().unwrap_or("unknown error")),
                         );
                         script_error = res.error;
                     }
@@ -1178,7 +1178,7 @@ impl HttpHandler for CaptureHandler {
                     _ => {
                         self.emit_rule_event(
                             "rule-error", &rule.name, "response", id, &flow_method, &host_str, &path_str,
-                            res.error.as_deref(),
+                            Some(res.error.as_deref().unwrap_or("unknown error")),
                         );
                         script_error = res.error;
                     }
@@ -1191,6 +1191,13 @@ impl HttpHandler for CaptureHandler {
         // ctx.breakpoint(). The client keeps waiting until the UI resolves it.
         let mut sub_bytes: Option<Vec<u8>> = None;
         let want_break = rule_break || self.breakpoint_matches(BpPhase::Response, &targets, &flow_method);
+        // Set when the pause was resolved by an explicit Resolution (Execute/
+        // Respond) rather than a dropped sender or auto-continue timeout. The
+        // "flow-resumed" event for this case is deferred until after the final
+        // store write below (~"flow-updated" emit) so it carries the fully
+        // edited response, mirroring the handler-synthetic path in
+        // `break_response`/its caller.
+        let mut explicit_resume = false;
         if want_break {
             self.store.update(id, |f| {
                 f.state = FlowState::Paused;
@@ -1205,7 +1212,6 @@ impl HttpHandler for CaptureHandler {
             if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
                 (self.emit)("flow-paused", &u);
             }
-            let mut explicit_resume = false;
             match self.await_resolution(id, BpPhase::Response).await {
                 Some(Resolution::Execute { status, headers, body, body_bytes, .. }) => {
                     if let Some(sc) = status {
@@ -1243,11 +1249,6 @@ impl HttpHandler for CaptureHandler {
                 f.state = FlowState::Pending;
                 f.paused_phase = None;
             });
-            if explicit_resume {
-                if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
-                    (self.emit)("flow-resumed", &u);
-                }
-            }
         }
 
         let substituted = sub_bytes.is_some();
@@ -1287,6 +1288,9 @@ impl HttpHandler for CaptureHandler {
         });
         if let Some(updated) = self.store.all().into_iter().find(|f| f.id == id) {
             (self.emit)("flow-updated", &updated);
+            if explicit_resume {
+                (self.emit)("flow-resumed", &updated);
+            }
             self.persist(&updated);
         }
 
@@ -2227,7 +2231,10 @@ mod tests {
         });
 
         let store = FlowStore::new(10);
-        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<(String, Flow)>();
+        let emit: EmitFn = Arc::new(move |e: &str, f: &Flow| {
+            let _ = etx.send((e.to_string(), f.clone()));
+        });
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *bps.write().unwrap() = vec![breakpoint(&format!("{upstream_addr}/*"), false, true)];
         let ca_dir = temp_ca();
@@ -2263,6 +2270,26 @@ mod tests {
         let resp = client.get(format!("http://{upstream_addr}/api")).send().await.unwrap();
         assert_eq!(resp.status(), 418);
         assert_eq!(resp.text().await.unwrap(), "edited");
+
+        // The "flow-resumed" event for an explicit Execute resolution on the
+        // response phase must carry the FINAL edited response (status 418 /
+        // "edited"), not the pre-edit original — it's emitted after the final
+        // store write, mirroring the handler-synthetic path.
+        let mut resumed: Option<Flow> = None;
+        let mut events = Vec::new();
+        while let Ok((e, f)) = erx.try_recv() {
+            events.push(e.clone());
+            if e == "flow-resumed" {
+                resumed = Some(f);
+            }
+        }
+        let resumed = match resumed {
+            Some(f) => f,
+            None => panic!("flow-resumed not emitted; events: {events:?}"),
+        };
+        let resp_msg = resumed.response.expect("resumed flow has no response");
+        assert_eq!(resp_msg.status, 418);
+        assert_eq!(String::from_utf8_lossy(&resp_msg.body), "edited");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
