@@ -96,6 +96,16 @@ on the Traffic tab signals a flow is waiting.
 
 ---
 
+## MCP server
+
+Trawl embeds an MCP server (Streamable HTTP, `127.0.0.1:9910`, bearer token) so
+AI agents can inspect captured traffic, manage rewrite rules, projects and
+breakpoints, and resolve paused requests. Grab the ready-made
+`claude mcp add …` command in **Setup → MCP server**. Plugins can contribute
+their own tools via `__TRAWL__.mcp.registerTool` (see docs/plugins.md).
+
+---
+
 ## Development
 
 Prerequisites: Node 20+, pnpm 9+, Rust (stable), and the Tauri prerequisites for
