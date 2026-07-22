@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use keyring::Entry;
@@ -8,44 +8,11 @@ use tauri::{AppHandle, Manager};
 /// Keychain service name for all Trawl secrets.
 const SERVICE: &str = "trawl";
 
+/// Lock for read-modify-write atomicity on the secrets index file.
+static INDEX_LOCK: Mutex<()> = Mutex::new(());
+
 fn index_path(data_dir: &Path) -> PathBuf {
     data_dir.join("secrets.json")
-}
-
-// Cache for mock testing - stores Entry objects by (service, name)
-#[cfg(test)]
-mod test_cache {
-    use std::sync::{Mutex, Arc};
-    use std::collections::HashMap;
-    use keyring::Entry;
-
-    thread_local! {
-        static ENTRY_CACHE: Mutex<HashMap<(String, String), Arc<Entry>>> = Mutex::new(HashMap::new());
-    }
-
-    pub fn get_cached_entry(service: &str, name: &str) -> crate::secrets::Result<Arc<Entry>> {
-        ENTRY_CACHE.with(|cache| {
-            let mut cache = cache.lock().unwrap();
-            let key = (service.to_string(), name.to_string());
-
-            if !cache.contains_key(&key) {
-                cache.insert(key.clone(), Arc::new(Entry::new(service, name)?));
-            }
-
-            Ok(cache.get(&key).unwrap().clone())
-        })
-    }
-}
-
-
-#[cfg(test)]
-fn get_cached_entry(service: &str, name: &str) -> Result<Arc<Entry>> {
-    test_cache::get_cached_entry(service, name)
-}
-
-#[cfg(not(test))]
-fn get_cached_entry(service: &str, name: &str) -> Result<Arc<Entry>> {
-    Ok(Arc::new(Entry::new(service, name)?))
 }
 
 /// Names of stored secrets. The Keychain cannot enumerate entries, so an
@@ -65,7 +32,7 @@ fn save_names(data_dir: &Path, names: &[String]) -> Result<()> {
 }
 
 pub fn get(name: &str) -> Result<Option<String>> {
-    match get_cached_entry(SERVICE, name)?.get_password() {
+    match Entry::new(SERVICE, name)?.get_password() {
         Ok(v) => Ok(Some(v)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.into()),
@@ -77,7 +44,8 @@ pub fn set(data_dir: &Path, name: &str, value: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("secret name is empty");
     }
-    get_cached_entry(SERVICE, name)?.set_password(value)?;
+    Entry::new(SERVICE, name)?.set_password(value)?;
+    let _guard = INDEX_LOCK.lock().unwrap();
     let mut names = list_names(data_dir);
     if !names.iter().any(|n| n == name) {
         names.push(name.to_string());
@@ -88,10 +56,11 @@ pub fn set(data_dir: &Path, name: &str, value: &str) -> Result<()> {
 }
 
 pub fn delete(data_dir: &Path, name: &str) -> Result<()> {
-    match get_cached_entry(SERVICE, name)?.delete_credential() {
+    match Entry::new(SERVICE, name)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => {}
         Err(e) => return Err(e.into()),
     }
+    let _guard = INDEX_LOCK.lock().unwrap();
     let names: Vec<String> = list_names(data_dir).into_iter().filter(|n| n != name).collect();
     save_names(data_dir, &names)
 }
@@ -123,13 +92,104 @@ pub fn secret_delete(app: AppHandle, name: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use keyring::credential::{CredentialApi, CredentialBuilder, CredentialBuilderApi};
 
-    /// All tests run against keyring's in-memory mock store — no real Keychain.
+    /// Custom in-memory credential store for testing.
+    /// Persists passwords across Entry::new() calls via a shared HashMap.
+    struct TestCredential {
+        service: String,
+        account: String,
+        store: std::sync::Arc<Mutex<HashMap<(String, String), String>>>,
+    }
+
+    impl CredentialApi for TestCredential {
+        fn set_password(&self, password: &str) -> keyring::error::Result<()> {
+            let mut store = self.store.lock().unwrap();
+            store.insert((self.service.clone(), self.account.clone()), password.to_string());
+            Ok(())
+        }
+
+        fn set_secret(&self, secret: &[u8]) -> keyring::error::Result<()> {
+            let mut store = self.store.lock().unwrap();
+            let s = String::from_utf8(secret.to_vec())
+                .map_err(|e| keyring::Error::BadEncoding(e.into_bytes()))?;
+            store.insert((self.service.clone(), self.account.clone()), s);
+            Ok(())
+        }
+
+        fn get_password(&self) -> keyring::error::Result<String> {
+            let store = self.store.lock().unwrap();
+            store
+                .get(&(self.service.clone(), self.account.clone()))
+                .cloned()
+                .ok_or(keyring::Error::NoEntry)
+        }
+
+        fn get_secret(&self) -> keyring::error::Result<Vec<u8>> {
+            let store = self.store.lock().unwrap();
+            store
+                .get(&(self.service.clone(), self.account.clone()))
+                .map(|s| s.as_bytes().to_vec())
+                .ok_or(keyring::Error::NoEntry)
+        }
+
+        fn delete_credential(&self) -> keyring::error::Result<()> {
+            let mut store = self.store.lock().unwrap();
+            store
+                .remove(&(self.service.clone(), self.account.clone()))
+                .ok_or(keyring::Error::NoEntry)?;
+            Ok(())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("TestCredential")
+                .field("service", &self.service)
+                .field("account", &self.account)
+                .finish()
+        }
+    }
+
+    struct TestCredentialBuilder {
+        store: std::sync::Arc<Mutex<HashMap<(String, String), String>>>,
+    }
+
+    impl CredentialBuilderApi for TestCredentialBuilder {
+        fn build(
+            &self,
+            _target: Option<&str>,
+            service: &str,
+            account: &str,
+        ) -> keyring::error::Result<Box<dyn CredentialApi + Send + Sync>> {
+            Ok(Box::new(TestCredential {
+                service: service.to_string(),
+                account: account.to_string(),
+                store: self.store.clone(),
+            }))
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn persistence(&self) -> keyring::credential::CredentialPersistence {
+            keyring::credential::CredentialPersistence::EntryOnly
+        }
+    }
+
+    /// Set up the test credential builder with a shared in-memory store.
     fn mock_store() {
         use std::sync::Once;
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder())
+            let store = std::sync::Arc::new(Mutex::new(HashMap::new()));
+            let builder = TestCredentialBuilder { store };
+            keyring::set_default_credential_builder(Box::new(builder));
         });
     }
 
