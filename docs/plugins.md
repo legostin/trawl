@@ -5,8 +5,9 @@ A Trawl plugin is a small web app that runs **inside the Trawl UI**. It can:
 - add a whole new **mode** (a top-level view with its own sidebar entry),
 - add **action buttons** to the request-detail toolbar,
 - read live and historical **traffic**, send HTTP requests, create rules,
-  read/write project env vars, persist its own data, and talk to other plugins
-  over an **event bus**,
+  read/write project env vars, access app-wide **Keychain secrets**, send
+  notifications, persist its own data, and talk to other plugins over an
+  **event bus**,
 - reuse Trawl’s own UI components so it looks native.
 
 Plugins are distributed as a **GitHub repository** containing a manifest and a
@@ -112,6 +113,7 @@ interface TrawlHost {
   http: TrawlHttp;                 // one-shot HTTP send (optionally via the proxy)
   projects: TrawlProjects;         // active project + env vars
   gitHosts: TrawlGitHosts;         // per-host git tokens
+  secrets: TrawlSecrets;           // app-wide named secrets (Keychain)
   rules: TrawlRules;               // create a rule and open the editor
   storage: TrawlStorage;           // project-scoped key/value persistence
   ui: TrawlUi;                     // reusable host components
@@ -197,6 +199,18 @@ await host.gitHosts.token("github.example.org");      // string | null
 await host.gitHosts.setToken("github.example.org", t);
 ```
 
+### `secrets` — app-wide named secrets
+
+Stored in the macOS Keychain, managed in **Setup → Secrets**. Shared with rule
+scripts (`secret('NAME')`).
+
+```ts
+await host.secrets.list();          // string[]
+await host.secrets.get("TG_BOT_TOKEN");   // string | null
+await host.secrets.set("TG_BOT_TOKEN", token);
+await host.secrets.remove("TG_BOT_TOKEN");
+```
+
 ### `ui` / `util` — render like the host
 
 ```ts
@@ -218,6 +232,22 @@ host.events.emit("my-plugin:did-thing", payload);
 off(); // unsubscribe
 ```
 
+### Event registry & payload hints
+
+Declare your events so other plugins can subscribe with autocomplete:
+
+```ts
+host.events.describe("my-plugin:did-thing", {
+  description: "Fired after the thing is done",
+  payloadType: "{ id: string; ok: boolean }",   // TS type expression
+  source: "my-plugin",
+});
+host.events.known();  // [{ type, description?, payloadType?, source?, lastPayload? }]
+```
+
+The bus also remembers the **last payload** of every event, so undeclared
+events still get structure-based hints.
+
 ### Host-emitted events
 
 | Event | Payload | When |
@@ -228,6 +258,7 @@ off(); // unsubscribe
 | `capture:stopped` | — | The proxy stopped. |
 | `filter:changed` | filter object | The traffic search/filter changed. |
 | `project:changed` | active project id \| null | The active project selector changed. |
+| `notify:send` | `{ text, channel?, title?, source?, ruleName?, flowId? }` | A rule script called `notify()` (or a plugin asked for a notification). Handled by notification plugins (e.g. Telegram). |
 
 > `host.flows.subscribe(cb)` is a convenience over `flow:added` + `flow:updated`.
 
