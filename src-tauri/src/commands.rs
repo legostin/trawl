@@ -111,8 +111,8 @@ pub async fn start_proxy(
         let _ = app_for_emit.emit(event, flow.clone());
     });
     let app_for_notify = app.clone();
-    let notify: proxy::NotifyFn = std::sync::Arc::new(move |payload: serde_json::Value| {
-        let _ = app_for_notify.emit("script-notify", payload);
+    let app_event: proxy::AppEventFn = std::sync::Arc::new(move |event: &str, payload: serde_json::Value| {
+        let _ = app_for_notify.emit(event, payload);
     });
     let secret_fn: crate::scripting::SecretFn =
         std::sync::Arc::new(|name: &str| crate::secrets::get(name).ok().flatten());
@@ -136,7 +136,7 @@ pub async fn start_proxy(
         addr,
         state.store.clone(),
         emit,
-        notify,
+        app_event,
         secret_fn,
         ca_dir(&app)?,
         state.scripts.clone(),
