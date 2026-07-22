@@ -1,8 +1,24 @@
 type Handler = (payload: unknown) => void;
 
+export interface EventMeta {
+  description?: string;
+  /** TS type expression for the payload, e.g. "{ a: number }" — fed to Monaco. */
+  payloadType?: string;
+  /** Self-reported origin ("core" or a plugin id). */
+  source?: string;
+}
+
+export interface EventInfo extends EventMeta {
+  type: string;
+  /** Last payload observed for this event (undefined until first emit). */
+  lastPayload?: unknown;
+}
+
 /** Minimal typed pub/sub for host↔plugin (and plugin↔plugin) communication. */
 export class EventBus {
   private map = new Map<string, Set<Handler>>();
+  private meta = new Map<string, EventMeta>();
+  private last = new Map<string, unknown>();
 
   on(type: string, cb: Handler): () => void {
     let set = this.map.get(type);
@@ -19,6 +35,7 @@ export class EventBus {
   }
 
   emit(type: string, payload?: unknown): void {
+    this.last.set(type, payload);
     this.map.get(type)?.forEach((h) => {
       try {
         h(payload);
@@ -26,6 +43,19 @@ export class EventBus {
         console.error(`[trawl] plugin handler for "${type}" threw`, e);
       }
     });
+  }
+
+  /** Declare an event and its payload type (for the subscription UI + hints). */
+  describe(type: string, meta: EventMeta): void {
+    this.meta.set(type, meta);
+  }
+
+  /** Declared and observed events, sorted by type. */
+  known(): EventInfo[] {
+    const types = new Set([...this.meta.keys(), ...this.last.keys()]);
+    return [...types]
+      .sort()
+      .map((type) => ({ type, ...this.meta.get(type), lastPayload: this.last.get(type) }));
   }
 }
 
