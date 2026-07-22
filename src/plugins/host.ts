@@ -24,21 +24,27 @@ import { BodyViewer } from "@/components/BodyViewer";
 import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
 import { ScriptEditor } from "@/components/ScriptEditor";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { analyzeJson, fieldsToType } from "@/lib/analyze";
 import { setEventPayloadType } from "@/monaco-setup";
 import { listSecrets, getSecret, setSecret, deleteSecret } from "@/secrets";
+import { useUpdater } from "@/updater";
 import { bus } from "./bus";
 import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
 import type {
   ActiveProject,
   EnvVar,
+  EventParam,
   FlowAction,
   RegisteredMode,
   RuleDraft,
   TrawlHost,
+  TrawlUi,
 } from "./api";
 
-const HOST_VERSION = "1.6.0";
+const HOST_VERSION = "1.7.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -56,6 +62,63 @@ function scoped(f: FlowQuery): FlowQuery {
 }
 
 let installed = false;
+
+/** Documented payload fields shared by every event carrying a Flow object
+ *  (capture + breakpoint lifecycle). */
+const FLOW_PARAMS: EventParam[] = [
+  { name: "id", type: "number", doc: "Flow id" },
+  { name: "timestamp", type: "number", doc: "Capture time, ms since epoch" },
+  { name: "method", type: "string", doc: "HTTP method" },
+  { name: "url.host", type: "string", doc: "Request host" },
+  { name: "url.path", type: "string", doc: "Request path" },
+  { name: "state", type: "string", doc: 'Flow state, e.g. "done", "paused", "error"' },
+  { name: "error", type: "string | null", doc: 'Error message, set when state is "error"' },
+  { name: "appliedRules", type: "string[]", doc: "Names of rules applied to this flow" },
+  {
+    name: "response.status",
+    type: "number | undefined",
+    doc: "Response status code, once a response has arrived",
+  },
+];
+
+/** Documented payload fields shared by rule outcome events. */
+const RULE_PARAMS: EventParam[] = [
+  { name: "ruleName", type: "string", doc: "Name of the rule that ran" },
+  { name: "phase", type: "string", doc: '"request" | "response" | "handler"' },
+  { name: "flowId", type: "number", doc: "Id of the flow the rule acted on" },
+  { name: "method", type: "string", doc: "HTTP method of the flow" },
+  { name: "host", type: "string", doc: "Request host" },
+  { name: "path", type: "string", doc: "Request path" },
+];
+const RULE_ERROR_PARAMS: EventParam[] = [
+  ...RULE_PARAMS,
+  { name: "error", type: "string", doc: "Script error message" },
+];
+
+/** Flow ids already reported via flow:error, FIFO-capped so long sessions don't
+ *  grow this set unboundedly. */
+const erroredFlowIds = new Set<number>();
+const erroredFlowOrder: number[] = [];
+
+/** Records that `id` has been reported; returns false if it was already seen. */
+function markFlowErrored(id: number): boolean {
+  if (erroredFlowIds.has(id)) return false;
+  erroredFlowIds.add(id);
+  erroredFlowOrder.push(id);
+  if (erroredFlowOrder.length > 1000) {
+    const oldest = erroredFlowOrder.shift();
+    if (oldest !== undefined) erroredFlowIds.delete(oldest);
+  }
+  return true;
+}
+
+/** Derive `flow:error` from a flow-added/flow-updated payload (once per flow id). */
+function maybeEmitFlowError(payload: unknown): void {
+  const p = payload as { id?: number; state?: string } | null | undefined;
+  if (p && typeof p.id === "number" && p.state === "error" && markFlowErrored(p.id)) {
+    bus.emit("flow:error", payload);
+  }
+}
 
 /** Install the host API on `window` and bridge app state into the event bus. */
 export function installHost(): void {
@@ -135,7 +198,18 @@ export function installHost(): void {
       remove: (name: string) => deleteSecret(name),
     },
     mcp: { registerTool, unregisterTool },
-    ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge, ScriptEditor },
+    ui: {
+      BodyViewer,
+      HeadersTable,
+      MethodBadge,
+      StatusBadge,
+      ScriptEditor,
+      // Button's variant/size are cva-generated literal unions; the host API only
+      // promises `string` to plugins, so the real component needs a cast here.
+      Button: Button as unknown as TrawlUi["Button"],
+      Input,
+      Select,
+    },
     util: {
       bodyText: (msg) => bodyToText(msg),
       buildCurl: (flow) => buildCurl(flow),
@@ -158,8 +232,23 @@ export function installHost(): void {
   initMcpBridge();
 
   // Bridge Tauri capture events into the plugin bus.
-  void listen("flow-added", (e) => bus.emit("flow:added", e.payload));
-  void listen("flow-updated", (e) => bus.emit("flow:updated", e.payload));
+  void listen("flow-added", (e) => {
+    bus.emit("flow:added", e.payload);
+    maybeEmitFlowError(e.payload);
+  });
+  void listen("flow-updated", (e) => {
+    bus.emit("flow:updated", e.payload);
+    maybeEmitFlowError(e.payload);
+  });
+
+  // Breakpoint lifecycle → plugin bus.
+  void listen("flow-paused", (e) => bus.emit("breakpoint:hit", e.payload));
+  void listen("flow-resumed", (e) => bus.emit("breakpoint:resolved", e.payload));
+  void listen("breakpoint-timeout", (e) => bus.emit("breakpoint:timeout", e.payload));
+
+  // Rule outcomes → plugin bus.
+  void listen("rule-applied", (e) => bus.emit("rule:applied", e.payload));
+  void listen("rule-error", (e) => bus.emit("rule:error", e.payload));
 
   // Script notify() → plugin bus (delivery is a plugin concern, e.g. Telegram).
   void listen("script-notify", (e) => bus.emit("notify:send", e.payload));
@@ -171,14 +260,27 @@ export function installHost(): void {
     response: { status: number; headers: [string, string][]; body: number[] | string; bodyIsText: boolean } | null;
     state: string; error: string | null; appliedRules: string[];
   }`;
+  const RULE_TYPE =
+    "{ ruleName: string; phase: string; flowId: number; method: string; host: string; path: string }";
+  const RULE_ERROR_TYPE =
+    "{ ruleName: string; phase: string; flowId: number; method: string; host: string; path: string; error: string }";
+
   bus.describe("flow:added", {
     description: "A new request/response was captured",
     payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
     source: "core",
   });
   bus.describe("flow:updated", {
     description: "A captured flow changed (response arrived, breakpoint resolved)",
     payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
+    source: "core",
+  });
+  bus.describe("flow:error", {
+    description: 'A captured flow reached the "error" state (proxy or script failure)',
+    payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
     source: "core",
   });
   bus.describe("capture:started", { description: "The proxy started", source: "core" });
@@ -186,17 +288,92 @@ export function installHost(): void {
   bus.describe("filter:changed", {
     description: "The traffic search/filter changed",
     payloadType: "{ [key: string]: any }",
+    params: [
+      { name: "query", type: "string", doc: "Free-text search over host + path" },
+      { name: "method", type: "string", doc: 'HTTP method filter, "" for any' },
+      { name: "statusClass", type: "string", doc: '"any" | "2xx" | "3xx" | "4xx" | "5xx"' },
+    ],
     source: "core",
   });
   bus.describe("project:changed", {
     description: "The active project selector changed",
     payloadType: "string | null",
+    params: [
+      {
+        name: "projectId",
+        type: "string | null",
+        doc: "New active project id, or null when capturing all domains",
+      },
+    ],
     source: "core",
   });
   bus.describe("notify:send", {
     description: "Deliver a notification (emitted by rule notify() and plugins)",
     payloadType:
       "{ text: string; channel?: string; title?: string; source?: string; ruleName?: string; flowId?: number }",
+    params: [
+      { name: "text", type: "string", doc: "Notification body" },
+      { name: "channel", type: "string", doc: "Delivery channel hint, e.g. a plugin id" },
+      { name: "title", type: "string", doc: "Optional notification title" },
+      { name: "source", type: "string", doc: 'Origin, e.g. "rule" or a plugin id' },
+      { name: "ruleName", type: "string", doc: "Rule that triggered notify(), if any" },
+      { name: "flowId", type: "number", doc: "Related flow id, if any" },
+    ],
+    source: "core",
+  });
+  bus.describe("breakpoint:hit", {
+    description: "A flow paused at a breakpoint, awaiting resolution",
+    payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
+    source: "core",
+  });
+  bus.describe("breakpoint:resolved", {
+    description: "A paused flow was resumed (edited or passed through)",
+    payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
+    source: "core",
+  });
+  bus.describe("breakpoint:timeout", {
+    description: "A paused flow auto-continued after the breakpoint timeout elapsed",
+    payloadType: FLOW_TYPE,
+    params: FLOW_PARAMS,
+    source: "core",
+  });
+  bus.describe("rule:applied", {
+    description: "A rule ran successfully against a flow",
+    payloadType: RULE_TYPE,
+    params: RULE_PARAMS,
+    source: "core",
+  });
+  bus.describe("rule:error", {
+    description: "A rule's script threw while running against a flow",
+    payloadType: RULE_ERROR_TYPE,
+    params: RULE_ERROR_PARAMS,
+    source: "core",
+  });
+  bus.describe("plugin:installed", {
+    description: "A plugin finished installing",
+    payloadType: "{ id: string; name: string; version: string }",
+    params: [
+      { name: "id", type: "string", doc: "Plugin id" },
+      { name: "name", type: "string", doc: "Plugin display name" },
+      { name: "version", type: "string", doc: "Installed version" },
+    ],
+    source: "core",
+  });
+  bus.describe("plugin:removed", {
+    description: "A plugin was uninstalled",
+    payloadType: "{ id: string }",
+    params: [{ name: "id", type: "string", doc: "Removed plugin id" }],
+    source: "core",
+  });
+  bus.describe("update:available", {
+    description: "A newer app version is available",
+    payloadType: "{ version: string; notes: string | null }",
+    params: [
+      { name: "version", type: "string", doc: "Newer version's number" },
+      { name: "notes", type: "string | null", doc: "Release notes, if provided" },
+    ],
     source: "core",
   });
 
@@ -220,5 +397,13 @@ export function installHost(): void {
       lastProject = s.activeId;
       bus.emit("project:changed", s.activeId);
     }
+  });
+
+  let lastUpdateStatus = useUpdater.getState().status;
+  useUpdater.subscribe((s) => {
+    if (s.status === "available" && lastUpdateStatus !== "available") {
+      bus.emit("update:available", { version: s.version, notes: s.notes });
+    }
+    lastUpdateStatus = s.status;
   });
 }

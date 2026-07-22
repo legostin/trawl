@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { load as loadYaml } from "js-yaml";
 import { useLayout } from "./layout";
+import { bus } from "./plugins/bus";
 import type { FlowAction, RegisteredMode } from "./plugins/api";
 
 /** An entry in the public plugin catalog (`plugins.yaml`). */
@@ -113,8 +114,13 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   fetchManifest: (repo, reference, host) =>
     invoke<PluginManifest>("fetch_plugin_manifest", { repo, reference, host }),
   install: async (repo, reference) => {
+    const before = new Set(get().installed.map((p) => p.id));
     const installed = await invoke<Plugin[]>("install_plugin", { repo, reference });
     set({ installed });
+    const added = installed.find((p) => !before.has(p.id));
+    if (added) {
+      bus.emit("plugin:installed", { id: added.id, name: added.name, version: added.version });
+    }
   },
   remove: async (id) => {
     const installed = await invoke<Plugin[]>("remove_plugin", { id });
@@ -124,6 +130,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     set({ installed, updates, modes: get().modes.filter((m) => m.id !== id) });
     const { clearPluginTools } = await import("./plugins/mcpBridge");
     await clearPluginTools(id);
+    bus.emit("plugin:removed", { id });
   },
   setEnabled: async (id, enabled) => {
     const installed = await invoke<Plugin[]>("set_plugin_enabled", { id, enabled });

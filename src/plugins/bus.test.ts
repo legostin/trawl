@@ -73,4 +73,22 @@ describe("event registry", () => {
     expect(b.known().map((e) => e.type)).toEqual(["a:evt", "b:evt"]);
     expect(b.known()[1]).toMatchObject({ payloadType: "{ ok: boolean }", lastPayload: { ok: true } });
   });
+
+  it("describe() with params round-trips through known()", () => {
+    const b = new EventBus();
+    const params = [
+      { name: "id", type: "number", doc: "Flow id" },
+      { name: "state", type: "string" },
+    ];
+    b.describe("core:x", { description: "d", payloadType: "{ id: number }", params });
+    expect(b.known()).toEqual([
+      {
+        type: "core:x",
+        description: "d",
+        payloadType: "{ id: number }",
+        params,
+        lastPayload: undefined,
+      },
+    ]);
+  });
 });

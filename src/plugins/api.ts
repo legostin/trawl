@@ -9,7 +9,7 @@ import type { SendRequest, SendResponse } from "@/http";
 import type { Flow, HttpMessage, ResponseMessage } from "@/types";
 import type { EventInfo, EventMeta } from "./bus";
 
-export type { EventInfo, EventMeta } from "./bus";
+export type { EventInfo, EventMeta, EventParam } from "./bus";
 
 export interface RegisteredMode {
   id: string;
@@ -40,6 +40,14 @@ export interface TrawlUi {
     onChange: (v: string) => void;
     language?: string;
   }>;
+  /** Host's themed button (variant/size are loosely typed here to avoid leaking cva internals). */
+  Button: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }
+  >;
+  /** Host's themed text input. */
+  Input: React.ComponentType<React.InputHTMLAttributes<HTMLInputElement>>;
+  /** Host's themed select. */
+  Select: React.ComponentType<React.SelectHTMLAttributes<HTMLSelectElement>>;
 }
 
 export interface TrawlUtil {
