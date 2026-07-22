@@ -117,6 +117,21 @@ export interface PluginReports {
   remove(id: string): Promise<void>;
 }
 
+export interface McpToolSpec {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler: (args: unknown) => unknown | Promise<unknown>;
+  /** Таймаут вызова, мс (по умолчанию 60000). */
+  timeoutMs?: number;
+}
+
+export interface TrawlMcp {
+  /** Зарегистрировать MCP-тул `<pluginId>_<name>`. Только при инициализации плагина. */
+  registerTool(spec: McpToolSpec): Promise<void>;
+  unregisterTool(name: string): Promise<void>;
+}
+
 /** The host object exposed to plugins as `window.__TRAWL__`. */
 export interface TrawlHost {
   version: string;
@@ -129,6 +144,7 @@ export interface TrawlHost {
   gitHosts: TrawlGitHosts;
   rules: TrawlRules;
   storage: TrawlStorage;
+  mcp: TrawlMcp;
   ui: TrawlUi;
   util: TrawlUtil;
   registerMode(mode: RegisteredMode): void;

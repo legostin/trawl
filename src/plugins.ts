@@ -126,6 +126,10 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   setEnabled: async (id, enabled) => {
     const installed = await invoke<Plugin[]>("set_plugin_enabled", { id, enabled });
     set({ installed });
+    if (!enabled) {
+      const { clearPluginTools } = await import("./plugins/mcpBridge");
+      await clearPluginTools(id);
+    }
   },
   registerMode: (mode) =>
     set((s) => ({

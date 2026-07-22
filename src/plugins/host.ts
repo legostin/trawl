@@ -24,6 +24,7 @@ import { BodyViewer } from "@/components/BodyViewer";
 import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
 import { bus } from "./bus";
+import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
 import type {
   ActiveProject,
   EnvVar,
@@ -33,7 +34,7 @@ import type {
   TrawlHost,
 } from "./api";
 
-const HOST_VERSION = "1.5.0";
+const HOST_VERSION = "1.6.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -121,6 +122,7 @@ export function installHost(): void {
       set: (key: string, value: string) =>
         invoke<void>("plugin_storage_set", { key, value }),
     },
+    mcp: { registerTool, unregisterTool },
     ui: { BodyViewer, HeadersTable, MethodBadge, StatusBadge },
     util: {
       bodyText: (msg) => bodyToText(msg),
@@ -137,6 +139,7 @@ export function installHost(): void {
   window.React = React;
   window.ReactJSXRuntime = JsxRuntime;
   window.__TRAWL__ = host;
+  initMcpBridge();
 
   // Bridge Tauri capture events into the plugin bus.
   void listen("flow-added", (e) => bus.emit("flow:added", e.payload));
