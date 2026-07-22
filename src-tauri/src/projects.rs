@@ -111,6 +111,36 @@ pub fn save_projects(dir: &Path, file: &ProjectsFile) -> Result<()> {
     Ok(())
 }
 
+pub fn upsert_project(dir: &Path, project: Project) -> Result<ProjectsFile, String> {
+    let mut file = load_projects(dir).map_err(|e| e.to_string())?;
+    if let Some(existing) = file.projects.iter_mut().find(|p| p.id == project.id) {
+        *existing = project;
+    } else {
+        file.projects.push(project);
+    }
+    save_projects(dir, &file).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+pub fn remove_project(dir: &Path, id: &str) -> Result<ProjectsFile, String> {
+    let mut file = load_projects(dir).map_err(|e| e.to_string())?;
+    file.projects.retain(|p| p.id != id);
+    if file.active_id.as_deref() == Some(id) {
+        file.active_id = None;
+    }
+    save_projects(dir, &file).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+/// Сохраняет active_id и возвращает резолвнутый активный проект.
+pub fn set_active(dir: &Path, id: Option<String>) -> Result<Option<Project>, String> {
+    let mut file = load_projects(dir).map_err(|e| e.to_string())?;
+    file.active_id = id.clone();
+    let resolved = id.and_then(|i| file.projects.iter().find(|p| p.id == i).cloned());
+    save_projects(dir, &file).map_err(|e| e.to_string())?;
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +225,23 @@ mod tests {
         assert_eq!(back.projects.len(), 1);
         assert_eq!(back.active_id.as_deref(), Some("p1"));
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn upsert_remove_and_set_active_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project {
+            id: "p1".into(), name: "P".into(),
+            include_hosts: vec!["example.com".into()],
+            exclude_hosts: vec![], env: vec![],
+        };
+        let file = upsert_project(dir.path(), p.clone()).unwrap();
+        assert_eq!(file.projects.len(), 1);
+        let active = set_active(dir.path(), Some("p1".into())).unwrap();
+        assert_eq!(active.unwrap().id, "p1");
+        let file = remove_project(dir.path(), "p1").unwrap();
+        assert!(file.projects.is_empty());
+        // remove активного снимает active_id
+        assert!(file.active_id.is_none());
     }
 }

@@ -55,7 +55,7 @@ impl AppState {
         }
     }
 
-    fn db(&self) -> Result<&DbHandle, String> {
+    pub fn db(&self) -> Result<&DbHandle, String> {
         self.db.get().ok_or_else(|| "database not initialized".to_string())
     }
 }
@@ -68,7 +68,7 @@ pub fn init_db(app: &AppHandle, state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+pub fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
@@ -80,7 +80,7 @@ fn ca_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .join("ca"))
 }
 
-fn rules_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+pub fn rules_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app
         .path()
         .app_data_dir()
@@ -198,39 +198,14 @@ pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule
 
 #[tauri::command]
 pub fn save_rule(app: AppHandle, rule: Rule, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
-    let dir = rules_dir(&app)?;
-    let mut rules = rules::load_rules(&dir).map_err(|e| e.to_string())?;
-    // Hard validation: no two enabled rules with the same scope + pattern + overlapping phase.
-    if rule.enabled {
-        if let Some(other) = rules.iter().find(|r| {
-            r.id != rule.id
-                && r.enabled
-                && r.project_id == rule.project_id
-                && r.pattern == rule.pattern
-                && rules::phases_conflict(r.phase, rule.phase)
-        }) {
-            return Err(format!(
-                "Conflicts with enabled rule “{}” — same pattern and phase. Disable it first.",
-                other.name
-            ));
-        }
-    }
-    if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
-        *existing = rule;
-    } else {
-        rules.push(rule);
-    }
-    rules::save_rules(&dir, &rules).map_err(|e| e.to_string())?;
+    let rules = rules::upsert_rule(&rules_dir(&app)?, rule)?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
 }
 
 #[tauri::command]
 pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
-    let dir = rules_dir(&app)?;
-    let mut rules = rules::load_rules(&dir).map_err(|e| e.to_string())?;
-    rules.retain(|r| r.id != id);
-    rules::save_rules(&dir, &rules).map_err(|e| e.to_string())?;
+    let rules = rules::remove_rule(&rules_dir(&app)?, &id)?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
 }
@@ -253,31 +228,7 @@ pub fn save_breakpoint(
     breakpoint: crate::breakpoints::Breakpoint,
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
-    let dir = rules_dir(&app)?;
-    let mut bps = crate::breakpoints::load_breakpoints(&dir).map_err(|e| e.to_string())?;
-    // Hard validation: no two enabled breakpoints with the same scope + pattern +
-    // method that also pause the same phase (both request, or both response).
-    if breakpoint.enabled {
-        if let Some(other) = bps.iter().find(|b| {
-            b.id != breakpoint.id
-                && b.enabled
-                && b.project_id == breakpoint.project_id
-                && b.pattern == breakpoint.pattern
-                && b.method == breakpoint.method
-                && ((b.on_request && breakpoint.on_request) || (b.on_response && breakpoint.on_response))
-        }) {
-            return Err(format!(
-                "Conflicts with enabled breakpoint “{}” — same pattern, method and phase. Disable it first.",
-                other.name
-            ));
-        }
-    }
-    if let Some(existing) = bps.iter_mut().find(|b| b.id == breakpoint.id) {
-        *existing = breakpoint;
-    } else {
-        bps.push(breakpoint);
-    }
-    crate::breakpoints::save_breakpoints(&dir, &bps).map_err(|e| e.to_string())?;
+    let bps = crate::breakpoints::upsert_breakpoint(&rules_dir(&app)?, breakpoint)?;
     *state.breakpoints.write().unwrap() = bps.clone();
     Ok(bps)
 }
@@ -288,10 +239,7 @@ pub fn delete_breakpoint(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::breakpoints::Breakpoint>, String> {
-    let dir = rules_dir(&app)?;
-    let mut bps = crate::breakpoints::load_breakpoints(&dir).map_err(|e| e.to_string())?;
-    bps.retain(|b| b.id != id);
-    crate::breakpoints::save_breakpoints(&dir, &bps).map_err(|e| e.to_string())?;
+    let bps = crate::breakpoints::remove_breakpoint(&rules_dir(&app)?, &id)?;
     *state.breakpoints.write().unwrap() = bps.clone();
     Ok(bps)
 }
@@ -343,17 +291,17 @@ pub struct EditedPayload {
     pub reason: Option<String>,
 }
 
-#[tauri::command]
-pub fn resolve_breakpoint(
+/// Общее ядро resolve: используется Tauri-командой и MCP-тулом.
+pub fn resolve_breakpoint_core(
+    pending: &crate::proxy::BreakpointRegistry,
     id: u64,
-    phase: String,
-    action: String,
+    phase: &str,
+    action: &str,
     edited: EditedPayload,
-    state: State<'_, AppState>,
 ) -> Result<(), String> {
     use base64::Engine;
     use crate::proxy::{BpPhase, Resolution};
-    let bp_phase = match phase.as_str() {
+    let bp_phase = match phase {
         "request" => BpPhase::Request,
         "response" => BpPhase::Response,
         _ => return Err("bad phase".into()),
@@ -367,7 +315,7 @@ pub fn resolve_breakpoint(
         ),
         None => None,
     };
-    let resolution = match action.as_str() {
+    let resolution = match action {
         "execute" => Resolution::Execute {
             method: edited.method,
             path: edited.path,
@@ -385,7 +333,7 @@ pub fn resolve_breakpoint(
         },
         _ => return Err("bad action".into()),
     };
-    let tx = state.pending_breakpoints.lock().unwrap().remove(&(id, bp_phase));
+    let tx = pending.lock().unwrap().remove(&(id, bp_phase));
     match tx {
         Some(tx) => {
             let _ = tx.send(resolution);
@@ -393,6 +341,17 @@ pub fn resolve_breakpoint(
         }
         None => Err("no pending breakpoint".into()),
     }
+}
+
+#[tauri::command]
+pub fn resolve_breakpoint(
+    id: u64,
+    phase: String,
+    action: String,
+    edited: EditedPayload,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    resolve_breakpoint_core(&state.pending_breakpoints, id, &phase, &action, edited)
 }
 
 #[tauri::command]
@@ -437,14 +396,7 @@ pub fn save_project(
     project: Project,
     state: State<'_, AppState>,
 ) -> Result<ProjectsFile, String> {
-    let dir = data_dir(&app)?;
-    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
-    if let Some(existing) = file.projects.iter_mut().find(|p| p.id == project.id) {
-        *existing = project.clone();
-    } else {
-        file.projects.push(project.clone());
-    }
-    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
+    let file = projects::upsert_project(&data_dir(&app)?, project.clone())?;
     // если правим активный проект — обновить общую ячейку
     let mut active = state.active_project.write().unwrap();
     if active.as_ref().map(|p| &p.id) == Some(&project.id) {
@@ -459,14 +411,13 @@ pub fn delete_project(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<ProjectsFile, String> {
-    let dir = data_dir(&app)?;
-    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
-    file.projects.retain(|p| p.id != id);
-    if file.active_id.as_deref() == Some(&id) {
-        file.active_id = None;
-        *state.active_project.write().unwrap() = None;
+    let file = projects::remove_project(&data_dir(&app)?, &id)?;
+    if file.active_id.is_none() {
+        let mut active = state.active_project.write().unwrap();
+        if active.as_ref().map(|p| p.id.as_str()) == Some(id.as_str()) {
+            *active = None;
+        }
     }
-    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
     Ok(file)
 }
 
@@ -476,11 +427,7 @@ pub fn set_active_project(
     id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let dir = data_dir(&app)?;
-    let mut file = projects::load_projects(&dir).map_err(|e| e.to_string())?;
-    file.active_id = id.clone();
-    let resolved = id.and_then(|i| file.projects.iter().find(|p| p.id == i).cloned());
-    projects::save_projects(&dir, &file).map_err(|e| e.to_string())?;
+    let resolved = projects::set_active(&data_dir(&app)?, id)?;
     *state.active_project.write().unwrap() = resolved;
     Ok(())
 }

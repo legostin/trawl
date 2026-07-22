@@ -153,6 +153,41 @@ pub fn save_library(dir: &Path, source: &str) -> Result<()> {
     Ok(())
 }
 
+/// Вставляет/обновляет правило с той же валидацией, что UI-команда.
+/// Возвращает полный список правил после сохранения.
+pub fn upsert_rule(dir: &Path, rule: Rule) -> Result<Vec<Rule>, String> {
+    let mut rules = load_rules(dir).map_err(|e| e.to_string())?;
+    // Hard validation: no two enabled rules with the same scope + pattern + overlapping phase.
+    if rule.enabled {
+        if let Some(other) = rules.iter().find(|r| {
+            r.id != rule.id
+                && r.enabled
+                && r.project_id == rule.project_id
+                && r.pattern == rule.pattern
+                && phases_conflict(r.phase, rule.phase)
+        }) {
+            return Err(format!(
+                "Conflicts with enabled rule “{}” — same pattern and phase. Disable it first.",
+                other.name
+            ));
+        }
+    }
+    if let Some(existing) = rules.iter_mut().find(|r| r.id == rule.id) {
+        *existing = rule;
+    } else {
+        rules.push(rule);
+    }
+    save_rules(dir, &rules).map_err(|e| e.to_string())?;
+    Ok(rules)
+}
+
+pub fn remove_rule(dir: &Path, id: &str) -> Result<Vec<Rule>, String> {
+    let mut rules = load_rules(dir).map_err(|e| e.to_string())?;
+    rules.retain(|r| r.id != id);
+    save_rules(dir, &rules).map_err(|e| e.to_string())?;
+    Ok(rules)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +301,40 @@ mod tests {
         save_library(&tmp, "function f(){}").unwrap();
         assert_eq!(load_library(&tmp).unwrap(), "function f(){}");
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn upsert_rule_rejects_conflicting_enabled_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Rule {
+            id: "a".into(), name: "A".into(), enabled: true,
+            pattern: "api.example.com/*".into(), phase: Phase::Request,
+            script: String::new(), project_id: None,
+        };
+        upsert_rule(dir.path(), a).unwrap();
+        let b = Rule {
+            id: "b".into(), name: "B".into(), enabled: true,
+            pattern: "api.example.com/*".into(), phase: Phase::Both,
+            script: String::new(), project_id: None,
+        };
+        let err = upsert_rule(dir.path(), b).unwrap_err();
+        assert!(err.contains("Conflicts"), "err was: {err}");
+    }
+
+    #[test]
+    fn upsert_rule_updates_existing_and_remove_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Rule {
+            id: "a".into(), name: "A".into(), enabled: true,
+            pattern: "x/*".into(), phase: Phase::Request,
+            script: String::new(), project_id: None,
+        };
+        upsert_rule(dir.path(), a.clone()).unwrap();
+        let renamed = Rule { name: "A2".into(), ..a };
+        let rules = upsert_rule(dir.path(), renamed).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "A2");
+        let rules = remove_rule(dir.path(), "a").unwrap();
+        assert!(rules.is_empty());
     }
 }
