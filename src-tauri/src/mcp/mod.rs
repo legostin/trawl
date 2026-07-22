@@ -1,5 +1,7 @@
 //! MCP server: config, state, lifecycle.
 
+pub mod core_tools;
+
 use std::fs;
 use std::path::Path;
 

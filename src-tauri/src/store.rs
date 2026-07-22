@@ -51,6 +51,10 @@ impl FlowStore {
     pub fn all(&self) -> Vec<Flow> {
         self.inner.flows.lock().unwrap().iter().cloned().collect()
     }
+
+    pub fn get(&self, id: u64) -> Option<Flow> {
+        self.inner.flows.lock().unwrap().iter().find(|f| f.id == id).cloned()
+    }
 }
 
 #[cfg(test)]
@@ -100,5 +104,19 @@ mod tests {
         assert!(ok);
         assert_eq!(s.all()[0].method, "POST");
         assert!(!s.update(999, |_| {}));
+    }
+
+    #[test]
+    fn get_returns_flow_by_id() {
+        let store = FlowStore::new(10);
+        let id = store.next_id();
+        store.insert(Flow::new_request(
+            id,
+            "GET".into(),
+            UrlParts { scheme: "http".into(), host: "h".into(), port: 80, path: "/".into() },
+            HttpMessage { headers: vec![], body: vec![], body_is_text: true },
+        ));
+        assert!(store.get(id).is_some());
+        assert!(store.get(id + 1).is_none());
     }
 }
