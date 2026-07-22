@@ -207,6 +207,42 @@ host.util.buildCurl(flow);          // cURL string
 
 ---
 
+## MCP tools
+
+Trawl runs a local MCP server (Setup → MCP server) that AI agents connect to.
+A plugin can contribute its own tools:
+
+```ts
+const host = window.__TRAWL__;
+
+host.mcp.registerTool({
+  name: "flaky_endpoints",              // exposed as "<pluginId>_flaky_endpoints"
+  description: "Endpoints with the highest error rate.",
+  inputSchema: {
+    type: "object",
+    properties: { limit: { type: "integer" } },
+  },
+  async handler({ limit = 10 }) {
+    const buckets = await host.flows.aggregate({ statusClass: "5xx" }, "host", 0, limit);
+    return { buckets };                 // any JSON-serializable value
+  },
+  timeoutMs: 30_000,                    // optional, default 60000
+});
+```
+
+Rules:
+
+- `registerTool` must be called **during plugin initialization** (top level of
+  your bundle) — that is how the tool is attributed to your plugin.
+- Tool names: `[a-zA-Z0-9_-]`. The final MCP name is `<pluginId>_<name>`.
+- The handler's return value is serialized to JSON for the agent; thrown
+  errors become tool errors.
+- Tools are removed automatically when the plugin is disabled or reloaded.
+
+Requires host API `1.6.0`.
+
+---
+
 ## Events
 
 The bus is symmetric: the host emits app events, and plugins can `emit`/`on`
