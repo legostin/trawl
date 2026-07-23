@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import { useProjects, type EnvVar, type Project } from "../projects";
+import { useProjects, type Project } from "../projects";
 import { Button } from "./ui/button";
+import { EnvList } from "./EnvList";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
 
@@ -149,7 +150,11 @@ function ProjectForm({
           hosts={draft.excludeHosts}
           onChange={(excludeHosts) => commit({ excludeHosts })}
         />
-        <EnvList env={draft.env} onChange={(env) => patch({ env })} />
+        <EnvList
+          env={draft.env}
+          onChange={(env) => patch({ env })}
+          hint="Available in scripts as env.KEY; scripts can also write to them (values persist across requests)."
+        />
       </div>
     </div>
   );
@@ -200,55 +205,6 @@ function HostList({
           <Plus />
         </Button>
       </div>
-    </div>
-  );
-}
-
-function EnvList({ env, onChange }: { env: EnvVar[]; onChange: (env: EnvVar[]) => void }) {
-  const setAt = (i: number, patch: Partial<EnvVar>) =>
-    onChange(env.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
-  return (
-    <div>
-      <div className="text-xs font-semibold">Environment variables</div>
-      <div className="mb-1.5 text-[11px] text-muted-foreground">
-        Available in scripts as <code className="rounded bg-secondary px-1 font-mono">env.KEY</code>; scripts can
-        also write to them (values persist across requests).
-      </div>
-      <div className="space-y-1">
-        {env.map((e, i) => (
-          <div key={i} className="flex items-center gap-1">
-            <Input
-              value={e.key}
-              onChange={(ev) => setAt(i, { key: ev.target.value })}
-              placeholder="KEY"
-              className="h-7 w-40 font-mono"
-            />
-            <Input
-              value={e.value}
-              onChange={(ev) => setAt(i, { value: ev.target.value })}
-              placeholder="value"
-              className="h-7 flex-1 font-mono"
-            />
-            <Button
-              size="iconSm"
-              variant="ghost"
-              title="Remove"
-              onClick={() => onChange(env.filter((_, idx) => idx !== i))}
-            >
-              <X className="size-3" />
-            </Button>
-          </div>
-        ))}
-      </div>
-      <Button
-        size="sm"
-        variant="outline"
-        className="mt-1.5"
-        onClick={() => onChange([...env, { key: "", value: "" }])}
-      >
-        <Plus />
-        Add variable
-      </Button>
     </div>
   );
 }
