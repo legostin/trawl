@@ -9,6 +9,12 @@ export interface EnvVar {
   value: string;
 }
 
+/** Ключи проекта, перекрывающие одноимённые глобальные переменные. */
+export function overriddenKeys(globalEnv: EnvVar[], projectEnv: EnvVar[]): Set<string> {
+  const g = new Set(globalEnv.map((e) => e.key).filter(Boolean));
+  return new Set(projectEnv.map((e) => e.key).filter((k) => k && g.has(k)));
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -33,28 +39,36 @@ export function projectTracks(project: Project, host: string): boolean {
 interface ProjectsFile {
   projects: Project[];
   activeId: string | null;
+  globalEnv?: EnvVar[];
 }
 
 interface ProjectsState {
   projects: Project[];
   activeId: string | null;
+  globalEnv: EnvVar[];
   editorOpen: boolean;
+  variablesOpen: boolean;
   load: () => Promise<void>;
   setActive: (id: string | null) => Promise<void>;
   upsert: (project: Project) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  saveGlobalEnv: (env: EnvVar[]) => Promise<void>;
   addHost: (projectId: string, host: string) => Promise<void>;
   openEditor: () => void;
   closeEditor: () => void;
+  openVariables: () => void;
+  closeVariables: () => void;
 }
 
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeId: null,
+  globalEnv: [],
   editorOpen: false,
+  variablesOpen: false,
   load: async () => {
     const f = await invoke<ProjectsFile>("list_projects");
-    set({ projects: f.projects, activeId: f.activeId });
+    set({ projects: f.projects, activeId: f.activeId, globalEnv: f.globalEnv ?? [] });
   },
   setActive: async (id) => {
     await invoke("set_active_project", { id });
@@ -64,12 +78,16 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
   upsert: async (project) => {
     const f = await invoke<ProjectsFile>("save_project", { project });
-    set({ projects: f.projects, activeId: f.activeId });
+    set({ projects: f.projects, activeId: f.activeId, globalEnv: f.globalEnv ?? [] });
     useToast.getState().show("Project saved");
   },
   remove: async (id) => {
     const f = await invoke<ProjectsFile>("delete_project", { id });
-    set({ projects: f.projects, activeId: f.activeId });
+    set({ projects: f.projects, activeId: f.activeId, globalEnv: f.globalEnv ?? [] });
+  },
+  saveGlobalEnv: async (env) => {
+    const f = await invoke<ProjectsFile>("save_global_env", { env });
+    set({ projects: f.projects, activeId: f.activeId, globalEnv: f.globalEnv ?? [] });
   },
   addHost: async (projectId, host) => {
     const p = get().projects.find((x) => x.id === projectId);
@@ -78,4 +96,6 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
   openEditor: () => set({ editorOpen: true }),
   closeEditor: () => set({ editorOpen: false }),
+  openVariables: () => set({ variablesOpen: true }),
+  closeVariables: () => set({ variablesOpen: false }),
 }));
