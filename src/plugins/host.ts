@@ -172,7 +172,12 @@ export function installHost(): void {
       remove: (id) => deleteReport(id),
     },
     http: {
-      send: (req, viaProxy) => sendRequest(req, viaProxy),
+      // viaProxy must work even when the proxy is stopped: start it on demand
+      // so the request is captured and the topbar reflects the running proxy.
+      send: async (req, viaProxy) => {
+        if (viaProxy) await useFlows.getState().ensureProxy();
+        return sendRequest(req, viaProxy);
+      },
     },
     projects: {
       active: () => activeProject(),
