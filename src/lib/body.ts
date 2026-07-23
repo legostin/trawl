@@ -1,6 +1,6 @@
 import type { HttpMessage, ResponseMessage } from "@/types";
 
-/** Декодирует тело в текст (если оно текстовое), иначе отдаёт метку binary. */
+/** Decodes the body to text (if it's textual), otherwise returns a binary label. */
 export function bodyToText(msg: HttpMessage | ResponseMessage | null | undefined): string {
   if (!msg) return "";
   const b = msg.body;
@@ -14,7 +14,7 @@ export function bodyToText(msg: HttpMessage | ResponseMessage | null | undefined
   }
 }
 
-/** Пытается распарсить строку как JSON; null при неудаче. */
+/** Tries to parse a string as JSON; null on failure. */
 export function tryParseJson(text: string): unknown | null {
   const t = text.trim();
   if (!t || (t[0] !== "{" && t[0] !== "[")) return null;

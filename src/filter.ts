@@ -4,7 +4,7 @@ export type StatusClass = "any" | "2xx" | "3xx" | "4xx" | "5xx";
 
 export interface FlowFilter {
   query: string;
-  method: string; // "" = любой
+  method: string; // "" = any
   statusClass: StatusClass;
 }
 
@@ -17,7 +17,7 @@ function matchesStatusClass(status: number | undefined, cls: StatusClass): boole
   return `${bucket}xx` === cls;
 }
 
-/** Отфильтрованные потоки, новые сверху (по убыванию id). */
+/** Filtered flows, newest first (descending by id). */
 export function visibleFlows(flows: Flow[], filter: FlowFilter): Flow[] {
   return flows.filter((f) => flowMatches(f, filter)).reverse();
 }

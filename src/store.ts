@@ -23,7 +23,7 @@ interface FlowsState {
   flows: Flow[];
   selectedId: number | null;
   filter: FlowFilter;
-  // UI-состояние
+  // UI state
   running: boolean;
   proxyAddr: string | null;
   view: View;

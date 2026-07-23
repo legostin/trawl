@@ -16,13 +16,13 @@ use crate::store::FlowStore;
 pub struct AppState {
     pub store: FlowStore,
     pub proxy: Mutex<Option<ProxyHandle>>,
-    /// Живой список правил, разделяемый с прокси-хендлером.
+    /// Live rule list, shared with the proxy handler.
     pub rules: Arc<RwLock<Vec<Rule>>>,
-    /// Live library-prelude, разделяемый с прокси-хендлером.
+    /// Live library-prelude, shared with the proxy handler.
     pub library: Arc<RwLock<String>>,
-    /// Активный проект (None = пишем всё). Разделяется с прокси-хендлером.
+    /// Active project (None = record everything). Shared with the proxy handler.
     pub active_project: Arc<RwLock<Option<Project>>>,
-    /// Глобальные env-переменные (вне проектов). Разделяются с прокси-хендлером.
+    /// Global env variables (outside projects). Shared with the proxy handler.
     pub global_env: crate::proxy::SharedGlobalEnv,
     pub scripts: crate::scripting::ScriptClient,
     /// Persistent flow DB (SQLite). Initialized once in the Tauri setup hook.
@@ -119,7 +119,7 @@ pub async fn start_proxy(
     });
     let secret_fn: crate::scripting::SecretFn =
         std::sync::Arc::new(|name: &str| crate::secrets::get(name).ok().flatten());
-    // Подтянуть актуальные правила, библиотеку и активный проект перед стартом.
+    // Pull in current rules, library, and active project before starting.
     let rdir = rules_dir(&app)?;
     let loaded_rules = rules::load_rules(&rdir).map_err(|e| e.to_string())?;
     let loaded_library = rules::load_library(&rdir).map_err(|e| e.to_string())?;
@@ -201,12 +201,12 @@ pub fn get_ca_pem(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 pub fn ca_cert_path(app: AppHandle) -> Result<String, String> {
     let dir = ca_dir(&app)?;
-    // гарантируем, что файл существует
+    // ensure the file exists
     load_or_create_ca(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("ca.pem").to_string_lossy().to_string())
 }
 
-// ── Правила и библиотека скриптов ──
+// ── Rules and script library ──
 
 #[tauri::command]
 pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
@@ -217,7 +217,7 @@ pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule
 
 #[tauri::command]
 pub fn save_rule(app: AppHandle, rule: Rule, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
-    crate::scripting::validate_rule_script(&rule.script).map_err(|e| format!("правило не сохранено: {e}"))?;
+    crate::scripting::validate_rule_script(&rule.script).map_err(|e| format!("rule not saved: {e}"))?;
     let rules = rules::upsert_rule(&rules_dir(&app)?, rule)?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
@@ -230,13 +230,13 @@ pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Re
     Ok(rules)
 }
 
-/// None — путь валиден; Some(текст ошибки) — нет. Для live-валидации в редакторе.
+/// None — the path is valid; Some(error text) — it isn't. For live validation in the editor.
 #[tauri::command]
 pub fn validate_jsonpath(path: String) -> Option<String> {
     crate::jsonpath::validate(&path)
 }
 
-// ── Брейкпоинты ──
+// ── Breakpoints ──
 
 #[tauri::command]
 pub fn list_breakpoints(
@@ -317,7 +317,7 @@ pub struct EditedPayload {
     pub reason: Option<String>,
 }
 
-/// Общее ядро resolve: используется Tauri-командой и MCP-тулом.
+/// Shared resolve core: used by the Tauri command and the MCP tool.
 pub fn resolve_breakpoint_core(
     pending: &crate::proxy::BreakpointRegistry,
     id: u64,
@@ -409,7 +409,7 @@ pub fn save_snippets(
     crate::snippets::save_snippets(&rules_dir(&app)?, &file).map_err(|e| e.to_string())
 }
 
-// ── Проекты ──
+// ── Projects ──
 
 #[tauri::command]
 pub fn list_projects(app: AppHandle) -> Result<ProjectsFile, String> {
@@ -423,7 +423,7 @@ pub fn save_project(
     state: State<'_, AppState>,
 ) -> Result<ProjectsFile, String> {
     let file = projects::upsert_project(&data_dir(&app)?, project.clone())?;
-    // если правим активный проект — обновить общую ячейку
+    // if we're editing the active project — update the shared cell
     let mut active = state.active_project.write().unwrap();
     if active.as_ref().map(|p| &p.id) == Some(&project.id) {
         *active = Some(project);
@@ -539,7 +539,7 @@ pub async fn send_request(
 
 // ── Dry-run (test_rule / test_path) ──
 
-/// Dry-run правила на захваченном flow (или последнем, совпавшем с pattern).
+/// Dry-run a rule against a captured flow (or the most recent one matching the pattern).
 #[tauri::command]
 pub fn test_rule(
     app: AppHandle,
@@ -555,7 +555,7 @@ pub fn test_rule(
         crate::projects::merged_env_object(&global, guard.as_ref())
     };
     let flow = match flow_id {
-        Some(id) => state.store.get(id).ok_or_else(|| format!("flow {id} не найден в памяти"))?,
+        Some(id) => state.store.get(id).ok_or_else(|| format!("flow {id} not found in memory"))?,
         None => state
             .store
             .all()
@@ -565,13 +565,13 @@ pub fn test_rule(
                 crate::rules::glob_match_env(&pattern, &format!("{}{}", f.url.host, f.url.path), &env)
             })
             .max_by_key(|f| f.timestamp)
-            .ok_or_else(|| format!("нет захваченного flow под паттерн «{pattern}» — сделайте запрос через прокси"))?,
+            .ok_or_else(|| format!("no captured flow matches pattern \"{pattern}\" — make a request through the proxy"))?,
     };
     let prelude = crate::rules::load_library(&rules_dir(&app)?).unwrap_or_default();
     Ok(crate::dryrun::run(&flow, &script, &phase, &prelude, env, std::time::Duration::from_secs(10)))
 }
 
-/// Счётчик совпадений пути по последнему захваченному flow под pattern.
+/// Count of path matches against the most recently captured flow under a pattern.
 #[tauri::command]
 pub fn test_path(
     state: State<'_, AppState>,

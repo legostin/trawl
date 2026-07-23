@@ -1,11 +1,11 @@
-//! JSONPath (RFC 9535) для правил: locate/validate поверх serde_json_path.
-//! Один парсер обслуживает рантайм stdlib, валидацию при сохранении,
-//! dry-run и подсказки в редакторе.
+//! JSONPath (RFC 9535) for rules: locate/validate on top of serde_json_path.
+//! One parser serves the stdlib runtime, validation on save,
+//! dry-run, and hints in the editor.
 
 use serde_json::json;
 use serde_json_path::JsonPath;
 
-/// Ведущий `$` опционален для эргономики: `items[*]` → `$.items[*]`.
+/// The leading `$` is optional for ergonomics: `items[*]` → `$.items[*]`.
 pub fn normalize(path: &str) -> String {
     let p = path.trim();
     if p.starts_with('$') {
@@ -17,23 +17,23 @@ pub fn normalize(path: &str) -> String {
     }
 }
 
-/// Локации совпадений как JSON Pointer'ы: {"locations":["/items/0/price"]} | {"error":"…"}.
+/// Match locations as JSON Pointers: {"locations":["/items/0/price"]} | {"error":"…"}.
 pub fn locate(doc_json: &str, path: &str) -> String {
     let doc: serde_json::Value = match serde_json::from_str(doc_json) {
         Ok(v) => v,
-        Err(e) => return json!({ "error": format!("тело не JSON: {e}") }).to_string(),
+        Err(e) => return json!({ "error": format!("body is not JSON: {e}") }).to_string(),
     };
     let jp = match JsonPath::parse(&normalize(path)) {
         Ok(p) => p,
-        Err(e) => return json!({ "error": format!("синтаксическая ошибка пути: {e}") }).to_string(),
+        Err(e) => return json!({ "error": format!("JSONPath syntax error: {e}") }).to_string(),
     };
     let ptrs: Vec<String> = jp.query_located(&doc).locations().map(|l| l.to_json_pointer()).collect();
     json!({ "locations": ptrs }).to_string()
 }
 
-/// None — путь валиден; Some(msg) — текст ошибки парсера.
+/// None — path is valid; Some(msg) — parser error text.
 pub fn validate(path: &str) -> Option<String> {
-    JsonPath::parse(&normalize(path)).err().map(|e| format!("синтаксическая ошибка пути: {e}"))
+    JsonPath::parse(&normalize(path)).err().map(|e| format!("JSONPath syntax error: {e}"))
 }
 
 #[cfg(test)]

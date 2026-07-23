@@ -11,7 +11,7 @@ export type Header = [name: string, value: string];
 
 export interface HttpMessage {
   headers: Header[];
-  /** serde_bytes передаёт тело как массив байт-чисел (или строку) — см. нормализацию в UI. */
+  /** serde_bytes sends the body as an array of byte numbers (or a string) — see normalization in the UI. */
   body: number[] | string;
   bodyIsText: boolean;
 }

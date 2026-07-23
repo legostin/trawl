@@ -6,18 +6,18 @@ import { extractPathLiterals, pathArgContext } from "./pathContext";
 let hintFields: FieldInfo[] = [];
 let hintPattern = "";
 
-/** Контекст подсказок: структура прошлых ответов + паттерн текущего правила. */
+/** Hint context: structure of past responses + the current rule's pattern. */
 export function setPathHintContext(fields: FieldInfo[], pattern: string) {
   hintFields = fields;
   hintPattern = pattern;
 }
 
-/** Кандидаты следующего сегмента. prefix — до последнего './[' (частичное слово отрезано). */
+/** Candidates for the next segment. prefix is up to the last './[' (partial word cut off). */
 export function segmentCandidates(
   prefix: string,
   fields: FieldInfo[],
 ): { label: string; kind: "field" | "array"; type?: string }[] {
-  // Приводим JSONPath-префикс к форме путей FieldInfo: "$.items[?…]." → "items[]"
+  // Convert a JSONPath prefix into the FieldInfo path form: "$.items[?…]." → "items[]"
   const norm = prefix
     .replace(/^\$\.?/, "")
     .replace(/\[[^\]]*\]/g, "[]")
@@ -40,7 +40,7 @@ export function segmentCandidates(
   return [...seen.entries()].map(([label, v]) => ({ label, ...v }));
 }
 
-/** Однократная регистрация completion/inlay-провайдеров для javascript. */
+/** One-time registration of completion/inlay providers for javascript. */
 export function registerPathHints(m: typeof monacoNs) {
   m.languages.registerCompletionItemProvider("javascript", {
     triggerCharacters: ["'", '"', ".", "["],
@@ -58,14 +58,14 @@ export function registerPathHints(m: typeof monacoNs) {
           sortText: c.label,
           kind: c.kind === "array" ? m.languages.CompletionItemKind.Struct : m.languages.CompletionItemKind.Field,
           insertText: c.kind === "array" ? `${c.label}[*]` : c.label,
-          detail: c.kind === "array" ? "массив" : c.type,
+          detail: c.kind === "array" ? "array" : c.type,
           range,
         })),
       };
     },
   });
 
-  // Inlay: " → N узлов" после каждого литерала-пути (по последнему совпавшему flow).
+  // Inlay: " → N nodes" after each path literal (based on the last matching flow).
   const countCache = new Map<string, { at: number; text: string | null }>();
   m.languages.registerInlayHintsProvider("javascript", {
     async provideInlayHints(model, range) {
@@ -81,7 +81,7 @@ export function registerPathHints(m: typeof monacoNs) {
           text = cached.text;
         } else {
           text = await invoke<{ nodes: number | null } | null>("test_path", { path: lit.path, pattern: hintPattern })
-            .then((r) => (r == null || r.nodes == null ? null : r.nodes === 0 ? " → 0 узлов (нет совпадений)" : ` → ${r.nodes} узлов`))
+            .then((r) => (r == null || r.nodes == null ? null : r.nodes === 0 ? " → 0 nodes (no matches)" : ` → ${r.nodes} nodes`))
             .catch(() => null);
           countCache.set(key, { at: Date.now(), text });
         }
@@ -98,14 +98,14 @@ export function registerPathHints(m: typeof monacoNs) {
   });
 }
 
-/** Debounce-валидация JSONPath-литералов; маркеры под невалидными путями. */
+/** Debounced validation of JSONPath literals; markers under invalid paths. */
 export function attachPathDiagnostics(editor: monacoNs.editor.IStandaloneCodeEditor) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const validateNow = async () => {
     const model = editor.getModel();
     if (!model) return;
-    // Прямой импорт monaco-editor (не monaco-setup) — иначе циклический импорт:
-    // monaco-setup сам импортирует pathHints ради registerPathHints.
+    // Import monaco-editor directly (not monaco-setup) — otherwise a circular import:
+    // monaco-setup itself imports pathHints for registerPathHints.
     const monaco = await import("monaco-editor");
     const lits = extractPathLiterals(model.getValue());
     const markers: monacoNs.editor.IMarkerData[] = [];

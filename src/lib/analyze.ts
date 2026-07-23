@@ -1,9 +1,9 @@
 export interface FieldInfo {
   path: string;
   type: string;
-  /** Пример значения (усечённый) из наблюдённых ответов. */
+  /** Example value (truncated) from observed responses. */
   example?: string;
-  /** Значение поля различается между ответами (динамическое). */
+  /** The field's value differs between responses (dynamic). */
   varying: boolean;
 }
 
@@ -48,7 +48,7 @@ function walk(value: unknown, prefix: string, out: Map<string, Acc>) {
   }
 }
 
-/** Собирает пути полей, типы, пример значения и признак «динамическое». */
+/** Collects field paths, types, an example value, and a "dynamic" flag. */
 export function analyzeJson(values: unknown[]): FieldInfo[] {
   const out = new Map<string, Acc>();
   for (const v of values) walk(v, "", out);
@@ -62,7 +62,7 @@ export function analyzeJson(values: unknown[]): FieldInfo[] {
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** JS-аксессор для пути: "users[].id" → data['users'][0]['id']. */
+/** JS accessor for a path: "users[].id" → data['users'][0]['id']. */
 export function accessor(path: string): string {
   const parts = path.split(".").map((seg) =>
     seg
@@ -133,7 +133,7 @@ export function fieldsToType(fields: FieldInfo[]): string {
   return emit(root);
 }
 
-/** glob-матч по строке (мирроринг серверных правил: `*`, `?`). */
+/** glob match against a string (mirrors server rules: `*`, `?`). */
 export function matchGlob(pattern: string, target: string): boolean {
   let re = "^";
   for (const ch of pattern) {

@@ -9,7 +9,7 @@ export interface EnvVar {
   value: string;
 }
 
-/** Ключи проекта, перекрывающие одноимённые глобальные переменные. */
+/** Project keys that override same-named global variables. */
 export function overriddenKeys(globalEnv: EnvVar[], projectEnv: EnvVar[]): Set<string> {
   const g = new Set(globalEnv.map((e) => e.key).filter(Boolean));
   return new Set(projectEnv.map((e) => e.key).filter((k) => k && g.has(k)));
@@ -73,7 +73,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   setActive: async (id) => {
     await invoke("set_active_project", { id });
     set({ activeId: id });
-    // смена контекста — очищаем список (новый scope захвата)
+    // context switch — clear the list (new capture scope)
     useFlows.getState().clearFlows();
   },
   upsert: async (project) => {

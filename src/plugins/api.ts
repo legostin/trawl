@@ -162,12 +162,12 @@ export interface McpToolSpec {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: (args: unknown) => unknown | Promise<unknown>;
-  /** Таймаут вызова, мс (по умолчанию 60000). */
+  /** Call timeout, ms (default 60000). */
   timeoutMs?: number;
 }
 
 export interface TrawlMcp {
-  /** Зарегистрировать MCP-тул `<pluginId>_<name>`. Только при инициализации плагина. */
+  /** Register the MCP tool `<pluginId>_<name>`. Only during plugin initialization. */
   registerTool(spec: McpToolSpec): Promise<void>;
   unregisterTool(name: string): Promise<void>;
 }

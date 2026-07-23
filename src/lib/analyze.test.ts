@@ -45,7 +45,7 @@ describe("analyzeJson", () => {
     expect(stable?.varying).toBe(false);
     const dynamic = analyzeJson([{ token: "a" }, { token: "b" }]).find((f) => f.path === "token");
     expect(dynamic?.varying).toBe(true);
-    expect(dynamic?.example).toBe("b"); // последнее значение
+    expect(dynamic?.example).toBe("b"); // last value
   });
 
   it("truncates long example values", () => {

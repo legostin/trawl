@@ -144,7 +144,7 @@ impl CaptureHandler {
         (self.app_event)(event, serde_json::Value::Object(p));
     }
 
-    /// Дополняет каждый элемент трассы именем правила.
+    /// Tags each trace entry with the rule name.
     fn tag_trace(res: &crate::scripting::ScriptResult, rule_name: &str) -> Vec<serde_json::Value> {
         res.trace
             .iter()
@@ -183,9 +183,9 @@ fn json_to_headers(v: &Value) -> Vec<(String, String)> {
     }
 }
 
-/// Собирает HeaderMap из пар, выставляя корректный content-length и убирая
-/// конфликтующие с новым телом заголовки. При `strip_encoding` также убирает
-/// content-encoding (когда тело уже распаковано — иначе клиент не декодирует).
+/// Builds a HeaderMap from pairs, setting a correct content-length and dropping
+/// headers that conflict with the new body. With `strip_encoding` also drops
+/// content-encoding (when the body has already been decoded — otherwise the client won't decode it).
 fn build_header_map(headers: &[(String, String)], body_len: usize, strip_encoding: bool) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (k, v) in headers {
@@ -244,7 +244,7 @@ fn build_mock_response(spec: &Value) -> Response<Body> {
     if let Some(h) = spec.get("headers").and_then(|h| h.as_object()) {
         for (k, v) in h {
             let lk = k.to_ascii_lowercase();
-            // тело мока/handler'а — уже готовые байты; не тащим кодировку/длину
+            // mock/handler body is already finished bytes; don't carry over encoding/length
             if matches!(lk.as_str(), "content-encoding" | "content-length" | "transfer-encoding") {
                 continue;
             }
@@ -286,24 +286,24 @@ fn build_abort_response(reason: &str) -> Response<Body> {
 }
 
 impl CaptureHandler {
-    /// Область правил: активный проект → только его правила; иначе — глобальные.
+    /// Rule scope: active project → only its rules; otherwise — global rules.
     fn active_scope(&self) -> Option<String> {
         self.active_project.read().unwrap().as_ref().map(|p| p.id.clone())
     }
 
-    /// Эффективный env (global + активный проект, проект побеждает) как JSON-объект.
+    /// Effective env (global + active project, project wins) as a JSON object.
     fn active_env(&self) -> Value {
         let global = self.global_env.read().unwrap();
         let guard = self.active_project.read().unwrap();
         merged_env_object(&global, guard.as_ref())
     }
 
-    /// Записывает изменённый скриптом env: при активном проекте — в проект
-    /// (изменённый глобальный ключ становится проектным перекрытием),
-    /// без проекта — в глобальный env.
+    /// Writes back the env as modified by the script: with an active project — into the project
+    /// (a modified global key becomes a project override),
+    /// without a project — into the global env.
     fn apply_env(&self, new_env: &Value) {
         if *new_env == self.active_env() {
-            return; // без изменений — не пишем
+            return; // no changes — nothing to write
         }
         let global = self.global_env.read().unwrap().clone();
         let mut guard = self.active_project.write().unwrap();
@@ -323,8 +323,8 @@ impl CaptureHandler {
         }
     }
 
-    /// Правило совпадает, если его паттерн матчит любой из кандидатов
-    /// (`host/path` и `host:port/path`) и оно в области активного проекта.
+    /// A rule matches if its pattern matches any of the candidates
+    /// (`host/path` and `host:port/path`) and it's within the active project's scope.
     fn matching(&self, phase: Phase, targets: &[String]) -> Vec<Rule> {
         let scope = self.active_scope();
         let env = self.active_env();
@@ -542,8 +542,8 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .map(|(_, v)| v.as_str())
 }
 
-/// Распаковывает тело по Content-Encoding для отображения. При любой ошибке
-/// возвращает исходные байты (лучше показать сырое, чем потерять данные).
+/// Decodes the body per Content-Encoding for display. On any error
+/// returns the original bytes (better to show raw data than to lose it).
 fn decode_body(raw: &[u8], encoding: Option<&str>) -> Vec<u8> {
     use std::io::Read;
     let enc = match encoding {
@@ -568,7 +568,7 @@ fn decode_body(raw: &[u8], encoding: Option<&str>) -> Vec<u8> {
         if dec.read_to_end(&mut out).is_ok() {
             return out;
         }
-        // deflate иногда без zlib-обёртки (raw DEFLATE)
+        // deflate sometimes has no zlib wrapper (raw DEFLATE)
         let mut out2 = Vec::new();
         let mut dec2 = flate2::read::DeflateDecoder::new(raw);
         if dec2.read_to_end(&mut out2).is_ok() {
@@ -584,16 +584,16 @@ impl HttpHandler for CaptureHandler {
         _ctx: &HttpContext,
         req: Request<Body>,
     ) -> RequestOrResponse {
-        // CONNECT — это установка HTTPS-туннеля, а не реальный запрос: пропускаем
-        // без захвата и без правил, иначе handler-правило (напр. */*) перехватит
-        // CONNECT и сломает весь туннель.
+        // CONNECT establishes an HTTPS tunnel, not a real request: pass it through
+        // without capturing and without rules, otherwise a handler rule (e.g. */*) would
+        // intercept CONNECT and break the whole tunnel.
         if req.method() == hudsucker::hyper::Method::CONNECT {
             return req.into();
         }
 
-        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://trawl/.
-        // Обязательно ДО фильтра активного проекта: "trawl" — не реальный хост,
-        // и уйдя в апстрим такой запрос закончится 502.
+        // Serving the CA certificate: a client with the proxy configured opens http://trawl/.
+        // Must be BEFORE the active-project filter: "trawl" isn't a real host,
+        // and sending such a request upstream would end in a 502.
         if req.uri().host() == Some("trawl") {
             let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
             let resp = Response::builder()
@@ -608,8 +608,8 @@ impl HttpHandler for CaptureHandler {
             return RequestOrResponse::Response(resp);
         }
 
-        // Активный проект: запросы к нетрекаемым хостам проксируем, но не пишем
-        // (экономия памяти) — без flow, эмита и правил.
+        // Active project: proxy requests to untracked hosts but don't record them
+        // (memory savings) — no flow, no emit, no rules.
         {
             let active = self.active_project.read().unwrap();
             if let Some(proj) = active.as_ref() {
@@ -671,7 +671,7 @@ impl HttpHandler for CaptureHandler {
         let mut edited_path: Option<String> = None;
         let mut preinserted = false;
 
-        // ── БРЕЙКПОИНТ ФАЗЫ ЗАПРОСА: срабатывает до всех правил ──
+        // ── REQUEST-PHASE BREAKPOINT: fires before all rules ──
         if self.breakpoint_matches(BpPhase::Request, &targets, &req_method) {
             let mut flow = Flow::new_request(
                 id,
@@ -768,7 +768,7 @@ impl HttpHandler for CaptureHandler {
             }
         }
 
-        // ── handler-режим: скрипт сам выполняет запрос (send) и возвращает ответ ──
+        // ── handler mode: the script performs the request itself (send) and returns a response ──
         if let Some(hrule) = self.matching_handler(&targets) {
             let input = json!({
                 "request": {
@@ -883,7 +883,7 @@ impl HttpHandler for CaptureHandler {
                     }
                 }
             }
-            // ошибка handler
+            // handler error
             flow.state = FlowState::Error;
             flow.error = Some(format!(
                 "rule \"{}\": {}",
@@ -898,7 +898,7 @@ impl HttpHandler for CaptureHandler {
             ));
         }
 
-        // ── скрипты фазы запроса (цепочка правил над, возможно, отредактированным запросом) ──
+        // ── request-phase scripts (chain of rules over the, possibly edited, request) ──
         let rules = self.matching(Phase::Request, &targets);
         let mut work_headers = req_headers.clone();
         let mut work_body = req_body_text.clone();
@@ -1127,7 +1127,7 @@ impl HttpHandler for CaptureHandler {
         let orig_headers = headers_to_vec(&parts.headers);
         let is_text = looks_textual(&orig_headers);
         let status = parts.status.as_u16();
-        // Для отображения храним распакованное тело; клиенту ниже уходят исходные байты.
+        // Store the decoded body for display; the original bytes still go out to the client below.
         let display_body = decode_body(&bytes, header_value(&orig_headers, "content-encoding"));
         let done_ms = self.started.elapsed().as_millis() as u64;
 
@@ -1136,7 +1136,7 @@ impl HttpHandler for CaptureHandler {
             None => return Response::from_parts(parts, Body::from(Full::new(Bytes::from(bytes)))),
         };
 
-        // ── скрипты фазы ответа ──
+        // ── response-phase scripts ──
         let found = self.store.all().into_iter().find(|f| f.id == id);
         let flow_method = found.as_ref().map(|f| f.method.clone()).unwrap_or_default();
         let flow_url = found.map(|f| f.url);
@@ -1385,7 +1385,7 @@ pub async fn start(
     let ca = load_or_create_ca(&ca_dir)?;
     let authority = RcgenAuthority::new(ca.key_pair, ca.ca_cert, 1_000);
 
-    // забиндиться заранее, чтобы узнать реальный порт при :0
+    // bind up front to learn the real port when using :0
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
 
@@ -1494,7 +1494,7 @@ mod tests {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(original).unwrap();
         let gz = enc.finish().unwrap();
-        assert_ne!(gz, original, "sanity: gzip-байты отличаются от исходных");
+        assert_ne!(gz, original, "sanity: gzip bytes differ from the original");
 
         let decoded = decode_body(&gz, Some("gzip"));
         assert_eq!(decoded, original);
@@ -1512,11 +1512,11 @@ mod tests {
         assert_eq!(decode_body(not_gzip, Some("gzip")), not_gzip);
     }
 
-    // Поднимает простой upstream HTTP-сервер, гоняет запрос через прокси,
-    // проверяет, что Flow собрался со статусом ответа.
+    // Spins up a simple upstream HTTP server, sends a request through the proxy,
+    // checks that a Flow was recorded with the response status.
     #[tokio::test]
     async fn captures_http_flow_through_proxy() {
-        // 1. upstream: отвечает 200 "hello"
+        // 1. upstream: responds 200 "hello"
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1532,7 +1532,7 @@ mod tests {
             }
         });
 
-        // 2. прокси
+        // 2. proxy
         let store = FlowStore::new(100);
         let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(vec![]));
         let seen2 = seen.clone();
@@ -1549,7 +1549,7 @@ mod tests {
             .unwrap();
         let bound = handle.local_addr();
 
-        // 3. запрос через прокси на upstream
+        // 3. request through the proxy to upstream
         let client = reqwest::Client::builder()
             .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
             .build()
@@ -1558,14 +1558,14 @@ mod tests {
         let body = client.get(&url).send().await.unwrap().text().await.unwrap();
         assert_eq!(body, "hello");
 
-        // 4. Flow собран
+        // 4. Flow recorded
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flows = store.all();
         assert_eq!(flows.len(), 1);
         assert_eq!(flows[0].response.as_ref().unwrap().status, 200);
-        assert!(flows[0].timings.sent.is_some(), "timings.sent должен заполниться");
-        assert!(flows[0].timings.done.is_some(), "timings.done должен заполниться");
-        assert!(flows[0].timestamp > 0, "timestamp должен заполниться");
+        assert!(flows[0].timings.sent.is_some(), "timings.sent should be filled in");
+        assert!(flows[0].timings.done.is_some(), "timings.done should be filled in");
+        assert!(flows[0].timestamp > 0, "timestamp should be filled in");
         assert!(!seen.lock().unwrap().is_empty());
 
         handle.stop();
@@ -1597,8 +1597,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // http://trawl/ должен отдавать сертификат даже когда активен проект,
-    // который этот хост не трекает (раньше запрос уходил в апстрим → 502).
+    // http://trawl/ should serve the certificate even when an active project
+    // doesn't track this host (previously the request went upstream → 502).
     #[tokio::test]
     async fn serves_ca_pem_when_active_project_excludes_trawl() {
         let store = FlowStore::new(10);
@@ -1631,7 +1631,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Локальный upstream отдаёт gzip-тело; проверяем, что в сторе оно распаковано.
+    // A local upstream returns a gzip body; check that it's decoded in the store.
     #[tokio::test]
     async fn decompresses_gzip_response_body() {
         let payload = b"{\"gzipped\": true, \"msg\": \"hello\"}";
@@ -1640,7 +1640,7 @@ mod tests {
         enc.write_all(payload).unwrap();
         let gz = enc.finish().unwrap();
 
-        // upstream: HTTP/1.1 200 с Content-Encoding: gzip и сжатым телом
+        // upstream: HTTP/1.1 200 with Content-Encoding: gzip and a compressed body
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         let gz_for_task = gz.clone();
@@ -1688,15 +1688,15 @@ mod tests {
         let flows = store.all();
         let flow = flows.iter().find(|f| f.url.path.contains("/gzip")).unwrap();
         let body = flow.response.as_ref().unwrap().body.clone();
-        assert_eq!(body, payload, "тело ответа должно быть распаковано в сторе");
+        assert_eq!(body, payload, "response body should be decoded in the store");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Сквозной HTTPS-smoke: ходит на реальный сайт через прокси, доверяя нашему CA,
-    // и проверяет, что поток расшифрован (scheme == https, статус 200).
-    // Помечен #[ignore], т.к. требует сети; запускать вручную: cargo test -- --ignored
+    // End-to-end HTTPS smoke test: hits a real site through the proxy, trusting our CA,
+    // and checks that the flow is decrypted (scheme == https, status 200).
+    // Marked #[ignore] because it needs network access; run manually: cargo test -- --ignored
     #[tokio::test]
     #[ignore = "network: hits a real https site to verify MITM decryption"]
     async fn decrypts_https_through_proxy() {
@@ -1725,7 +1725,7 @@ mod tests {
         let flows = store.all();
         assert!(
             flows.iter().any(|f| f.url.scheme == "https"),
-            "ожидали расшифрованный https-поток, потоки: {:?}",
+            "expected a decrypted https flow, flows: {:?}",
             flows.iter().map(|f| &f.url.scheme).collect::<Vec<_>>()
         );
 
@@ -1745,10 +1745,10 @@ mod tests {
         }
     }
 
-    // Правило фазы запроса добавляет заголовок; upstream его возвращает, поток отражает изменение.
+    // A request-phase rule adds a header; upstream echoes it back, the flow reflects the change.
     #[tokio::test]
     async fn request_rule_adds_header_reaches_upstream() {
-        // upstream эхо-сервер: возвращает значение X-Debug в теле
+        // upstream echo server: returns the X-Debug value in the body
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1803,26 +1803,26 @@ mod tests {
             .text()
             .await
             .unwrap();
-        assert_eq!(body, "yes", "upstream должен получить добавленный заголовок");
+        assert_eq!(body, "yes", "upstream should receive the added header");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
         assert!(flow.applied_rules.contains(&"add-debug".to_string()));
         assert!(
             flow.rule_trace.iter().all(|t| t["rule"].is_string()),
-            "trace элементы тегированы именем правила: {:?}", flow.rule_trace
+            "trace entries tagged with the rule name: {:?}", flow.rule_trace
         );
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Правило-mock короткозамыкает запрос без обращения к upstream.
+    // A mock rule short-circuits the request without hitting upstream.
     #[tokio::test]
     async fn request_rule_mock_short_circuits() {
         let store = FlowStore::new(10);
         let emit: EmitFn = Arc::new(|_e, _f| {});
-        // upstream, которого нет: 127.0.0.1:1 — если бы не mock, был бы отказ
+        // an upstream that doesn't exist: 127.0.0.1:1 — without the mock this would fail
         let rules = vec![rule(
             "mocker",
             "127.0.0.1:1/*",
@@ -2648,7 +2648,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Handler-правило само выполняет запрос через send() и преобразует ответ.
+    // A handler rule performs the request itself via send() and transforms the response.
     #[tokio::test]
     async fn handler_rule_sends_and_transforms_response() {
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2694,7 +2694,7 @@ mod tests {
             .text()
             .await
             .unwrap();
-        assert_eq!(body, "HELLO", "handler должен вернуть преобразованный ответ");
+        assert_eq!(body, "HELLO", "handler should return the transformed response");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
@@ -2704,7 +2704,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Диагностика: handler send(request) должен сохранять путь, query и заголовки.
+    // Diagnostic: handler send(request) should preserve path, query, and headers.
     #[tokio::test]
     async fn handler_send_preserves_path_query_headers() {
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2716,7 +2716,7 @@ mod tests {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = vec![0u8; 4096];
                     let n = sock.read(&mut buf).await.unwrap_or(0);
-                    // эхо: возвращаем сырой запрос как тело
+                    // echo: return the raw request as the body
                     let echo = String::from_utf8_lossy(&buf[..n]).to_string();
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
@@ -2757,10 +2757,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(echoed.contains("/a/b?x=1&y=2"), "путь+query потеряны: {echoed}");
+        assert!(echoed.contains("/a/b?x=1&y=2"), "path+query lost: {echoed}");
         assert!(
             echoed.to_lowercase().contains("x-custom: hello"),
-            "заголовок потерян: {echoed}"
+            "header lost: {echoed}"
         );
 
         handle.stop();
@@ -2802,7 +2802,7 @@ mod tests {
         }
     }
 
-    // Активный проект: запрос к нетрекаемому хосту проксируется, но не сохраняется.
+    // Active project: a request to an untracked host is proxied but not stored.
     #[tokio::test]
     async fn untracked_host_not_stored() {
         let upstream_addr = echo_upstream().await;
@@ -2826,16 +2826,16 @@ mod tests {
             .await
             .unwrap()
             .status();
-        assert_eq!(ok, 200, "нетрекаемый хост всё равно проксируется");
+        assert_eq!(ok, 200, "an untracked host is still proxied");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(store.all().len(), 0, "нетрекаемый хост не должен сохраняться");
+        assert_eq!(store.all().len(), 0, "an untracked host should not be stored");
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Активный проект: трекаемый хост пишется, применяются только правила проекта.
+    // Active project: a tracked host is stored, only the project's rules apply.
     #[tokio::test]
     async fn tracked_host_uses_only_project_rules() {
         let upstream_addr = echo_upstream().await;
@@ -2866,8 +2866,8 @@ mod tests {
             .await
             .unwrap();
         let low = echoed.to_lowercase();
-        assert!(low.contains("x-proj"), "проектное правило должно примениться: {echoed}");
-        assert!(!low.contains("x-global"), "глобальное правило не должно применяться при активном проекте");
+        assert!(low.contains("x-proj"), "the project rule should apply: {echoed}");
+        assert!(!low.contains("x-global"), "the global rule should not apply while a project is active");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
@@ -2878,8 +2878,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
-    // Регрессия: gzip-ответ должен дойти до клиента декодируемым (не оставляем
-    // content-encoding при распакованном теле).
+    // Regression: a gzip response should reach the client decodable (we don't leave
+    // content-encoding in place when the body has been decoded).
     #[tokio::test]
     async fn gzip_response_reaches_client_decodable() {
         let payload = b"{\"gzipped\": true, \"msg\": \"hello world\"}";
@@ -2911,15 +2911,15 @@ mod tests {
 
         let store = FlowStore::new(10);
         let emit: EmitFn = Arc::new(|_e, _f| {});
-        let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // без правил — обычный путь
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]); // no rules — the ordinary path
         let ca_dir = temp_ca();
         let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, Arc::new(RwLock::new(vec![])), ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
         let bound = handle.local_addr();
 
-        // клиент с gzip auto-decode — если прокси оставит content-encoding при
-        // распакованном теле, декодирование сломается.
+        // a client with gzip auto-decode — if the proxy leaves content-encoding in place
+        // for a decoded body, decoding will break.
         let client = reqwest::Client::builder()
             .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
             .build()

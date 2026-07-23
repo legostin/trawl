@@ -38,8 +38,8 @@ function convert(b: BuildBranch): TreeBranch {
 }
 
 /**
- * Строит дерево: host → сегменты пути → лист-запрос.
- * Каждый поток становится листом на терминальном сегменте своего пути.
+ * Builds a tree: host → path segments → leaf request.
+ * Each flow becomes a leaf on the terminal segment of its path.
  */
 export function buildDomainTree(flows: Flow[]): TreeBranch[] {
   const hosts = new Map<string, BuildBranch>();

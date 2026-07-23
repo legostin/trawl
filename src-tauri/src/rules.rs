@@ -120,7 +120,7 @@ pub fn glob_to_regex(glob: &str) -> Result<Regex> {
 }
 
 const DEFAULT_LIBRARY: &str =
-    "// Библиотека переиспользуемых функций. Доступна во всех правилах.\n// Пример:\n// function withAuth(req, token) { req.headers['Authorization'] = 'Bearer ' + token; }\n";
+    "// Library of reusable functions. Available in all rules.\n// Example:\n// function withAuth(req, token) { req.headers['Authorization'] = 'Bearer ' + token; }\n";
 
 pub fn load_rules(dir: &Path) -> Result<Vec<Rule>> {
     let path = dir.join("rules.json");
@@ -297,7 +297,7 @@ mod tests {
     fn library_defaults_then_persists() {
         let tmp = std::env::temp_dir().join(format!("httpcatch-lib-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        assert!(load_library(&tmp).unwrap().contains("Библиотека"));
+        assert!(load_library(&tmp).unwrap().contains("Library"));
         save_library(&tmp, "function f(){}").unwrap();
         assert_eq!(load_library(&tmp).unwrap(), "function f(){}");
         std::fs::remove_dir_all(&tmp).unwrap();

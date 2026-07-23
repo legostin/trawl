@@ -17,7 +17,7 @@ export function VariablesPanel() {
 
   const [scope, setScope] = useState<string>(GLOBAL);
   const project = projects.find((p) => p.id === scope) ?? null;
-  // выбранный проект удалили — откат на Global
+  // the selected project was deleted — fall back to Global
   useEffect(() => {
     if (scope !== GLOBAL && !project) setScope(GLOBAL);
   }, [scope, project]);
@@ -101,7 +101,7 @@ function ScopeButton({
   );
 }
 
-/** Черновик env области: типизация буферится, коммит — на blur и при +/− строки. */
+/** Env scope draft: typing is buffered, commit happens on blur and on row +/−. */
 function ScopeEnv({
   env,
   hint,
@@ -117,7 +117,7 @@ function ScopeEnv({
   useEffect(() => setDraft(env), [env]);
   const change = (next: EnvVar[]) => {
     setDraft(next);
-    if (next.length !== draft.length) onCommit(next); // добавление/удаление строки
+    if (next.length !== draft.length) onCommit(next); // row added/removed
   };
   const commitIfDirty = () => {
     if (JSON.stringify(draft) !== JSON.stringify(env)) onCommit(draft);

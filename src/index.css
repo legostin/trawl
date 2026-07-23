@@ -25,7 +25,7 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.55 0.16 250);
 
-  /* Семантические цвета для трафика (методы/статусы) */
+  /* Semantic colors for traffic (methods/statuses) */
   --http-green: oklch(0.62 0.17 150);
   --http-blue: oklch(0.6 0.16 250);
   --http-amber: oklch(0.7 0.16 75);
