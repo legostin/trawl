@@ -126,23 +126,10 @@ fn eval_job(c: &Ctx<'_>, job: &ScriptJob) -> ScriptResult {
     }
 }
 
-/// Built-in helper functions injected before every rule (both phases). Kept in
-/// sync with the declarations shown for autocomplete in `src/scripting/stdlib.ts`.
-const STD_LIB: &str = r#"
-function __lc(o){var r={};for(var k in o){r[k.toLowerCase()]=k;}return r;}
-function header(msg,name){if(!msg||!msg.headers)return undefined;var k=__lc(msg.headers)[String(name).toLowerCase()];return k?msg.headers[k]:undefined;}
-function hasHeader(msg,name){return header(msg,name)!==undefined;}
-function setHeader(msg,name,value){if(!msg.headers)msg.headers={};var k=__lc(msg.headers)[String(name).toLowerCase()];if(k)delete msg.headers[k];msg.headers[name]=String(value);}
-function removeHeader(msg,name){if(!msg||!msg.headers)return;var k=__lc(msg.headers)[String(name).toLowerCase()];if(k)delete msg.headers[k];}
-function jsonBody(msg){try{return JSON.parse((msg&&msg.body)||'null');}catch(e){return null;}}
-function setJsonBody(msg,obj){msg.body=JSON.stringify(obj);if(!hasHeader(msg,'content-type'))setHeader(msg,'content-type','application/json');}
-function bearer(token){setHeader(request,'authorization','Bearer '+token);}
-function queryParam(req,name){var q=(req.path||'').split('?')[1]||'';var parts=q.split('&');for(var i=0;i<parts.length;i++){var kv=parts[i].split('=');if(decodeURIComponent(kv[0])===name)return decodeURIComponent((kv[1]||'').replace(/\+/g,' '));}return undefined;}
-function sendJsonRequest(req){var r=send(req);try{r.data=JSON.parse(r.body||'null');}catch(e){r.data=null;}return r;}
-function sendWithRetry(req,opts){opts=opts||{};var max=opts.retries||3;var delay=opts.delay||1000;var r=send(req);var n=0;while(n<max&&(r.status===429||r.status>=500)){sleep(delay);r=send(req);n++;}return r;}
-function secret(name){var v=__native_secret(String(name));return (v===undefined||v===null)?null:v;}
-function notify(text,opts){opts=opts||{};ctx.__notifications.push({text:String(text),channel:opts.channel,title:opts.title});}
-"#;
+/// Built-in helper functions injected before every rule (both phases). Source:
+/// src-tauri/js/stdlib.js. Kept in sync with the declarations shown for
+/// autocomplete in `src/scripting/stdlib.ts`.
+const STD_LIB: &str = include_str!("../js/stdlib.js");
 
 fn build_source(prelude: &str, script: &str) -> String {
     let prelude = format!("{STD_LIB}\n{prelude}");
