@@ -26,6 +26,7 @@ function removeHeader(msg, name) {
 function jsonBody(msg) { try { return JSON.parse((msg && msg.body) || 'null'); } catch (e) { return null; } }
 function setJsonBody(msg, obj) {
   msg.body = JSON.stringify(obj);
+  if (msg.__docCache !== undefined) { try { delete msg.__docCache; } catch (e) { msg.__docCache = undefined; } }
   if (!hasHeader(msg, 'content-type')) setHeader(msg, 'content-type', 'application/json');
 }
 
@@ -163,17 +164,17 @@ function patch(target, path, valueOrFn) { return __applyPatch('patch', target, p
 function tryPatch(target, path, valueOrFn) { return __applyPatch('tryPatch', target, path, valueOrFn, 0); }
 
 // Все совпавшие значения массивом.
-function pick(target, path) {
+function pick(target, path, __op) {
   var d = __doc(target);
   var locs = __locate(d.doc, path);
   var out = [];
   for (var i = 0; i < locs.length; i++) out.push(__getAt(d.doc, locs[i]));
-  __traceOp('pick', path, locs.length);
+  __traceOp(__op || 'pick', path, locs.length);
   return out;
 }
 // Первое совпавшее значение или null.
 function pickOne(target, path) {
-  var r = pick(target, path);
+  var r = pick(target, path, 'pickOne');
   return r.length ? r[0] : null;
 }
 // Удалить совпавшие узлы. Обратный порядок — чтобы splice не сдвигал ещё не обработанные индексы.

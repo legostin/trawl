@@ -1192,6 +1192,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_json_body_invalidates_doc_cache() {
+        let res = run(
+            "pickOne(request, 'a'); setJsonBody(request, { a: 2, b: 9 }); patch(request, 'a', 5);",
+            r#"{"request":{"headers":{},"body":"{\"a\":1}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value = serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["a"], 5, "patch applied on top of the manual setJsonBody, not a stale cache");
+        assert_eq!(body["b"], 9, "manual setJsonBody's sibling key survived (not clobbered by stale cache)");
+    }
+
+    #[tokio::test]
     async fn handler_with_send_replays_canned_response() {
         let canned = r#"{"status":200,"headers":{"content-type":"application/json"},"body":"{\"items\":[{\"x\":1}]}"}"#;
         let canned = canned.to_string();
