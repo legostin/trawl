@@ -217,6 +217,7 @@ pub fn list_rules(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Rule
 
 #[tauri::command]
 pub fn save_rule(app: AppHandle, rule: Rule, state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
+    crate::scripting::validate_rule_script(&rule.script).map_err(|e| format!("правило не сохранено: {e}"))?;
     let rules = rules::upsert_rule(&rules_dir(&app)?, rule)?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
@@ -227,6 +228,12 @@ pub fn delete_rule(app: AppHandle, id: String, state: State<'_, AppState>) -> Re
     let rules = rules::remove_rule(&rules_dir(&app)?, &id)?;
     *state.rules.write().unwrap() = rules.clone();
     Ok(rules)
+}
+
+/// None — путь валиден; Some(текст ошибки) — нет. Для live-валидации в редакторе.
+#[tauri::command]
+pub fn validate_jsonpath(path: String) -> Option<String> {
+    crate::jsonpath::validate(&path)
 }
 
 // ── Брейкпоинты ──

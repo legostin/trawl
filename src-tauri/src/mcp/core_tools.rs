@@ -422,6 +422,8 @@ fn tool_save_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
         raw["enabled"] = json!(true);
     }
     let rule: crate::rules::Rule = serde_json::from_value(raw).map_err(|e| format!("bad rule: {e}"))?;
+    crate::scripting::validate_rule_script(&rule.script)
+        .map_err(|e| format!("правило не сохранено: {e}"))?;
     let rules = crate::rules::upsert_rule(&deps.rules_dir, rule)?;
     *deps.state.rules.write().unwrap() = rules.clone();
     Ok(json!({ "rules": rules }))
