@@ -89,9 +89,9 @@ pub fn secret_delete(app: AppHandle, name: String) -> Result<(), String> {
     delete(&data_dir(&app)?, &name).map_err(|e| e.to_string())
 }
 
+/// In-memory Keychain mock shared by secrets and plugins tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub mod testutil {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use keyring::credential::{CredentialApi, CredentialBuilderApi};
@@ -182,8 +182,9 @@ mod tests {
         }
     }
 
-    /// Set up the test credential builder with a shared in-memory store.
-    fn mock_store() {
+    /// Set up the test credential builder with a shared in-memory store
+    /// (idempotent).
+    pub fn mock_store() {
         use std::sync::Once;
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
@@ -192,6 +193,12 @@ mod tests {
             keyring::set_default_credential_builder(Box::new(builder));
         });
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::testutil::mock_store;
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("trawl-secrets-{tag}-{}", std::process::id()));
