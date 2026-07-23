@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
+import { requestKeychainConsent } from "@/keychainConsent";
 import { Input } from "./ui/input";
 import { deleteSecret, listSecrets, setSecret } from "@/secrets";
 
@@ -24,6 +25,7 @@ export function SecretsSection() {
   const add = async () => {
     const n = name.trim();
     if (!n || !value.trim()) return;
+    if (!(await requestKeychainConsent())) return;
     try {
       await setSecret(n, value);
       setName("");

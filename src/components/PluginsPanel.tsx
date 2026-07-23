@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { requestKeychainConsent } from "@/keychainConsent";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AlertTriangle, ArrowUpCircle, KeyRound, Package, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { usePlugins, fetchCatalog, catalogInstallRepo, type CatalogEntry } from "@/plugins";
@@ -102,6 +103,10 @@ export function PluginsPanel() {
     setBusy(true);
     try {
       if (ghost && token.trim()) {
+        if (!(await requestKeychainConsent())) {
+          setBusy(false);
+          return;
+        }
         await invoke("git_host_token_set", { host: ghost, token: token.trim() });
         setToken("");
       }
