@@ -94,6 +94,11 @@ pub fn spawn_engine(timeout: Duration, secrets: SecretFn) -> ScriptClient {
                 })
                 .expect("bind secret fn");
                 c.globals().set("__native_secret", f).expect("set secret fn");
+                let jp = Function::new(c.clone(), |doc: String, path: String| -> String {
+                    crate::jsonpath::locate(&doc, &path)
+                })
+                .expect("bind jsonpath fn");
+                c.globals().set("__native_jsonpath_locate", jp).expect("set jsonpath fn");
             });
 
             while let Some(job) = rx.blocking_recv() {
@@ -316,6 +321,13 @@ pub fn execute_handler(
             Err(e) => return ScriptResult::error(format!("bind secret: {e}")),
         };
         let _ = g.set("__native_secret", secret_fn);
+        let jp_fn = match Function::new(c.clone(), |doc: String, path: String| -> String {
+            crate::jsonpath::locate(&doc, &path)
+        }) {
+            Ok(f) => f,
+            Err(e) => return ScriptResult::error(format!("bind jsonpath: {e}")),
+        };
+        let _ = g.set("__native_jsonpath_locate", jp_fn);
 
         let src = build_handler_source(prelude, script);
         match c.eval::<String, _>(src) {
@@ -554,5 +566,131 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(res.action, "error");
+    }
+
+    #[tokio::test]
+    async fn patch_sets_value_in_all_array_elements() {
+        let res = run(
+            "patch(request, 'items[*].price', 0);",
+            r#"{"request":{"headers":{},"body":"{\"items\":[{\"price\":1},{\"price\":2}]}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["items"][0]["price"], 0);
+        assert_eq!(body["items"][1]["price"], 0);
+    }
+
+    #[tokio::test]
+    async fn patch_applies_modifier_function() {
+        let res = run(
+            "patch(request, 'items[*].price', function(p) { return p * 2; });",
+            r#"{"request":{"headers":{},"body":"{\"items\":[{\"price\":10},{\"price\":20}]}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["items"][0]["price"], 20);
+        assert_eq!(body["items"][1]["price"], 40);
+    }
+
+    #[tokio::test]
+    async fn patch_zero_matches_is_error_with_shape() {
+        let res = run(
+            "patch(request, 'nope[*].x', 1);",
+            r#"{"request":{"headers":{},"body":"{\"items\":[1,2],\"total\":2}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "error");
+        let msg = res.error.unwrap();
+        assert!(msg.contains("0 узлов"), "msg: {msg}");
+        assert!(msg.contains("items[2]"), "msg должен содержать структуру тела: {msg}");
+    }
+
+    #[tokio::test]
+    async fn try_patch_zero_matches_is_ok() {
+        let res = run(
+            "request.__n = tryPatch(request, 'nope', 1);",
+            r#"{"request":{"headers":{},"body":"{\"a\":1}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.request.unwrap()["__n"], 0);
+    }
+
+    #[tokio::test]
+    async fn patch_works_on_plain_object_and_filter() {
+        let res = run(
+            "var doc = { items: [ { t: 'a', p: 1 }, { t: 'b', p: 2 } ] };\
+             patch(doc, \"items[?@.t=='b'].p\", 99); request.__p = doc.items[1].p;",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.request.unwrap()["__p"], 99);
+    }
+
+    #[tokio::test]
+    async fn patch_at_root_replaces_whole_body() {
+        let res = run(
+            "patch(request, '$', { replaced: true });",
+            r#"{"request":{"headers":{},"body":"{\"a\":1}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["replaced"], true);
+    }
+
+    #[tokio::test]
+    async fn patch_handles_unicode_keys_and_deep_scan() {
+        let res = run(
+            "patch(request, \"$..['цена']\", 5);",
+            r#"{"request":{"headers":{},"body":"{\"товар\":{\"цена\":1},\"вложено\":{\"товар\":{\"цена\":2}}}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["товар"]["цена"], 5);
+        assert_eq!(body["вложено"]["товар"]["цена"], 5);
+    }
+
+    #[tokio::test]
+    async fn handler_patch_on_send_result() {
+        // __native_jsonpath_locate должен быть и в handler-движке; send мокается нативно нельзя,
+        // поэтому патчим синтетический ответ.
+        let res = tokio::task::spawn_blocking(|| {
+            execute_handler(
+                "",
+                "var r = { status: 200, headers: {}, body: JSON.stringify({ items: [{ x: 1 }] }) };\
+                 patch(r, 'items[*].x', 7); return r;",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.response.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["items"][0]["x"], 7);
+    }
+
+    #[tokio::test]
+    async fn patch_at_root_on_plain_object_replaces_in_place() {
+        let res = run(
+            "var doc = { a: 1 }; patch(doc, '$', { b: 2 }); request.__b = doc.b; request.__a = doc.a;",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["__b"], 2);
+        assert!(req["__a"].is_null());
     }
 }
