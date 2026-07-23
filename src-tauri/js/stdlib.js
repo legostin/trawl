@@ -161,3 +161,59 @@ function __applyPatch(name, target, path, valueOrFn, minMatches) {
 function patch(target, path, valueOrFn) { return __applyPatch('patch', target, path, valueOrFn, 1); }
 // То же, но отсутствие совпадений — не ошибка.
 function tryPatch(target, path, valueOrFn) { return __applyPatch('tryPatch', target, path, valueOrFn, 0); }
+
+// Все совпавшие значения массивом.
+function pick(target, path) {
+  var d = __doc(target);
+  var locs = __locate(d.doc, path);
+  var out = [];
+  for (var i = 0; i < locs.length; i++) out.push(__getAt(d.doc, locs[i]));
+  __traceOp('pick', path, locs.length);
+  return out;
+}
+// Первое совпавшее значение или null.
+function pickOne(target, path) {
+  var r = pick(target, path);
+  return r.length ? r[0] : null;
+}
+// Удалить совпавшие узлы. Обратный порядок — чтобы splice не сдвигал ещё не обработанные индексы.
+function removeAt(target, path) {
+  var d = __doc(target);
+  var locs = __locate(d.doc, path);
+  for (var i = locs.length - 1; i >= 0; i--) {
+    var loc = locs[i];
+    if (!loc.length) continue; // корень не удаляем
+    var parent = __parentAt(d.doc, loc);
+    var key = loc[loc.length - 1];
+    if (Array.isArray(parent)) parent.splice(Number(key), 1);
+    else delete parent[key];
+  }
+  __syncDoc(d);
+  __traceOp('removeAt', path, locs.length);
+  return locs.length;
+}
+function __deepMerge(dst, src) {
+  for (var k in src) {
+    var s = src[k];
+    if (s && typeof s === 'object' && !Array.isArray(s) &&
+        dst[k] && typeof dst[k] === 'object' && !Array.isArray(dst[k])) {
+      __deepMerge(dst[k], s);
+    } else {
+      dst[k] = s;
+    }
+  }
+  return dst;
+}
+// Deep-merge объекта в каждый совпавший узел. 0 узлов → ошибка.
+function mergeAt(target, path, obj) {
+  var d = __doc(target);
+  var locs = __locate(d.doc, path);
+  if (!locs.length) throw new Error('mergeAt("' + path + '"): 0 узлов. Тело: ' + __shape(d.doc));
+  for (var i = 0; i < locs.length; i++) {
+    var n = __getAt(d.doc, locs[i]);
+    if (n && typeof n === 'object') __deepMerge(n, obj);
+  }
+  __syncDoc(d);
+  __traceOp('mergeAt', path, locs.length);
+  return locs.length;
+}
