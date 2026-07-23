@@ -574,6 +574,11 @@ pub fn git_host_token_get(app: AppHandle, host: String) -> Result<Option<String>
 }
 
 #[tauri::command]
+pub fn git_hosts_list(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(list_git_hosts(&data_dir(&app)?))
+}
+
+#[tauri::command]
 pub fn plugin_storage_get(app: AppHandle, key: String) -> Result<Option<String>, String> {
     let path = plugin_data_dir(&app)?.join(format!("{}.json", safe_key(&key)));
     if !path.exists() {

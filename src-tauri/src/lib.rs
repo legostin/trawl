@@ -91,6 +91,7 @@ pub fn run() {
             plugins::git_host_token_set,
             plugins::git_host_token_has,
             plugins::git_host_token_get,
+            plugins::git_hosts_list,
             secrets::secrets_list,
             secrets::secret_get,
             secrets::secret_set,
