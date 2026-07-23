@@ -1,4 +1,4 @@
-import { FolderCog, Moon, Play, Search, Square, Sun, Trash2 } from "lucide-react";
+import { FolderCog, Moon, Play, Search, Square, Sun, Trash2, Variable } from "lucide-react";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { useLayout } from "../layout";
@@ -25,6 +25,7 @@ export function TopBar() {
   const activeId = useProjects((s) => s.activeId);
   const setActive = useProjects((s) => s.setActive);
   const openEditor = useProjects((s) => s.openEditor);
+  const openVariables = useProjects((s) => s.openVariables);
   const mode = useLayout((s) => s.mode);
   const { theme, toggle } = useTheme();
   const isTraffic = mode === "traffic";
@@ -78,6 +79,9 @@ export function TopBar() {
           </Select>
           <Button variant="ghost" size="iconSm" title="Projects" onClick={openEditor}>
             <FolderCog />
+          </Button>
+          <Button variant="ghost" size="iconSm" title="Variables" onClick={openVariables}>
+            <Variable />
           </Button>
         </div>
         {isTraffic && (
