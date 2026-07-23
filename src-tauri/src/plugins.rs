@@ -341,17 +341,35 @@ pub fn save_git_host_token(data_dir: &Path, host: &str, token: &str) -> Result<(
     Ok(())
 }
 
+/// Fetch a plugin manifest. Tries WITHOUT a token first — public repos succeed
+/// via the raw URL, so no Keychain access happens for them. Only if the
+/// unauthenticated fetch fails do we read the host token (which touches the
+/// macOS Keychain) and retry against the authenticated API. This keeps the
+/// startup update-check from prompting for Keychain access on public plugins.
 fn fetch_manifest_blocking(
     host: &str,
     repo: &str,
     git_ref: &str,
-    token: Option<&str>,
+    token_provider: impl FnOnce() -> Option<String>,
 ) -> Result<PluginManifest, String> {
-    let text = http_get_text(
-        &content_url(host, repo, git_ref, "trawl-plugin.json", token.is_some()),
-        token,
+    let text = match http_get_text(
+        &content_url(host, repo, git_ref, "trawl-plugin.json", false),
+        None,
         true,
-    )?;
+    ) {
+        Ok(text) => text,
+        // Unauthenticated fetch failed — read the token (Keychain) and retry
+        // against the authenticated API, if a token is actually available.
+        Err(unauth_err) => match token_provider() {
+            Some(token) => http_get_text(
+                &content_url(host, repo, git_ref, "trawl-plugin.json", true),
+                Some(&token),
+                true,
+            )
+            .map_err(|auth_err| format!("{auth_err} (also failed unauthenticated: {unauth_err})"))?,
+            None => return Err(unauth_err),
+        },
+    };
     serde_json::from_str::<PluginManifest>(&text).map_err(|e| format!("invalid manifest: {e}"))
 }
 
@@ -401,9 +419,10 @@ pub async fn fetch_plugin_manifest(
 ) -> Result<PluginManifest, String> {
     let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
     let host = effective_host(parsed_host, host);
-    let token = host_token(&data_dir(&app)?, &host);
+    let data = data_dir(&app)?;
     tokio::task::spawn_blocking(move || {
-        fetch_manifest_blocking(&host, &repo, &git_ref, token.as_deref())
+        // The token is read lazily (Keychain) only if the public fetch fails.
+        fetch_manifest_blocking(&host, &repo, &git_ref, || host_token(&data, &host))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -425,8 +444,10 @@ fn install_tree(
     if visited.len() > 8 {
         return Err("dependency chain too deep".into());
     }
+    // Explicit install (user-initiated): read the token once; needed for both the
+    // manifest and the bundle of a private repo.
     let token = host_token(data, host);
-    let manifest = fetch_manifest_blocking(host, repo, git_ref, token.as_deref())?;
+    let manifest = fetch_manifest_blocking(host, repo, git_ref, || token.clone())?;
     if manifest.id.trim().is_empty() {
         return Err("manifest is missing an id".into());
     }
