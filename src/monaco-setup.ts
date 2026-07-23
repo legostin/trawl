@@ -4,6 +4,7 @@ import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker"
 import { loader } from "@monaco-editor/react";
 import { API_DTS } from "./scripting/apiTypes";
 import { STD_DTS } from "./scripting/stdlib";
+import { registerPathHints } from "./scripting/pathHints";
 
 // Оффлайн-воркеры (Tauri без CDN).
 (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
@@ -55,6 +56,8 @@ export function setResponseDataType(typeBody: string) {
 
 // Default until a rule is selected.
 setResponseDataType("{ [key: string]: any }");
+
+registerPathHints(monaco);
 
 let payloadDisposable: { dispose: () => void } | null = null;
 
