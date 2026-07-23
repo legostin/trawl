@@ -97,7 +97,7 @@ pub fn core_tools() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "save_rule",
-            description: "Create or update a rule. Omit rule.id to create (id is generated). phase: request | response | both | handler. Script API: call get_scripting_reference first. Fails if an enabled rule with the same pattern+phase exists.",
+            description: "Create or update a rule. Omit rule.id to create (id is generated). phase: request | response | both | handler. Script API: call get_scripting_reference first. Fails if an enabled rule with the same pattern+phase exists. Script is validated (JS syntax + JSONPath literals) before saving; use test_rule for a dry-run.",
             schema: obj(
                 json!({
                     "rule": {
@@ -416,6 +416,8 @@ fn tool_aggregate_flows(deps: &Deps, args: &Value) -> Result<Value, String> {
 
 const SCRIPT_API_DTS: &str = include_str!("../../../src/scripting/apiTypes.ts");
 const SCRIPT_STDLIB: &str = include_str!("../../../src/scripting/stdlib.ts");
+const SCRIPT_DOCS_MANIFEST: &str = include_str!("../../../src/scripting/stdlib-docs.ts");
+const SCRIPT_COOKBOOK: &str = include_str!("../../../docs/scripting-cookbook.md");
 
 fn tool_list_rules(deps: &Deps, args: &Value) -> Result<Value, String> {
     let rules = crate::rules::load_rules(&deps.rules_dir).map_err(|e| e.to_string())?;
@@ -481,7 +483,10 @@ fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
     Ok(json!({
         "apiTypes": SCRIPT_API_DTS,
         "stdlib": SCRIPT_STDLIB,
+        "docsManifest": SCRIPT_DOCS_MANIFEST,
+        "cookbook": SCRIPT_COOKBOOK,
         "librarySource": library,
+        "commonMistakes": "send() не имеет .data (только sendJsonRequest). Мутация распарсенного объекта не меняет body — нужен setJsonBody (patch/removeAt/mergeAt делают это сами). handler обязан return response. patch с 0 узлов — ошибка, для опциональных полей tryPatch. delay() — только handler-фаза.",
     }))
 }
 
