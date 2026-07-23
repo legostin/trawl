@@ -51,13 +51,7 @@ impl Project {
 
     /// env как JSON-объект для инъекции в скрипт (`env.KEY`).
     pub fn env_object(&self) -> serde_json::Value {
-        let mut m = serde_json::Map::new();
-        for e in &self.env {
-            if !e.key.is_empty() {
-                m.insert(e.key.clone(), serde_json::Value::String(e.value.clone()));
-            }
-        }
-        serde_json::Value::Object(m)
+        env_list_object(&self.env)
     }
 }
 
@@ -78,6 +72,40 @@ pub fn env_from_object(v: &serde_json::Value) -> Vec<EnvVar> {
     }
 }
 
+/// env-список как JSON-объект (пустые ключи пропускаются).
+pub fn env_list_object(env: &[EnvVar]) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    for e in env {
+        if !e.key.is_empty() {
+            m.insert(e.key.clone(), serde_json::Value::String(e.value.clone()));
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Эффективный env: global, поверх — env проекта (при совпадении ключа побеждает проект).
+pub fn merged_env_object(global: &[EnvVar], project: Option<&Project>) -> serde_json::Value {
+    let mut m = match env_list_object(global) {
+        serde_json::Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(p) = project {
+        if let serde_json::Value::Object(pm) = p.env_object() {
+            for (k, v) in pm {
+                m.insert(k, v);
+            }
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Обновляет глобальный env на диске.
+pub fn update_global_env(dir: &Path, env: Vec<EnvVar>) -> Result<()> {
+    let mut file = load_projects(dir)?;
+    file.global_env = env;
+    save_projects(dir, &file)
+}
+
 /// Обновляет env указанного проекта на диске.
 pub fn update_project_env(dir: &Path, project_id: &str, env: Vec<EnvVar>) -> Result<()> {
     let mut file = load_projects(dir)?;
@@ -93,6 +121,9 @@ pub fn update_project_env(dir: &Path, project_id: &str, env: Vec<EnvVar>) -> Res
 pub struct ProjectsFile {
     pub projects: Vec<Project>,
     pub active_id: Option<String>,
+    /// Глобальные переменные (вне проектов); проектные перекрывают их при merge.
+    #[serde(default)]
+    pub global_env: Vec<EnvVar>,
 }
 
 pub fn load_projects(dir: &Path) -> Result<ProjectsFile> {
@@ -156,6 +187,37 @@ mod tests {
     }
 
     #[test]
+    fn merged_env_project_wins() {
+        let global = vec![
+            EnvVar { key: "HOST".into(), value: "global.example.com".into() },
+            EnvVar { key: "TOKEN".into(), value: "g-token".into() },
+        ];
+        let mut p = proj(&[], &[]);
+        p.env = vec![EnvVar { key: "TOKEN".into(), value: "p-token".into() }];
+        let m = merged_env_object(&global, Some(&p));
+        assert_eq!(m["HOST"], "global.example.com", "глобальный ключ виден");
+        assert_eq!(m["TOKEN"], "p-token", "проект побеждает при совпадении");
+        let m = merged_env_object(&global, None);
+        assert_eq!(m["TOKEN"], "g-token", "без проекта — только глобальные");
+    }
+
+    #[test]
+    fn projects_file_without_global_env_loads() {
+        let json = r#"{ "projects": [], "activeId": null }"#;
+        let f: ProjectsFile = serde_json::from_str(json).unwrap();
+        assert!(f.global_env.is_empty(), "старый файл без globalEnv читается");
+    }
+
+    #[test]
+    fn update_global_env_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        update_global_env(dir.path(), vec![EnvVar { key: "G".into(), value: "1".into() }]).unwrap();
+        let back = load_projects(dir.path()).unwrap();
+        assert_eq!(back.global_env[0].key, "G");
+        assert_eq!(back.global_env[0].value, "1");
+    }
+
+    #[test]
     fn env_object_and_back() {
         let mut p = proj(&[], &[]);
         p.env = vec![
@@ -174,7 +236,7 @@ mod tests {
     fn update_env_persists() {
         let tmp = std::env::temp_dir().join(format!("httpcatch-env-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        let file = ProjectsFile { projects: vec![proj(&["x"], &[])], active_id: Some("p1".into()) };
+        let file = ProjectsFile { projects: vec![proj(&["x"], &[])], active_id: Some("p1".into()), global_env: vec![] };
         save_projects(&tmp, &file).unwrap();
         update_project_env(&tmp, "p1", vec![EnvVar { key: "K".into(), value: "V".into() }]).unwrap();
         let back = load_projects(&tmp).unwrap();
@@ -219,6 +281,7 @@ mod tests {
         let file = ProjectsFile {
             projects: vec![proj(&["example.com"], &[])],
             active_id: Some("p1".into()),
+            global_env: vec![],
         };
         save_projects(&tmp, &file).unwrap();
         let back = load_projects(&tmp).unwrap();
