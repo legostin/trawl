@@ -5,31 +5,48 @@
       "code": "// Handler: you perform the request and return the response.\nlet response = sendWithRetry(request, { retries: 3, delay: 1000 });\nreturn response;\n"
     },
     {
-      "label": "Handler: edit JSON response",
-      "code": "const response = sendJsonRequest(request);\n// response.data autocompletes from past responses\nresponse.data.patched = true;\nresponse.body = JSON.stringify(response.data);\nreturn response;\n"
+      "label": "Handler: patch JSON response",
+      "code": "const response = send(request);\n// patch parses the body, edits every match, and re-serializes for you.\npatch(response, 'items[*].price', 0);\nreturn response;\n"
     },
     {
-      "label": "Request: edit JSON body",
-      "code": "const data = jsonBody(request) || {};\ndata.injected = true;\nsetJsonBody(request, data);\n"
+      "label": "Request: patch JSON body",
+      "code": "// tryPatch не падает, если поля нет в теле.\ntryPatch(request, 'user.name', 'test');\n"
     },
     {
-      "label": "Response: edit JSON body",
-      "code": "if (response) {\n  const data = jsonBody(response) || {};\n  data.patched = true;\n  setJsonBody(response, data);\n}\n"
+      "label": "Response: patch JSON body",
+      "code": "if (response) {\n  patch(response, 'items[*].advertData.addDateFormatted', nowISO());\n}\n"
     },
     {
-      "label": "Mock response",
-      "code": "ctx.mock({\n  status: 200,\n  headers: { 'content-type': 'application/json' },\n  body: JSON.stringify({ ok: true, mocked: true }),\n});\n"
+      "label": "Mock JSON response",
+      "code": "json({ ok: true, mocked: true });\n"
+    },
+    {
+      "label": "Redirect to staging",
+      "code": "rewriteHost(request, 'staging.example.com');\n"
+    },
+    {
+      "label": "Emulate slow network / error",
+      "code": "// delay() — только handler-фаза.\ndelay(2000);\nif (randomInt(1, 100) <= 10) return httpError(500, 'flaky upstream');\nreturn send(request);\n"
     }
   ],
   "snippets": [
-    { "label": "sendJsonRequest", "code": "const response = sendJsonRequest(request);\n" },
+    { "label": "patch (set field)", "code": "patch(response, 'items[*].field', value);\n" },
+    { "label": "tryPatch (optional field)", "code": "tryPatch(response, 'items[*].field', value);\n" },
+    { "label": "pick (all values)", "code": "pick(response, 'items[*].id')" },
+    { "label": "pickOne (first value)", "code": "pickOne(response, 'data.token')" },
+    { "label": "removeAt (delete field)", "code": "removeAt(response, '$..secret');\n" },
+    { "label": "mergeAt (enrich node)", "code": "mergeAt(response, 'items[*]', { flag: true });\n" },
+    { "label": "json response", "code": "json({ ok: true })" },
+    { "label": "httpError", "code": "httpError(500, 'test error');\n" },
     { "label": "sendWithRetry", "code": "const response = sendWithRetry(request, { retries: 3, delay: 1000 });\n" },
     { "label": "set header", "code": "setHeader(request, 'X-Debug', '1');\n" },
     { "label": "get header", "code": "header(request, 'authorization')" },
     { "label": "bearer token", "code": "bearer(env.token);\n" },
-    { "label": "json body", "code": "const data = jsonBody(request) || {};\n" },
-    { "label": "set json body", "code": "setJsonBody(request, data);\n" },
-    { "label": "query param", "code": "queryParam(request, 'id')" },
+    { "label": "set query param", "code": "setQueryParam(request, 'limit', 100);\n" },
+    { "label": "rewrite host", "code": "rewriteHost(request, 'staging.example.com');\n" },
+    { "label": "rewrite path", "code": "rewritePath(request, '/v3/', '/v4/');\n" },
+    { "label": "nowISO", "code": "nowISO(null, '+05:00')" },
+    { "label": "uuid", "code": "uuid()" },
     { "label": "override status", "code": "if (response) { response.status = 503; }\n" }
   ]
 }
