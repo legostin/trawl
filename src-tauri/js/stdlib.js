@@ -269,3 +269,37 @@ function pathSegments(req) {
     .filter(function (s) { return s.length > 0; })
     .map(decodeURIComponent);
 }
+
+// ── Моки и ответы ──
+function __mockOrReturn(resp) {
+  // request/response-фаза: ctx.mock существует → мок; handler: просто вернуть объект.
+  if (typeof ctx !== 'undefined' && typeof ctx.mock === 'function') ctx.mock(resp);
+  return resp;
+}
+// json({obj}) | json(status, {obj}) — JSON-ответ одной строкой.
+function json(a, b) {
+  var status = 200, obj = a;
+  if (typeof a === 'number') { status = a; obj = b; }
+  return __mockOrReturn({
+    status: status,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(obj === undefined ? null : obj),
+  });
+}
+function textResponse(status, body, contentType) {
+  return __mockOrReturn({
+    status: status,
+    headers: { 'content-type': contentType || 'text/plain; charset=utf-8' },
+    body: String(body),
+  });
+}
+function httpError(status, msg) {
+  return json(status, { error: msg === undefined ? ('HTTP ' + status) : String(msg) });
+}
+// Блокирующая пауза. Только handler-фаза: request/response исполняются на общем потоке движка.
+function delay(ms) {
+  if (typeof __native_sleep !== 'function') {
+    throw new Error('delay() доступен только в handler-фазе (phase: handler)');
+  }
+  __native_sleep(Math.max(0, Number(ms) || 0));
+}
