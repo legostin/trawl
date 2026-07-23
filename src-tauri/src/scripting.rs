@@ -294,6 +294,9 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
     )
 }
 
+/// Реализация send() для handler-движка (подменяется в dry-run на реплей).
+pub type SendFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
 /// Синхронно исполняет handler-скрипт: он сам делает send()/sleep() и возвращает ответ.
 /// Вызывать вне tokio-рантайма (через spawn_blocking).
 pub fn execute_handler(
@@ -302,6 +305,26 @@ pub fn execute_handler(
     input_json: &str,
     js_timeout: Duration,
     secrets: SecretFn,
+) -> ScriptResult {
+    execute_handler_with_send(
+        prelude,
+        script,
+        input_json,
+        js_timeout,
+        secrets,
+        Arc::new(|req: &str| native_send(req)),
+    )
+}
+
+/// Как `execute_handler`, но с подменяемой реализацией send() — используется
+/// dry-run'ом, чтобы реплеить захваченный ответ вместо реального похода в сеть.
+pub fn execute_handler_with_send(
+    prelude: &str,
+    script: &str,
+    input_json: &str,
+    js_timeout: Duration,
+    secrets: SecretFn,
+    send_impl: SendFn,
 ) -> ScriptResult {
     let rt = match Runtime::new() {
         Ok(r) => r,
@@ -321,8 +344,9 @@ pub fn execute_handler(
         if g.set("__input", input_json.to_string()).is_err() {
             return ScriptResult::error("set input failed");
         }
+        let si = send_impl.clone();
         let send_fn = match Function::new(c.clone(), move |req: String| -> String {
-            native_send(&req)
+            si(&req)
         }) {
             Ok(f) => f,
             Err(e) => return ScriptResult::error(format!("bind send: {e}")),
@@ -361,6 +385,58 @@ pub fn execute_handler(
                 let msg = match caught.into_exception() {
                     Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
                     None => "handler error or timeout".to_string(),
+                };
+                ScriptResult::error(msg)
+            }
+        }
+    })
+}
+
+/// Одноразовый прогон request/response-скрипта в свежем рантайме (dry-run,
+/// без общего потока движка). Сеть не используется.
+pub fn execute_once(
+    prelude: &str,
+    script: &str,
+    input_json: &str,
+    js_timeout: Duration,
+    secrets: SecretFn,
+) -> ScriptResult {
+    let rt = match Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return ScriptResult::error(format!("runtime: {e}")),
+    };
+    let deadline = Arc::new(Mutex::new(Instant::now() + js_timeout));
+    {
+        let d = deadline.clone();
+        rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= *d.lock().unwrap())));
+    }
+    let ctx = match Context::full(&rt) {
+        Ok(c) => c,
+        Err(e) => return ScriptResult::error(format!("context: {e}")),
+    };
+    ctx.with(|c| {
+        let g = c.globals();
+        if g.set("__input", input_json.to_string()).is_err() {
+            return ScriptResult::error("set input failed");
+        }
+        let sfn = secrets.clone();
+        if let Ok(f) = Function::new(c.clone(), move |name: String| -> Option<String> { sfn(&name) }) {
+            let _ = g.set("__native_secret", f);
+        }
+        if let Ok(f) = Function::new(c.clone(), |doc: String, path: String| -> String {
+            crate::jsonpath::locate(&doc, &path)
+        }) {
+            let _ = g.set("__native_jsonpath_locate", f);
+        }
+        let src = build_source(prelude, script);
+        match c.eval::<String, _>(src) {
+            Ok(json) => serde_json::from_str(&json)
+                .unwrap_or_else(|e| ScriptResult::error(format!("bad result json: {e}"))),
+            Err(_) => {
+                let caught = c.catch();
+                let msg = match caught.into_exception() {
+                    Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
+                    None => "script error or timeout".to_string(),
                 };
                 ScriptResult::error(msg)
             }
@@ -1113,5 +1189,27 @@ mod tests {
     fn validate_rule_script_bad_jsonpath() {
         let err = validate_rule_script("patch(request, '$[', 1);").unwrap_err();
         assert!(err.contains("JSONPath"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn handler_with_send_replays_canned_response() {
+        let canned = r#"{"status":200,"headers":{"content-type":"application/json"},"body":"{\"items\":[{\"x\":1}]}"}"#;
+        let canned = canned.to_string();
+        let res = tokio::task::spawn_blocking(move || {
+            execute_handler_with_send(
+                "",
+                "var r = send(request); patch(r, 'items[*].x', 9); return r;",
+                r#"{"request":{"method":"GET","url":"https://real.example/api","headers":{},"body":""}}"#,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+                Arc::new(move |_req: &str| canned.clone()),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.response.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["items"][0]["x"], 9, "send() отдал реплей, patch применился");
     }
 }

@@ -2,6 +2,7 @@ mod breakpoints;
 mod ca;
 mod commands;
 mod db;
+pub mod dryrun;
 mod httpsend;
 pub mod jsonpath;
 mod mcp;
@@ -81,6 +82,8 @@ pub fn run() {
             commands::list_reports,
             commands::delete_report,
             commands::send_request,
+            commands::test_rule,
+            commands::test_path,
             plugins::fetch_plugin_catalog,
             plugins::fetch_plugin_manifest,
             plugins::install_plugin,

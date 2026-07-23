@@ -123,6 +123,19 @@ pub fn core_tools() -> Vec<ToolDef> {
             schema: obj(json!({ "id": { "type": "string" } }), &["id"]),
         },
         ToolDef {
+            name: "test_rule",
+            description: "Dry-run a rule script against a captured flow (no network, no save): send() replays the captured response. Args: script, phase (request|response|handler), pattern, flowId (optional). Returns action/error/trace/before/after.",
+            schema: obj(
+                json!({
+                    "script": { "type": "string" },
+                    "phase": { "type": "string", "enum": ["request", "response", "handler"] },
+                    "pattern": { "type": "string", "description": "glob over host+path, used to find the flow when flowId is omitted" },
+                    "flowId": { "type": "integer", "description": "use this exact captured flow instead of searching by pattern" }
+                }),
+                &["script", "phase"],
+            ),
+        },
+        ToolDef {
             name: "get_scripting_reference",
             description: "Rule scripting reference: ctx API typings, stdlib typings and the shared library source. Read before writing rule scripts.",
             schema: obj(json!({}), &[]),
@@ -253,6 +266,7 @@ pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> 
         "list_rules" => tool_list_rules(deps, args),
         "save_rule" => tool_save_rule(deps, args),
         "delete_rule" => tool_delete_rule(deps, args),
+        "test_rule" => tool_test_rule(deps, args),
         "get_scripting_reference" => tool_scripting_reference(deps),
         "list_projects" => tool_list_projects(deps),
         "save_project" => tool_save_project(deps, args),
@@ -434,6 +448,32 @@ fn tool_delete_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
     let rules = crate::rules::remove_rule(&deps.rules_dir, &id)?;
     *deps.state.rules.write().unwrap() = rules.clone();
     Ok(json!({ "rules": rules }))
+}
+
+fn tool_test_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let script = str_arg(args, "script").ok_or("missing script")?;
+    let phase = str_arg(args, "phase").unwrap_or_else(|| "request".into());
+    let pattern = str_arg(args, "pattern").unwrap_or_default();
+    let flow_id = u64_arg(args, "flowId");
+    let env = {
+        let global = deps.state.global_env.read().unwrap();
+        let guard = deps.state.active_project.read().unwrap();
+        crate::projects::merged_env_object(&global, guard.as_ref())
+    };
+    let flow = match flow_id {
+        Some(id) => deps.state.store.get(id).ok_or_else(|| format!("flow {id} not found in memory"))?,
+        None => deps
+            .state
+            .store
+            .all()
+            .into_iter()
+            .filter(|f| f.response.is_some())
+            .filter(|f| crate::rules::glob_match_env(&pattern, &format!("{}{}", f.url.host, f.url.path), &env))
+            .max_by_key(|f| f.timestamp)
+            .ok_or_else(|| format!("no captured flow matching pattern \"{pattern}\""))?,
+    };
+    let prelude = crate::rules::load_library(&deps.rules_dir).unwrap_or_default();
+    Ok(crate::dryrun::run(&flow, &script, &phase, &prelude, env, std::time::Duration::from_secs(10)))
 }
 
 fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
