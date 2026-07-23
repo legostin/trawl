@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-/** Цвет метода HTTP (Tailwind text-класс на семантическом токене). */
+/** HTTP method color (Tailwind text class on a semantic token). */
 export function methodColor(method: string): string {
   switch (method.toUpperCase()) {
     case "GET":
@@ -20,7 +20,7 @@ export function methodColor(method: string): string {
   }
 }
 
-/** Цвет класса статуса ответа. */
+/** Response status-class color. */
 export function statusColor(status: number | undefined): string {
   if (status === undefined) return "text-http-gray";
   switch (Math.floor(status / 100)) {

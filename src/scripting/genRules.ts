@@ -1,17 +1,17 @@
 import type { Rule } from "../rules";
 
-/** env-ключ из пути поля: последний сегмент, безопасный идентификатор. */
+/** env key from a field path: last segment, made into a safe identifier. */
 export function keyFromPath(path: string): string {
   const seg = path.split(".").pop() ?? path;
   return seg.replace(/\[\]/g, "").replace(/[^A-Za-z0-9_]/g, "_") || "value";
 }
 
-/** FieldInfo-путь (`items[].id`) → JSONPath (`items[*].id`). */
+/** FieldInfo path (`items[].id`) → JSONPath (`items[*].id`). */
 export function toJsonPath(path: string): string {
   return path.replace(/\[\]/g, "[*]");
 }
 
-/** Response-правило: извлекает поле ответа в env проекта (pickOne по JSONPath). */
+/** Response rule: extracts a response field into the project env (pickOne by JSONPath). */
 export function saveToEnvRule(pattern: string, path: string, projectId: string | null): Rule {
   const key = keyFromPath(path);
   return {
@@ -27,7 +27,7 @@ export function saveToEnvRule(pattern: string, path: string, projectId: string |
   };
 }
 
-/** Response-правило: подменяет значение поля в ответе (patch по JSONPath). */
+/** Response rule: replaces a field's value in the response (patch by JSONPath). */
 export function overrideRule(
   pattern: string,
   path: string,

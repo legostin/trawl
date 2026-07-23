@@ -1,6 +1,6 @@
 import type { HttpMessage, ResponseMessage } from "@/types";
 
-/** Длина тела в байтах (тело приходит как массив байт или строка). */
+/** Body length in bytes (the body arrives as a byte array or a string). */
 export function bodyLength(msg: HttpMessage | ResponseMessage | null | undefined): number {
   if (!msg) return 0;
   const b = msg.body;
@@ -14,7 +14,7 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Длительность потока в мс из timings, либо null. */
+/** Flow duration in ms from timings, or null. */
 export function durationMs(sent: number | null, done: number | null): number | null {
   if (sent === null || done === null) return null;
   return Math.max(0, done - sent);
@@ -26,7 +26,7 @@ export function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
-/** Время запроса (локальное) с точностью до секунды: HH:MM:SS. */
+/** Request time (local), to the second: HH:MM:SS. */
 export function formatClock(unixMs: number): string {
   if (!unixMs) return "—";
   const d = new Date(unixMs);

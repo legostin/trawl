@@ -1,5 +1,5 @@
-//! Dry-run правила на захваченном flow: без сети (send реплеит захваченный
-//! ответ), без сохранения. Используется Tauri-командой test_rule и MCP.
+//! Dry-run a rule against a captured flow: no network access (send replays the
+//! captured response), no persistence. Used by the Tauri command test_rule and MCP.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ fn body_text(body: &[u8]) -> String {
     String::from_utf8_lossy(body).to_string()
 }
 
-/// Прогоняет script (phase: request|response|handler) над захваченным flow.
+/// Runs a script (phase: request|response|handler) against a captured flow.
 pub fn run(
     flow: &Flow,
     script: &str,
@@ -71,7 +71,7 @@ pub fn run(
         ),
     };
 
-    // after: что уйдёт клиенту / на сервер после правила.
+    // after: what will go to the client / server after the rule runs.
     let after = match res.action.as_str() {
         "respond" => res.response.clone(),
         "mock" => res.mock.clone(),

@@ -8,22 +8,22 @@ const stdlibJs = readFileSync(resolve(__dirname, "../../src-tauri/js/stdlib.js")
 const implemented = new Set(
   [...stdlibJs.matchAll(/^function ([a-zA-Z]\w*)\(/gm)].map((m) => m[1]).filter((n) => !n.startsWith("__")),
 );
-// send/sleep объявляются обёрткой handler-фазы в scripting.rs, не в stdlib.js.
+// send/sleep are declared by the handler-phase wrapper in scripting.rs, not in stdlib.js.
 const externals = new Set(["send", "sleep"]);
 
 describe("stdlib docs sync", () => {
-  it("каждая функция stdlib.js задокументирована в манифесте", () => {
+  it("every stdlib.js function is documented in the manifest", () => {
     const documented = new Set(STD_FN_DOCS.map((f) => f.name));
-    for (const name of implemented) expect(documented, `нет доки для ${name}`).toContain(name);
+    for (const name of implemented) expect(documented, `no docs for ${name}`).toContain(name);
   });
-  it("каждая запись манифеста реализована и объявлена в STD_DTS", () => {
+  it("every manifest entry is implemented and declared in STD_DTS", () => {
     for (const f of STD_FN_DOCS) {
       if (externals.has(f.name)) continue;
-      expect(implemented, `${f.name} есть в манифесте, но не в stdlib.js`).toContain(f.name);
-      expect(STD_DTS, `${f.name} не объявлен в STD_DTS`).toContain(`function ${f.name}(`);
+      expect(implemented, `${f.name} is in the manifest but not in stdlib.js`).toContain(f.name);
+      expect(STD_DTS, `${f.name} is not declared in STD_DTS`).toContain(`function ${f.name}(`);
     }
   });
-  it("категории записей — из фиксированного списка", () => {
+  it("entry categories come from the fixed list", () => {
     for (const f of STD_FN_DOCS) expect(DOC_CATEGORIES).toContain(f.category);
   });
 });

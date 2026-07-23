@@ -37,13 +37,13 @@ function headerValue(headers: [string, string][], name: string): string | undefi
   return headers.find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
 }
 
-/** Паттерн из потока: точный путь + `*`, чтобы ловить query-варианты и подсказки. */
+/** Pattern from a flow: exact path + `*`, to catch query variants and hint at intent. */
 function patternFromFlow(flow: Flow): string {
   const path = flow.url.path.split("?")[0];
   return `${flow.url.host}${path}*`;
 }
 
-/** Правило-handler, повторяющее запрос (заготовка для правки). */
+/** Handler rule that replays the request (a starting point for editing). */
 function ruleFromFlow(flow: Flow): Rule {
   const path = flow.url.path.split("?")[0];
   return {
@@ -57,7 +57,7 @@ function ruleFromFlow(flow: Flow): Rule {
   };
 }
 
-/** Правило-мок, возвращающее пойманный ответ. */
+/** Mock rule that returns the captured response. */
 function mockRuleFromFlow(flow: Flow): Rule {
   const path = flow.url.path.split("?")[0];
   const status = flow.response?.status ?? 200;
@@ -234,7 +234,7 @@ export function FlowDetail() {
                     <div key={i}>
                       {t.rule}: {t.op}
                       {t.path ? `('${t.path}')` : ""}
-                      {t.nodes !== undefined ? ` → ${t.nodes} узлов` : ""}
+                      {t.nodes !== undefined ? ` → ${t.nodes} nodes` : ""}
                       {t.status !== undefined ? ` → ${t.status} (${t.ms} ms)` : ""}
                     </div>
                   ))}
@@ -281,7 +281,7 @@ function RequestPanel({ flow }: { flow: Flow }) {
   tabs.push({ value: "body", label: "Body" });
 
   const [tab, setTab] = useState<ReqTab>(tabs[0].value);
-  // Поток мог смениться — держим активную вкладку валидной.
+  // The flow may have changed — keep the active tab valid.
   const active = tabs.some((t) => t.value === tab) ? tab : tabs[0].value;
 
   return (
@@ -346,10 +346,10 @@ function ProjectAction({ host }: { host: string }) {
 
   const active = projects.find((p) => p.id === activeId) ?? null;
 
-  // Уже в активном проекте — кнопку не показываем.
+  // Already in the active project — don't show the button.
   if (active && projectTracks(active, host)) return null;
 
-  // Есть активный проект — просто добавляем в него.
+  // There's an active project — just add to it.
   if (active) {
     return (
       <Button
@@ -367,7 +367,7 @@ function ProjectAction({ host }: { host: string }) {
     );
   }
 
-  // Проекта нет — выбор проекта или создание нового прямо отсюда.
+  // No project — pick one or create a new one right here.
   const addTo = async (id: string, name: string) => {
     await addHost(id, host);
     show(`Added ${host} to ${name}`);

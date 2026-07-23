@@ -6,7 +6,7 @@ import { API_DTS } from "./scripting/apiTypes";
 import { STD_DTS } from "./scripting/stdlib";
 import { registerPathHints } from "./scripting/pathHints";
 
-// Оффлайн-воркеры (Tauri без CDN).
+// Offline workers (Tauri without a CDN).
 (self as unknown as { MonacoEnvironment: unknown }).MonacoEnvironment = {
   getWorker(_moduleId: string, label: string) {
     if (label === "typescript" || label === "javascript") return new tsWorker();
@@ -14,10 +14,10 @@ import { registerPathHints } from "./scripting/pathHints";
   },
 };
 
-// Использовать локально забандленный monaco, а не CDN.
+// Use the locally bundled monaco, not a CDN.
 loader.config({ monaco });
 
-// Тип `languages.typescript` в этой сборке помечен deprecated, хотя доступен в рантайме.
+// The `languages.typescript` type is marked deprecated in this build, though it's available at runtime.
 interface TsDefaults {
   addExtraLib(content: string, path?: string): { dispose: () => void };
   setDiagnosticsOptions(opts: { noSemanticValidation?: boolean; noSyntaxValidation?: boolean }): void;
@@ -26,17 +26,17 @@ const jsDefaults = (
   monaco.languages as unknown as { typescript: { javascriptDefaults: TsDefaults } }
 ).typescript.javascriptDefaults;
 
-// Автокомплит по нашему API скриптов + стандартной библиотеке.
+// Autocomplete for our scripting API + standard library.
 jsDefaults.addExtraLib(API_DTS, "ts:trawl-api.d.ts");
 jsDefaults.addExtraLib(STD_DTS, "ts:trawl-stdlib.d.ts");
 jsDefaults.setDiagnosticsOptions({
-  noSemanticValidation: true, // не ругаться на "переопределение" глобалей из d.ts
+  noSemanticValidation: true, // don't complain about "redeclaring" globals from the d.ts
   noSyntaxValidation: false,
 });
 
 let libDisposable: { dispose: () => void } | null = null;
 
-/** Обновляет автокомплит функциями из library-prelude. */
+/** Updates autocomplete with functions from the library prelude. */
 export function setLibraryTypes(source: string) {
   libDisposable?.dispose();
   libDisposable = jsDefaults.addExtraLib(source, "ts:trawl-library.js");

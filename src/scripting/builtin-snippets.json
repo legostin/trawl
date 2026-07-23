@@ -10,7 +10,7 @@
     },
     {
       "label": "Request: patch JSON body",
-      "code": "// tryPatch не падает, если поля нет в теле.\ntryPatch(request, 'user.name', 'test');\n"
+      "code": "// tryPatch doesn't fail if the field isn't in the body.\ntryPatch(request, 'user.name', 'test');\n"
     },
     {
       "label": "Response: patch JSON body",
@@ -26,7 +26,7 @@
     },
     {
       "label": "Emulate slow network / error",
-      "code": "// delay() — только handler-фаза.\ndelay(2000);\nif (randomInt(1, 100) <= 10) return httpError(500, 'flaky upstream');\nreturn send(request);\n"
+      "code": "// delay() — handler phase only.\ndelay(2000);\nif (randomInt(1, 100) <= 10) return httpError(500, 'flaky upstream');\nreturn send(request);\n"
     }
   ],
   "snippets": [

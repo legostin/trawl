@@ -5,7 +5,7 @@ function shQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
-/** Собирает строку `curl` из перехваченного запроса. */
+/** Builds a `curl` string from a captured request. */
 export function buildCurl(flow: Flow): string {
   const { scheme, host, port, path } = flow.url;
   const showPort = port !== 80 && port !== 443;

@@ -61,7 +61,7 @@ export function RulesView() {
     setLibraryTypes(library);
   }, [library]);
 
-  // Показываем только правила активного проекта (или глобальные, когда проект off).
+  // Show only the active project's rules (or global ones, when the project is off).
   const scoped = rules.filter((r) => (r.projectId ?? null) === (activeId ?? null));
 
   /** Toggle from the list without stealing the current selection/editor. */
@@ -254,7 +254,7 @@ function RuleEditor({
         />
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" variant="outline" disabled={dryRunBusy} onClick={() => void runDryRun()}>
-            {dryRunBusy ? "Проверяю…" : "Проверить на трафике"}
+            {dryRunBusy ? "Testing…" : "Test on traffic"}
           </Button>
           <Button size="sm" onClick={() => void onSave(draft)}>
             <Save />
@@ -337,7 +337,7 @@ function RuleEditor({
               Dry-run · flow #{dryRun.flowId} · {dryRun.action}
             </span>
             <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setDryRun(null)}>
-              закрыть
+              close
             </button>
           </div>
           {dryRun.error && <div className="mb-2 text-http-red">{dryRun.error}</div>}
@@ -347,7 +347,7 @@ function RuleEditor({
                 <div key={i}>
                   {t.op}
                   {t.path ? `('${t.path}')` : ""}
-                  {t.nodes !== undefined ? ` → ${t.nodes} узлов` : ""}
+                  {t.nodes !== undefined ? ` → ${t.nodes} nodes` : ""}
                   {t.status !== undefined ? ` → ${t.status} (${t.ms} ms)` : ""}
                 </div>
               ))}
@@ -356,13 +356,13 @@ function RuleEditor({
           {dryRun.after && (
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <div className="mb-1 font-semibold text-muted-foreground">До</div>
+                <div className="mb-1 font-semibold text-muted-foreground">Before</div>
                 <pre className="overflow-auto whitespace-pre-wrap break-all rounded bg-secondary/40 p-2 font-mono">
                   {formatMaybeJson(dryRun.before?.body)}
                 </pre>
               </div>
               <div>
-                <div className="mb-1 font-semibold text-muted-foreground">После</div>
+                <div className="mb-1 font-semibold text-muted-foreground">After</div>
                 <pre className="overflow-auto whitespace-pre-wrap break-all rounded bg-secondary/40 p-2 font-mono">
                   {formatMaybeJson(dryRun.after?.body)}
                 </pre>
@@ -414,10 +414,10 @@ function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: strin
                         )}
                         <button
                           className="ml-auto shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
-                          title="Вставить пример в скрипт"
+                          title="Insert example into script"
                           onClick={() => editorApi.current?.insert(fn.example + "\n")}
                         >
-                          вставить
+                          insert
                         </button>
                       </div>
                       <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{fn.doc}</div>
@@ -431,7 +431,7 @@ function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: strin
             );
           })}
           <div className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            JSONPath — шпаргалка
+            JSONPath cheatsheet
           </div>
           <ul className="flex flex-col gap-1">
             {JSONPATH_CHEATSHEET.map((r) => (

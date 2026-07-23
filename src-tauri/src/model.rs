@@ -12,7 +12,7 @@ pub struct UrlParts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpMessage {
-    /// Заголовки в порядке получения (дубликаты сохраняются).
+    /// Headers in receipt order (duplicates are preserved).
     pub headers: Vec<(String, String)>,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
@@ -32,7 +32,7 @@ pub struct ResponseMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Timings {
-    /// Миллисекунды от старта прокси-сессии; None пока не наступило.
+    /// Milliseconds from the start of the proxy session; None until it happens.
     pub sent: Option<u64>,
     pub ttfb: Option<u64>,
     pub done: Option<u64>,
@@ -51,7 +51,7 @@ pub enum FlowState {
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
     pub id: u64,
-    /// Unix-время в мс, когда запрос перехвачен.
+    /// Unix time in ms when the request was intercepted.
     pub timestamp: u64,
     pub method: String,
     pub url: UrlParts,
@@ -59,11 +59,11 @@ pub struct Flow {
     pub response: Option<ResponseMessage>,
     pub timings: Timings,
     pub state: FlowState,
-    /// Заполняется при state == Error.
+    /// Filled in when state == Error.
     pub error: Option<String>,
-    /// Имена сработавших правил-скриптов (индикатор «изменён»).
+    /// Names of the rule scripts that fired (a "modified" indicator).
     pub applied_rules: Vec<String>,
-    /// Трасса операций правил: {rule, op, path?, nodes?, status?, ms?}.
+    /// Trace of rule operations: {rule, op, path?, nodes?, status?, ms?}.
     #[serde(default)]
     pub rule_trace: Vec<serde_json::Value>,
     /// Set while the flow is held on a breakpoint: "request" | "response".

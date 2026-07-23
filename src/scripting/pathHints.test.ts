@@ -12,24 +12,24 @@ const FIELDS = [
 ];
 
 describe("segmentCandidates", () => {
-  it("пустой префикс → ключи верхнего уровня", () => {
+  it("empty prefix → top-level keys", () => {
     const labels = segmentCandidates("", FIELDS).map((c) => c.label).sort();
     expect(labels).toEqual(["items", "status"]);
     expect(segmentCandidates("", FIELDS).find((c) => c.label === "items")?.kind).toBe("array");
   });
-  it("items[*]. → поля элемента", () => {
+  it("items[*]. → element fields", () => {
     const labels = segmentCandidates("items[*].", FIELDS).map((c) => c.label).sort();
     expect(labels).toEqual(["advertData", "type"]);
   });
-  it("селектор-фильтр эквивалентен [*]", () => {
+  it("filter selector is equivalent to [*]", () => {
     const labels = segmentCandidates("items[?@.type=='a'].", FIELDS).map((c) => c.label).sort();
     expect(labels).toEqual(["advertData", "type"]);
   });
-  it("глубокий префикс", () => {
+  it("deep prefix", () => {
     const labels = segmentCandidates("items[*].advertData.", FIELDS).map((c) => c.label).sort();
     expect(labels).toEqual(["id", "title"]);
   });
-  it("$ в начале игнорируется", () => {
+  it("leading $ is ignored", () => {
     expect(segmentCandidates("$.items[*].", FIELDS).map((c) => c.label).sort()).toEqual(["advertData", "type"]);
   });
 });

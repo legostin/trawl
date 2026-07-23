@@ -37,7 +37,7 @@ describe("buildCurl", () => {
           body: [],
           bodyIsText: true,
         },
-        // тело как строка для простоты теста
+        // body as a string, for test simplicity
       }),
     );
     expect(c).toContain("curl -X POST 'http://localhost:8080/api'");

@@ -54,7 +54,7 @@ export function SetupPanel() {
       .catch(() => setQr(""));
   }, []);
 
-  // Живой опрос состояния для сценариев, идущих через системный прокси.
+  // Live status polling for scenarios that go through the system proxy.
   useEffect(() => {
     if (scenario !== "mac" && scenario !== "ios") {
       setProxyOn(null);

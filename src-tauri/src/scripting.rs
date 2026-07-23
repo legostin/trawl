@@ -24,13 +24,13 @@ pub struct ScriptResult {
     pub reason: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
-    /// Изменённый скриптом env (пишется обратно в проект).
+    /// env as modified by the script (written back to the project).
     #[serde(default)]
     pub env: Option<serde_json::Value>,
     /// notify(...) calls collected during the run.
     #[serde(default)]
     pub notifications: Vec<serde_json::Value>,
-    /// Трасса операций stdlib/send за прогон правила.
+    /// Trace of stdlib/send operations for the rule run.
     #[serde(default)]
     pub trace: Vec<serde_json::Value>,
 }
@@ -58,14 +58,14 @@ struct ScriptJob {
     reply: oneshot::Sender<ScriptResult>,
 }
 
-/// Клиент к движку скриптов. Клонируемый, Send+Sync — годится для прокси-хендлера.
+/// Client to the script engine. Cloneable, Send+Sync — fits the proxy handler.
 #[derive(Clone)]
 pub struct ScriptClient {
     tx: mpsc::UnboundedSender<ScriptJob>,
 }
 
 impl ScriptClient {
-    /// Прогоняет `script` (с приложенным `prelude`) над контекстом `input_json`.
+    /// Runs `script` (with `prelude` prepended) against the `input_json` context.
     pub async fn run(&self, prelude: String, script: String, input_json: String) -> ScriptResult {
         let (reply, rx) = oneshot::channel();
         let job = ScriptJob { prelude, script, input_json, reply };
@@ -77,7 +77,7 @@ impl ScriptClient {
     }
 }
 
-/// Поднимает движок на выделенном потоке (QuickJS-рантайм не Send через await).
+/// Spins up the engine on a dedicated thread (the QuickJS runtime isn't Send across await).
 pub fn spawn_engine(timeout: Duration, secrets: SecretFn) -> ScriptClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<ScriptJob>();
 
@@ -179,7 +179,7 @@ fn build_source(prelude: &str, script: &str) -> String {
     var __m = String((e && e.message) || e);
     var __ln = e && e.lineNumber;
     if (!__ln && e && e.stack) {{ var __sm = String(e.stack).match(/:(\d+)/); if (__sm) __ln = Number(__sm[1]); }}
-    if (__ln && (__ln - {offset}) > 0) {{ __m += " (строка " + (__ln - {offset}) + ")"; }}
+    if (__ln && (__ln - {offset}) > 0) {{ __m += " (line " + (__ln - {offset}) + ")"; }}
     return JSON.stringify({{ action: "error", error: __m, trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
@@ -187,10 +187,10 @@ fn build_source(prelude: &str, script: &str) -> String {
     )
 }
 
-// ── Handler-режим: скрипт сам выполняет запрос через блокирующий send() ──
+// ── Handler mode: the script performs the request itself via blocking send() ──
 
-/// Ленивая инициализация блокирующего клиента. Создаётся при первом вызове
-/// внутри blocking-контекста (не в async-рантайме) — иначе reqwest паникует.
+/// Lazy init of the blocking client. Created on first call
+/// inside a blocking context (not in the async runtime) — otherwise reqwest panics.
 fn http_client() -> &'static reqwest::blocking::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
@@ -202,7 +202,7 @@ fn http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-/// Выполняет реальный HTTP-запрос (блокирующе) и возвращает {status,headers,body} как JSON.
+/// Performs a real HTTP request (blocking) and returns {status,headers,body} as JSON.
 fn native_send(req_json: &str) -> String {
     let client = http_client();
     let v: Value = match serde_json::from_str(req_json) {
@@ -237,7 +237,7 @@ fn native_send(req_json: &str) -> String {
             let status = resp.status().as_u16();
             let mut headers = serde_json::Map::new();
             for (k, val) in resp.headers().iter() {
-                // тело уже распаковано reqwest — не тащим согласованность-ломающие заголовки
+                // body is already decoded by reqwest — don't carry over consistency-breaking headers
                 if matches!(
                     k.as_str().to_ascii_lowercase().as_str(),
                     "content-encoding" | "content-length" | "transfer-encoding"
@@ -279,14 +279,14 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
         r#"{prefix}{script}
     }})();
     if (__out === undefined || __out === null) {{
-      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
+      return JSON.stringify({{ action: "error", error: "handler did not return a response (needs return response)", env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
     }}
     return JSON.stringify({{ action: "respond", response: __out, env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
   }} catch (e) {{
     var __m = String((e && e.message) || e);
     var __ln = e && e.lineNumber;
     if (!__ln && e && e.stack) {{ var __sm = String(e.stack).match(/:(\d+)/); if (__sm) __ln = Number(__sm[1]); }}
-    if (__ln && (__ln - {offset}) > 0) {{ __m += " (строка " + (__ln - {offset}) + ")"; }}
+    if (__ln && (__ln - {offset}) > 0) {{ __m += " (line " + (__ln - {offset}) + ")"; }}
     return JSON.stringify({{ action: "error", error: __m, trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
@@ -294,11 +294,11 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
     )
 }
 
-/// Реализация send() для handler-движка (подменяется в dry-run на реплей).
+/// send() implementation for the handler engine (swapped out for a replay in dry-run).
 pub type SendFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
-/// Синхронно исполняет handler-скрипт: он сам делает send()/sleep() и возвращает ответ.
-/// Вызывать вне tokio-рантайма (через spawn_blocking).
+/// Synchronously executes a handler script: it does its own send()/sleep() and returns a response.
+/// Call outside the tokio runtime (via spawn_blocking).
 pub fn execute_handler(
     prelude: &str,
     script: &str,
@@ -316,8 +316,8 @@ pub fn execute_handler(
     )
 }
 
-/// Как `execute_handler`, но с подменяемой реализацией send() — используется
-/// dry-run'ом, чтобы реплеить захваченный ответ вместо реального похода в сеть.
+/// Like `execute_handler`, but with a swappable send() implementation — used
+/// by dry-run to replay a captured response instead of making a real network call.
 pub fn execute_handler_with_send(
     prelude: &str,
     script: &str,
@@ -392,8 +392,8 @@ pub fn execute_handler_with_send(
     })
 }
 
-/// Одноразовый прогон request/response-скрипта в свежем рантайме (dry-run,
-/// без общего потока движка). Сеть не используется.
+/// One-off run of a request/response script in a fresh runtime (dry-run,
+/// without the engine's shared thread). No network access.
 pub fn execute_once(
     prelude: &str,
     script: &str,
@@ -444,8 +444,8 @@ pub fn execute_once(
     })
 }
 
-/// Литеральные JSONPath-аргументы path-функций (2-й аргумент — строка в '…' или "…").
-/// Список функций синхронизирован с src/scripting/pathContext.ts.
+/// Literal JSONPath arguments of path functions (2nd argument — a string in '…' or "…").
+/// The function list is kept in sync with src/scripting/pathContext.ts.
 pub fn extract_path_literals(script: &str) -> Vec<String> {
     use regex::Regex;
     use std::sync::OnceLock;
@@ -461,8 +461,8 @@ pub fn extract_path_literals(script: &str) -> Vec<String> {
         .collect()
 }
 
-/// Проверка правила перед сохранением: синтаксис JS + литеральные JSONPath.
-/// `return` в скрипте валиден (handler-фаза), поэтому оборачиваем в функцию.
+/// Validates a rule before saving: JS syntax + literal JSONPaths.
+/// `return` is valid in the script (handler phase), so we wrap it in a function.
 pub fn validate_rule_script(script: &str) -> Result<(), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime: {e}"))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context: {e}"))?;
@@ -474,7 +474,7 @@ pub fn validate_rule_script(script: &str) -> Result<(), String> {
                 let caught = c.catch();
                 let msg = match caught.into_exception() {
                     Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
-                    None => "синтаксическая ошибка".to_string(),
+                    None => "syntax error".to_string(),
                 };
                 Err(format!("JS: {msg}"))
             }
@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(res.action, "error");
         let msg = res.error.unwrap();
         assert!(msg.contains("boom"));
-        assert!(msg.contains("(строка 3)"), "msg: {msg}");
+        assert!(msg.contains("(line 3)"), "msg: {msg}");
     }
 
     #[tokio::test]
@@ -745,8 +745,8 @@ mod tests {
         )
         .await;
         let env = res.env.unwrap();
-        assert_eq!(env["SEED"], "hi", "env читается");
-        assert_eq!(env["NEW"], "hi!", "env пишется и возвращается");
+        assert_eq!(env["SEED"], "hi", "env is read");
+        assert_eq!(env["NEW"], "hi!", "env is written and returned");
     }
 
     #[tokio::test]
@@ -802,8 +802,8 @@ mod tests {
         .await;
         assert_eq!(res.action, "error");
         let msg = res.error.unwrap();
-        assert!(msg.contains("0 узлов"), "msg: {msg}");
-        assert!(msg.contains("items[2]"), "msg должен содержать структуру тела: {msg}");
+        assert!(msg.contains("0 nodes"), "msg: {msg}");
+        assert!(msg.contains("items[2]"), "msg should contain the body structure: {msg}");
     }
 
     #[tokio::test]
@@ -858,8 +858,8 @@ mod tests {
 
     #[tokio::test]
     async fn handler_patch_on_send_result() {
-        // __native_jsonpath_locate должен быть и в handler-движке; send мокается нативно нельзя,
-        // поэтому патчим синтетический ответ.
+        // __native_jsonpath_locate must also exist in the handler engine; send can't be natively
+        // mocked, so we patch a synthetic response instead.
         let res = tokio::task::spawn_blocking(|| {
             execute_handler(
                 "",
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(res.action, "continue", "err: {:?}", res.error);
         let body: Value =
             serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
-        assert_eq!(body["items"][0]["flags"]["hot"], true, "deep-merge не затирает соседей");
+        assert_eq!(body["items"][0]["flags"]["hot"], true, "deep-merge doesn't clobber siblings");
         assert_eq!(body["items"][0]["flags"]["vip"], true);
         assert_eq!(body["items"][1]["flags"]["vip"], true);
     }
@@ -945,7 +945,7 @@ mod tests {
         )
         .await;
         assert_eq!(res.action, "error");
-        assert!(res.error.unwrap().contains("0 узлов"));
+        assert!(res.error.unwrap().contains("0 nodes"));
     }
 
     #[tokio::test]
@@ -1115,7 +1115,7 @@ mod tests {
         let z = req["__z"].as_str().unwrap();
         assert!(z.ends_with('Z') && z.len() == 20, "UTC ISO: {z}");
         let p = req["__p"].as_str().unwrap();
-        assert!(p.ends_with("+05:00"), "tz-суффикс: {p}");
+        assert!(p.ends_with("+05:00"), "tz suffix: {p}");
         let m = req["__m"].as_str().unwrap();
         assert!(m.ends_with('Z'));
     }
@@ -1148,7 +1148,7 @@ mod tests {
         assert_eq!(req["__u"], 2);
         assert_eq!(req["__c"], json!([[1, 2], [3, 4], [5]]));
         assert_eq!(req["__sm"], 2);
-        assert_eq!(req["__orig"], 3, "sortBy не мутирует исходный массив");
+        assert_eq!(req["__orig"], 3, "sortBy doesn't mutate the original array");
     }
 
     #[tokio::test]
@@ -1169,7 +1169,7 @@ mod tests {
             tryPatch(res, "a.b", 1);
             pick(res, 'x');
             other('not.a.path');
-            patch(res, dynamicPath, 1); // не литерал — пропускаем
+            patch(res, dynamicPath, 1); // not a literal — skipped
         "#;
         assert_eq!(extract_path_literals(script), vec!["items[*].price", "a.b", "x"]);
     }
@@ -1223,6 +1223,6 @@ mod tests {
         assert_eq!(res.action, "respond", "err: {:?}", res.error);
         let body: Value =
             serde_json::from_str(res.response.unwrap()["body"].as_str().unwrap()).unwrap();
-        assert_eq!(body["items"][0]["x"], 9, "send() отдал реплей, patch применился");
+        assert_eq!(body["items"][0]["x"], 9, "send() returned the replay, patch was applied");
     }
 }

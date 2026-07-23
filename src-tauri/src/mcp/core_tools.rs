@@ -1,6 +1,6 @@
-//! Кор-тулы MCP: определения (имя/описание/схема) и синхронный диспатч.
-//! Deps конструируется из AppHandle в сервере и вручную в тестах —
-//! поэтому всё здесь тестируется без Tauri.
+//! Core MCP tools: definitions (name/description/schema) and synchronous dispatch.
+//! Deps is built from AppHandle in the server and by hand in tests —
+//! so everything here is testable without Tauri.
 
 use std::path::PathBuf;
 
@@ -439,7 +439,7 @@ fn tool_save_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
     }
     let rule: crate::rules::Rule = serde_json::from_value(raw).map_err(|e| format!("bad rule: {e}"))?;
     crate::scripting::validate_rule_script(&rule.script)
-        .map_err(|e| format!("правило не сохранено: {e}"))?;
+        .map_err(|e| format!("rule not saved: {e}"))?;
     let rules = crate::rules::upsert_rule(&deps.rules_dir, rule)?;
     *deps.state.rules.write().unwrap() = rules.clone();
     Ok(json!({ "rules": rules }))
@@ -486,7 +486,7 @@ fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
         "docsManifest": SCRIPT_DOCS_MANIFEST,
         "cookbook": SCRIPT_COOKBOOK,
         "librarySource": library,
-        "commonMistakes": "send() не имеет .data (только sendJsonRequest). Мутация распарсенного объекта не меняет body — нужен setJsonBody (patch/removeAt/mergeAt делают это сами). handler обязан return response. patch с 0 узлов — ошибка, для опциональных полей tryPatch. delay() — только handler-фаза.",
+        "commonMistakes": "send() has no .data (only sendJsonRequest does). Mutating a parsed object doesn't change body — you need setJsonBody (patch/removeAt/mergeAt do it for you). handler must return response. patch with 0 nodes is an error, use tryPatch for optional fields. delay() is handler-phase only.",
     }))
 }
 
@@ -508,7 +508,7 @@ fn tool_save_project(deps: &Deps, args: &Value) -> Result<Value, String> {
     let project: crate::projects::Project =
         serde_json::from_value(raw).map_err(|e| format!("bad project: {e}"))?;
     let file = crate::projects::upsert_project(&deps.data_dir, project.clone())?;
-    // как в UI-команде: правка активного проекта обновляет общую ячейку
+    // same as in the UI command: editing the active project updates the shared cell
     let mut active = deps.state.active_project.write().unwrap();
     if active.as_ref().map(|p| &p.id) == Some(&project.id) {
         *active = Some(project);
@@ -685,7 +685,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let handle = crate::db::DbHandle::open(tmp.path().join("t.db")).unwrap();
         let _ = state.db.set(handle);
-        // прогнать один flow через writer (async actor thread — дождаться записи)
+        // run one flow through the writer (async actor thread — wait for it to be written)
         let mut f = sample_flow(1, b"x", true);
         f.state = crate::model::FlowState::Completed;
         state.db().unwrap().record(&f, None);
@@ -737,7 +737,7 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0]["enabled"], json!(true));
         assert_eq!(rules[0]["id"].as_str().unwrap().len(), 16);
-        // разделяемое состояние обновилось — прокси увидит правило сразу
+        // shared state updated — the proxy will see the rule immediately
         assert_eq!(state.rules.read().unwrap().len(), 1);
 
         let id = rules[0]["id"].as_str().unwrap().to_string();

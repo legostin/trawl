@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useFlows } from "../store";
 import { visibleFlows } from "../filter";
 
-/** Глобальные горячие клавиши: навигация по списку, фокус поиска, деселект, сворачивание деталей. */
+/** Global hotkeys: list navigation, search focus, deselect, collapse details. */
 export function useKeyboardShortcuts() {
   const flows = useFlows((s) => s.flows);
   const filter = useFlows((s) => s.filter);
@@ -21,14 +21,14 @@ export function useKeyboardShortcuts() {
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
 
-      // Фокус поиска: "/" или ⌘K / Ctrl+K
+      // Focus search: "/" or ⌘K / Ctrl+K
       if ((e.key === "/" && !typing) || (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey))) {
         e.preventDefault();
         document.querySelector<HTMLInputElement>("[data-search-input]")?.focus();
         return;
       }
 
-      // Свернуть/показать детали: ⌘\ / Ctrl+\
+      // Collapse/show details: ⌘\ / Ctrl+\
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
         e.preventDefault();
         toggleDetail();

@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { McpToolSpec } from "./api";
 
-/** Плагин, чей бандл выполняется прямо сейчас (ставится loader-ом). Регистрация
- *  MCP-тулов разрешена только в этот момент — так тул атрибуцируется плагину. */
+/** The plugin whose bundle is executing right now (set by the loader). Registering
+ *  MCP tools is only allowed at this moment — that's how a tool gets attributed to a plugin. */
 let loadingPluginId: string | null = null;
 const handlers = new Map<string, McpToolSpec["handler"]>(); // key: `${pluginId}_${name}`
 
@@ -34,7 +34,7 @@ export async function unregisterTool(name: string): Promise<void> {
   await invoke("mcp_unregister_tool", { pluginId: loadingPluginId, name });
 }
 
-/** Снять все тулы плагина (перед перезагрузкой бандла и при disable). */
+/** Remove all of a plugin's tools (before reloading its bundle and on disable). */
 export async function clearPluginTools(pluginId: string): Promise<void> {
   for (const key of [...handlers.keys()]) {
     if (key.startsWith(`${pluginId}_`)) handlers.delete(key);
