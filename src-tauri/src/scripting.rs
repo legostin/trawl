@@ -750,4 +750,67 @@ mod tests {
         assert_eq!(res.action, "error");
         assert!(res.error.unwrap().contains("0 узлов"));
     }
+
+    #[tokio::test]
+    async fn set_query_param_adds_and_replaces() {
+        let res = run(
+            "setQueryParam(request, 'limit', 5); setQueryParam(request, 'q', 'а б');",
+            r#"{"request":{"headers":{},"url":"https://h.kz/v1/list?limit=20","host":"h.kz","path":"/v1/list?limit=20"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["path"], "/v1/list?limit=5&q=%D0%B0%20%D0%B1");
+        assert_eq!(req["url"], "https://h.kz/v1/list?limit=5&q=%D0%B0%20%D0%B1");
+    }
+
+    #[tokio::test]
+    async fn remove_query_param_and_last_one_drops_question_mark() {
+        let res = run(
+            "removeQueryParam(request, 'a'); removeQueryParam(request, 'b');",
+            r#"{"request":{"headers":{},"url":"https://h.kz/p?a=1&b=2","host":"h.kz","path":"/p?a=1&b=2"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["path"], "/p");
+        assert_eq!(req["url"], "https://h.kz/p");
+    }
+
+    #[tokio::test]
+    async fn rewrite_host_updates_host_and_url() {
+        let res = run(
+            "rewriteHost(request, 'staging.h.kz');",
+            r#"{"request":{"headers":{},"url":"https://h.kz/p?x=1","host":"h.kz","path":"/p?x=1"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["host"], "staging.h.kz");
+        assert_eq!(req["url"], "https://staging.h.kz/p?x=1");
+    }
+
+    #[tokio::test]
+    async fn rewrite_path_string_and_regex_keep_query() {
+        let res = run(
+            "rewritePath(request, '/v3/', '/v4/'); rewritePath(request, /adverts/, 'ads');",
+            r#"{"request":{"headers":{},"url":"https://h.kz/v3/adverts/rec?limit=1","host":"h.kz","path":"/v3/adverts/rec?limit=1"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["path"], "/v4/ads/rec?limit=1");
+        assert_eq!(req["url"], "https://h.kz/v4/ads/rec?limit=1");
+    }
+
+    #[tokio::test]
+    async fn path_segments_decode_and_skip_query() {
+        let res = run(
+            "request.__s = pathSegments(request);",
+            r#"{"request":{"headers":{},"path":"/v3/adverts/%D0%B0?x=1"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.request.unwrap()["__s"], json!(["v3", "adverts", "а"]));
+    }
 }
