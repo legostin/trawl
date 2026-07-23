@@ -47,7 +47,7 @@ describe("breakpointFromFlow", () => {
     request: { headers: [], body: "", bodyIsText: true },
     response: null,
     timings: { sent: null, ttfb: null, done: null },
-    state: "completed", error: null, appliedRules: [], ...patch,
+    state: "completed", error: null, appliedRules: [], ruleTrace: [], ...patch,
   });
 
   it("derives pattern from host+path (query stripped) and method from the flow", () => {

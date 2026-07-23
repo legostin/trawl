@@ -226,6 +226,21 @@ export function FlowDetail() {
             <dd className="font-mono">{formatBytes(resSize)}</dd>
             <dt className="text-muted-foreground">Duration</dt>
             <dd className="font-mono">{formatDuration(dur)}</dd>
+            {flow.ruleTrace?.length > 0 && (
+              <>
+                <dt className="text-muted-foreground">Rule trace</dt>
+                <dd className="font-mono">
+                  {flow.ruleTrace.map((t, i) => (
+                    <div key={i}>
+                      {t.rule}: {t.op}
+                      {t.path ? `('${t.path}')` : ""}
+                      {t.nodes !== undefined ? ` → ${t.nodes} узлов` : ""}
+                      {t.status !== undefined ? ` → ${t.status} (${t.ms} ms)` : ""}
+                    </div>
+                  ))}
+                </dd>
+              </>
+            )}
           </dl>
         )}
 

@@ -14,6 +14,7 @@ function flow(partial: Partial<Flow>): Flow {
     state: "completed",
     error: null,
     appliedRules: [],
+    ruleTrace: [],
     ...partial,
   };
 }

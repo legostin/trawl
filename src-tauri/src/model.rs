@@ -63,6 +63,9 @@ pub struct Flow {
     pub error: Option<String>,
     /// Имена сработавших правил-скриптов (индикатор «изменён»).
     pub applied_rules: Vec<String>,
+    /// Трасса операций правил: {rule, op, path?, nodes?, status?, ms?}.
+    #[serde(default)]
+    pub rule_trace: Vec<serde_json::Value>,
     /// Set while the flow is held on a breakpoint: "request" | "response".
     #[serde(default)]
     pub paused_phase: Option<String>,
@@ -81,6 +84,7 @@ impl Flow {
             state: FlowState::Pending,
             error: None,
             applied_rules: Vec::new(),
+            rule_trace: Vec::new(),
             paused_phase: None,
         }
     }
