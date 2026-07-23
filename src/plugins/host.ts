@@ -33,18 +33,17 @@ import { listSecrets, getSecret, setSecret, deleteSecret } from "@/secrets";
 import { useUpdater } from "@/updater";
 import { bus } from "./bus";
 import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
-import type {
-  ActiveProject,
-  EnvVar,
-  EventParam,
-  FlowAction,
-  RegisteredMode,
-  RuleDraft,
-  TrawlHost,
-  TrawlUi,
+import {
+  HOST_API_VERSION,
+  type ActiveProject,
+  type EnvVar,
+  type EventParam,
+  type FlowAction,
+  type RegisteredMode,
+  type RuleDraft,
+  type TrawlHost,
+  type TrawlUi,
 } from "./api";
-
-const HOST_VERSION = "1.7.0";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
 function activeProject(): ActiveProject | null {
@@ -145,7 +144,7 @@ export function installHost(): void {
   installed = true;
 
   const host: TrawlHost = {
-    version: HOST_VERSION,
+    version: HOST_API_VERSION,
     react: React,
     events: {
       on: (t, cb) => bus.on(t, cb),

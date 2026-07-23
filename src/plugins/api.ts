@@ -11,6 +11,11 @@ import type { EventInfo, EventMeta } from "./bus";
 
 export type { EventInfo, EventMeta, EventParam } from "./bus";
 
+/** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
+ *  Bump when the contract below grows; plugin manifests declare the version they
+ *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
+export const HOST_API_VERSION = "1.7.0";
+
 export interface RegisteredMode {
   id: string;
   label: string;

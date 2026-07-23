@@ -65,6 +65,21 @@ fn cmp_versions(a: &str, b: &str) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
+/// Refuse a manifest that needs a newer host↔plugin API than this app provides.
+/// An empty `manifest_api` (pre-gate manifests) or a missing `host_api` (older
+/// frontend that doesn't pass it) skips the check.
+fn check_api_version(name: &str, manifest_api: &str, host_api: Option<&str>) -> Result<(), String> {
+    let Some(host_api) = host_api else { return Ok(()) };
+    if manifest_api.trim().is_empty()
+        || cmp_versions(manifest_api, host_api) != std::cmp::Ordering::Greater
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "\"{name}\" requires plugin API {manifest_api}, but this app provides {host_api} — update the app first"
+    ))
+}
+
 /// Installed-plugin record persisted in `plugins.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +98,10 @@ pub struct Plugin {
     #[serde(rename = "ref")]
     pub git_ref: String,
     pub enabled: bool,
+    /// Plugin API version the bundle needs (manifest `apiVersion`; "" for
+    /// plugins installed before this was recorded).
+    #[serde(default)]
+    pub api_version: String,
 }
 
 fn default_host() -> String {
@@ -332,6 +351,7 @@ fn install_tree(
     host: &str,
     repo: &str,
     git_ref: &str,
+    host_api_version: Option<&str>,
     visited: &mut std::collections::HashSet<String>,
 ) -> Result<(), String> {
     if !visited.insert(format!("{host}/{repo}")) {
@@ -345,6 +365,8 @@ fn install_tree(
     if manifest.id.trim().is_empty() {
         return Err("manifest is missing an id".into());
     }
+    let display = if manifest.name.is_empty() { &manifest.id } else { &manifest.name };
+    check_api_version(display, &manifest.api_version, host_api_version)?;
     let bundle = http_get_text(
         &api_content_url(host, repo, git_ref, &manifest.entry),
         token.as_deref(),
@@ -368,6 +390,7 @@ fn install_tree(
         host: host.to_string(),
         git_ref: git_ref.to_string(),
         enabled: true,
+        api_version: manifest.api_version.clone(),
     };
     if let Some(e) = file.plugins.iter_mut().find(|p| p.id == plugin.id) {
         *e = plugin;
@@ -388,7 +411,7 @@ fn install_tree(
         };
         if needed {
             let dep_ref = dep.reference.clone().unwrap_or_else(|| "main".to_string());
-            install_tree(data, &dep.host, &dep.repo, &dep_ref, visited)
+            install_tree(data, &dep.host, &dep.repo, &dep_ref, host_api_version, visited)
                 .map_err(|e| format!("dependency \"{}\": {e}", dep.id))?;
         }
     }
@@ -401,13 +424,14 @@ pub async fn install_plugin(
     repo: String,
     reference: Option<String>,
     host: Option<String>,
+    host_api_version: Option<String>,
 ) -> Result<Vec<Plugin>, String> {
     let (parsed_host, repo, git_ref) = normalize_repo(&repo, reference.as_deref());
     let host = effective_host(parsed_host, host);
     let data = data_dir(&app)?;
     tokio::task::spawn_blocking(move || {
         let mut visited = std::collections::HashSet::new();
-        install_tree(&data, &host, &repo, &git_ref, &mut visited)?;
+        install_tree(&data, &host, &repo, &git_ref, host_api_version.as_deref(), &mut visited)?;
         load_plugins(&data).map(|f| f.plugins).map_err(|e| e.to_string())
     })
     .await
@@ -615,6 +639,32 @@ mod tests {
     }
 
     #[test]
+    fn api_gate_blocks_manifests_newer_than_host() {
+        // Plugin needs a newer host API than the app provides → clear error.
+        let err = check_api_version("Notifications", "1.7.0", Some("1.6.0")).unwrap_err();
+        assert!(err.contains("1.7.0"), "error should name the required version: {err}");
+        assert!(err.contains("1.6.0"), "error should name the app's version: {err}");
+        // Equal or older requirement is fine.
+        assert!(check_api_version("X", "1.6.0", Some("1.6.0")).is_ok());
+        assert!(check_api_version("X", "1.5.0", Some("1.6.0")).is_ok());
+        // Manifests without apiVersion keep installing (pre-gate plugins).
+        assert!(check_api_version("X", "", Some("1.6.0")).is_ok());
+        // No host version supplied (old frontend) → no gate.
+        assert!(check_api_version("X", "1.7.0", None).is_ok());
+    }
+
+    #[test]
+    fn registry_defaults_api_version_for_old_files() {
+        // plugins.json written before the gate has no apiVersion field.
+        let p: Plugin = serde_json::from_str(
+            r#"{ "id": "a", "name": "A", "version": "1.0.0", "description": "",
+                 "author": "", "repo": "o/r", "ref": "main", "enabled": true }"#,
+        )
+        .unwrap();
+        assert_eq!(p.api_version, "");
+    }
+
+    #[test]
     fn version_compare_is_numeric() {
         use std::cmp::Ordering::*;
         assert_eq!(cmp_versions("0.3.1", "0.3.1"), Equal);
@@ -652,6 +702,7 @@ mod tests {
                 host: "github.com".into(),
                 git_ref: "main".into(),
                 enabled: true,
+                api_version: "1.6.0".into(),
             }],
         };
         save_plugins(&dir, &file).unwrap();

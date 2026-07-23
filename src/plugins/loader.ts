@@ -1,6 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
-import { usePlugins } from "@/plugins";
+import { apiCompatible, HOST_API_VERSION, usePlugins, type Plugin } from "@/plugins";
+import { useToast } from "@/toast";
 import { clearPluginTools, setLoadingPlugin } from "./mcpBridge";
+
+/** True when the cached bundle can run on this app; otherwise warn instead of
+ *  executing it (an incompatible bundle would crash at render with a cryptic
+ *  React error — see plugins installed before the apiVersion gate existed). */
+function guardApiVersion(p: Plugin): boolean {
+  if (apiCompatible(p.apiVersion)) return true;
+  console.error(
+    `[trawl] plugin "${p.id}" needs plugin API ${p.apiVersion}, app provides ${HOST_API_VERSION} — skipped`,
+  );
+  useToast
+    .getState()
+    .show(`Plugin "${p.name}" needs a newer app version — update the app to use it`);
+  return false;
+}
 
 /** Load a cached plugin bundle by injecting it as a classic script (IIFE self-registers).
  *  Re-loading replaces any previous injection for the same plugin, so updates and
@@ -34,6 +49,7 @@ export async function loadEnabledPlugins(): Promise<void> {
   await usePlugins.getState().load();
   const enabled = usePlugins.getState().installed.filter((p) => p.enabled);
   for (const p of enabled) {
+    if (!guardApiVersion(p)) continue;
     try {
       await loadBundle(p.id);
     } catch (e) {
@@ -44,6 +60,8 @@ export async function loadEnabledPlugins(): Promise<void> {
 
 /** Load a single plugin on demand (e.g. right after install). */
 export async function loadPlugin(id: string): Promise<void> {
+  const p = usePlugins.getState().installed.find((x) => x.id === id);
+  if (p && !guardApiVersion(p)) return;
   try {
     await loadBundle(id);
   } catch (e) {
