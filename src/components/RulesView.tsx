@@ -12,6 +12,7 @@ import { LabeledSwitch, Switch } from "./ui/switch";
 import { STD_FN_DOCS, DOC_CATEGORIES, JSONPATH_CHEATSHEET } from "../scripting/stdlib-docs";
 import { useSnippets, type SnippetKind } from "../scripting/snippetStore";
 import { setLibraryTypes, setResponseDataType } from "../monaco-setup";
+import { setPathHintContext } from "../scripting/pathHints";
 import { SnippetMenu } from "./SnippetMenu";
 import { HintsPanel } from "./HintsPanel";
 import { useToast } from "../toast";
@@ -184,7 +185,8 @@ function RuleEditor({
 
   useEffect(() => {
     setResponseDataType(fieldsToType(fields));
-  }, [fields]);
+    setPathHintContext(fields, draft.pattern);
+  }, [fields, draft.pattern]);
 
   return (
     <div className="flex h-full flex-col">

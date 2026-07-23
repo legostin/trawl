@@ -1,6 +1,7 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { MutableRefObject } from "react";
 import "../monaco-setup";
+import { attachPathDiagnostics } from "../scripting/pathHints";
 import { useTheme } from "./ThemeProvider";
 
 export interface ScriptEditorApi {
@@ -28,6 +29,7 @@ export function ScriptEditor({
   const { theme } = useTheme();
 
   const handleMount: OnMount = (editor) => {
+    if (language === "javascript") attachPathDiagnostics(editor);
     if (!apiRef) return;
     apiRef.current = {
       insert: (text) => {
