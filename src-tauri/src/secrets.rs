@@ -65,6 +65,20 @@ pub fn delete(data_dir: &Path, name: &str) -> Result<()> {
     save_names(data_dir, &names)
 }
 
+/// Keychain write that skips the secrets.json index — for values with their
+/// own index and UI (git-host tokens), which must not show up in Secrets.
+pub fn set_unindexed(name: &str, value: &str) -> Result<()> {
+    Entry::new(SERVICE, name)?.set_password(value)?;
+    Ok(())
+}
+
+pub fn delete_unindexed(name: &str) -> Result<()> {
+    match Entry::new(SERVICE, name)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
@@ -236,6 +250,21 @@ mod tests {
         assert!(list_names(&dir).is_empty());
         // Deleting a missing secret is not an error.
         delete(&dir, "TRAWL_TEST_DEL").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unindexed_set_get_delete_skips_index() {
+        mock_store();
+        let dir = tmp_dir("unindexed");
+        set_unindexed("git-host:example.test", "tok-1").unwrap();
+        assert_eq!(get("git-host:example.test").unwrap().as_deref(), Some("tok-1"));
+        // Not in the secrets.json index.
+        assert!(list_names(&dir).is_empty());
+        delete_unindexed("git-host:example.test").unwrap();
+        assert_eq!(get("git-host:example.test").unwrap(), None);
+        // Deleting a missing entry is not an error.
+        delete_unindexed("git-host:example.test").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
