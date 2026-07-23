@@ -577,6 +577,23 @@ impl HttpHandler for CaptureHandler {
             return req.into();
         }
 
+        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://trawl/.
+        // Обязательно ДО фильтра активного проекта: "trawl" — не реальный хост,
+        // и уйдя в апстрим такой запрос закончится 502.
+        if req.uri().host() == Some("trawl") {
+            let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
+            let resp = Response::builder()
+                .status(200)
+                .header("content-type", "application/x-x509-ca-cert")
+                .header(
+                    "content-disposition",
+                    "attachment; filename=\"trawl-ca.pem\"",
+                )
+                .body(body)
+                .expect("build cert response");
+            return RequestOrResponse::Response(resp);
+        }
+
         // Активный проект: запросы к нетрекаемым хостам проксируем, но не пишем
         // (экономия памяти) — без flow, эмита и правил.
         {
@@ -598,21 +615,6 @@ impl HttpHandler for CaptureHandler {
                     return req.into();
                 }
             }
-        }
-
-        // Раздача CA-сертификата: клиент с настроенным прокси открывает http://trawl/
-        if req.uri().host() == Some("trawl") {
-            let body = Body::from(Full::new(Bytes::from(self.ca_pem.clone().into_bytes())));
-            let resp = Response::builder()
-                .status(200)
-                .header("content-type", "application/x-x509-ca-cert")
-                .header(
-                    "content-disposition",
-                    "attachment; filename=\"trawl-ca.pem\"",
-                )
-                .body(body)
-                .expect("build cert response");
-            return RequestOrResponse::Response(resp);
         }
 
         let (parts, body) = req.into_parts();
@@ -1544,6 +1546,40 @@ mod tests {
         let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-ca-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, Arc::new(RwLock::new(vec![])), ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
+            .await
+            .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let resp = client.get("http://trawl/").send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let text = resp.text().await.unwrap();
+        assert!(text.contains("BEGIN CERTIFICATE"), "got: {text}");
+
+        handle.stop();
+        let _ = std::fs::remove_dir_all(&ca_dir);
+    }
+
+    // http://trawl/ должен отдавать сертификат даже когда активен проект,
+    // который этот хост не трекает (раньше запрос уходил в апстрим → 502).
+    #[tokio::test]
+    async fn serves_ca_pem_when_active_project_excludes_trawl() {
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let ca_dir = std::env::temp_dir().join(format!("httpcatch-cert-proj-ca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&ca_dir);
+        let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
+        *p.write().unwrap() = Some(crate::projects::Project {
+            id: "p1".into(),
+            name: "p1".into(),
+            include_hosts: vec!["example.com".into()],
+            exclude_hosts: vec![],
+            env: vec![],
+        });
         let handle = start("127.0.0.1:0".parse().unwrap(), store, emit, app_event_noop(), secret_none(), ca_dir.clone(), s, r, l, p, Arc::new(RwLock::new(vec![])), ca_dir.clone(), None, bps, icept, pending, Arc::new(RwLock::new(0)), Arc::new(RwLock::new(false)))
             .await
             .unwrap();
