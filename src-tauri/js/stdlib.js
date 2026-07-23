@@ -66,3 +66,98 @@ function notify(text, opts) {
   opts = opts || {};
   ctx.__notifications.push({ text: String(text), channel: opts.channel, title: opts.title });
 }
+
+// ── JSONPath-ядро (RFC 9535, парсер на стороне Rust) ──
+// Сообщение отличаем от распарсенного объекта по строковому body + headers.
+function __isMsg(x) {
+  return !!(x && typeof x === 'object' && typeof x.body === 'string' && typeof x.headers === 'object');
+}
+// Распарсенный док кэшируется на сообщении (non-enumerable — не попадёт в сериализацию).
+function __doc(target) {
+  if (!__isMsg(target)) return { doc: target, msg: null };
+  if (target.__docCache === undefined) {
+    Object.defineProperty(target, '__docCache', {
+      value: jsonBody(target), writable: true, configurable: true, enumerable: false,
+    });
+  }
+  return { doc: target.__docCache, msg: target };
+}
+function __syncDoc(d) {
+  if (d.msg) { d.msg.__docCache = d.doc; setJsonBody(d.msg, d.doc); }
+}
+// Rust возвращает JSON Pointer'ы; разворачиваем в массивы сегментов (~0/~1 по RFC 6901).
+function __locate(doc, path) {
+  var res = JSON.parse(__native_jsonpath_locate(JSON.stringify(doc === undefined ? null : doc), String(path)));
+  if (res.error) throw new Error('JSONPath "' + path + '": ' + res.error);
+  return res.locations.map(function (ptr) {
+    if (ptr === '') return [];
+    return ptr.split('/').slice(1).map(function (s) { return s.replace(/~1/g, '/').replace(/~0/g, '~'); });
+  });
+}
+function __getAt(doc, loc) {
+  var v = doc;
+  for (var i = 0; i < loc.length; i++) { if (v == null) return undefined; v = v[loc[i]]; }
+  return v;
+}
+function __parentAt(doc, loc) {
+  var v = doc;
+  for (var i = 0; i < loc.length - 1; i++) { v = v[loc[i]]; }
+  return v;
+}
+// Срез структуры верхнего уровня для диагностики: { status, items[20], … }
+function __shape(v) {
+  if (v === null || v === undefined) return String(v);
+  if (Array.isArray(v)) return '[' + v.length + ' элементов]';
+  if (typeof v !== 'object') return typeof v;
+  var ks = Object.keys(v), parts = [];
+  for (var i = 0; i < Math.min(ks.length, 8); i++) {
+    var k = ks[i], x = v[k];
+    parts.push(Array.isArray(x) ? k + '[' + x.length + ']' : k);
+  }
+  if (ks.length > 8) parts.push('…');
+  return '{ ' + parts.join(', ') + ' }';
+}
+// Трасса операций (ctx.__trace подключается в Task 9; до того — тихий no-op).
+function __traceOp(op, path, nodes) {
+  try { if (typeof ctx !== 'undefined' && ctx.__trace) ctx.__trace.push({ op: op, path: String(path), nodes: nodes }); } catch (e) {}
+}
+
+function __applyPatch(name, target, path, valueOrFn, minMatches) {
+  var d = __doc(target);
+  var locs = __locate(d.doc, path);
+  if (locs.length < minMatches) {
+    throw new Error(name + '("' + path + '"): 0 узлов. Тело: ' + __shape(d.doc));
+  }
+  for (var i = 0; i < locs.length; i++) {
+    var loc = locs[i];
+    if (loc.length === 0) {
+      var nv = (typeof valueOrFn === 'function') ? valueOrFn(d.doc) : valueOrFn;
+      if (d.msg) {
+        d.doc = nv;                       // message: __syncDoc writes body below
+      } else if (d.doc && typeof d.doc === 'object' && nv && typeof nv === 'object'
+                 && Array.isArray(d.doc) === Array.isArray(nv)) {
+        // plain object/array target: replace contents in place so the caller's ref updates
+        if (Array.isArray(d.doc)) {
+          d.doc.length = 0;
+          for (var qi = 0; qi < nv.length; qi++) d.doc.push(nv[qi]);
+        } else {
+          for (var ok in d.doc) if (Object.prototype.hasOwnProperty.call(d.doc, ok)) delete d.doc[ok];
+          for (var nk in nv) if (Object.prototype.hasOwnProperty.call(nv, nk)) d.doc[nk] = nv[nk];
+        }
+      } else {
+        throw new Error('patch("$"): корневую замену на не-объект для распарсенного объекта сделать нельзя — присвойте результат сами');
+      }
+      continue;
+    }
+    var parent = __parentAt(d.doc, loc);
+    var key = loc[loc.length - 1];
+    parent[key] = (typeof valueOrFn === 'function') ? valueOrFn(parent[key]) : valueOrFn;
+  }
+  __syncDoc(d);
+  __traceOp(name, path, locs.length);
+  return locs.length;
+}
+// Записать значение/применить функцию во всех совпавших узлах. 0 узлов → ошибка.
+function patch(target, path, valueOrFn) { return __applyPatch('patch', target, path, valueOrFn, 1); }
+// То же, но отсутствие совпадений — не ошибка.
+function tryPatch(target, path, valueOrFn) { return __applyPatch('tryPatch', target, path, valueOrFn, 0); }
