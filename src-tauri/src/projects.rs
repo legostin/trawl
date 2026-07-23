@@ -99,6 +99,33 @@ pub fn merged_env_object(global: &[EnvVar], project: Option<&Project>) -> serde_
     serde_json::Value::Object(m)
 }
 
+/// Новый env проекта после записи скриптом (`returned` — изменённый merged-объект):
+/// остаются ключи, которые уже были в проекте ИЛИ отличаются от глобального значения.
+/// Нетронутые глобальные ключи в проект не копируются.
+pub fn split_env_writeback(
+    returned: &serde_json::Value,
+    project_env: &[EnvVar],
+    global: &[EnvVar],
+) -> Vec<EnvVar> {
+    let gobj = env_list_object(global);
+    let project_keys: std::collections::HashSet<&str> =
+        project_env.iter().map(|e| e.key.as_str()).collect();
+    match returned.as_object() {
+        Some(obj) => obj
+            .iter()
+            .filter(|(k, v)| project_keys.contains(k.as_str()) || gobj.get(k.as_str()) != Some(*v))
+            .map(|(k, v)| EnvVar {
+                key: k.clone(),
+                value: match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                },
+            })
+            .collect(),
+        None => project_env.to_vec(),
+    }
+}
+
 /// Обновляет глобальный env на диске.
 pub fn update_global_env(dir: &Path, env: Vec<EnvVar>) -> Result<()> {
     let mut file = load_projects(dir)?;
@@ -215,6 +242,43 @@ mod tests {
         let back = load_projects(dir.path()).unwrap();
         assert_eq!(back.global_env[0].key, "G");
         assert_eq!(back.global_env[0].value, "1");
+    }
+
+    #[test]
+    fn writeback_untouched_global_not_copied() {
+        let global = vec![EnvVar { key: "HOST".into(), value: "g".into() }];
+        let project = vec![EnvVar { key: "TOKEN".into(), value: "old".into() }];
+        // скрипт ничего не менял — merged вернулся как есть
+        let returned = serde_json::json!({ "HOST": "g", "TOKEN": "old" });
+        let out = split_env_writeback(&returned, &project, &global);
+        assert_eq!(out.len(), 1, "глобальный ключ не утёк в проект");
+        assert_eq!(out[0].key, "TOKEN");
+    }
+
+    #[test]
+    fn writeback_modified_global_becomes_override() {
+        let global = vec![EnvVar { key: "HOST".into(), value: "g".into() }];
+        let returned = serde_json::json!({ "HOST": "changed" });
+        let out = split_env_writeback(&returned, &[], &global);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key, "HOST");
+        assert_eq!(out[0].value, "changed", "изменённый глобальный — проектное перекрытие");
+    }
+
+    #[test]
+    fn writeback_new_key_goes_to_project() {
+        let returned = serde_json::json!({ "NEW": "v" });
+        let out = split_env_writeback(&returned, &[], &[]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key, "NEW");
+    }
+
+    #[test]
+    fn writeback_deleted_project_key_removed() {
+        let project = vec![EnvVar { key: "GONE".into(), value: "x".into() }];
+        let returned = serde_json::json!({});
+        let out = split_env_writeback(&returned, &project, &[]);
+        assert!(out.is_empty(), "удалённый скриптом ключ исчезает из проекта");
     }
 
     #[test]
