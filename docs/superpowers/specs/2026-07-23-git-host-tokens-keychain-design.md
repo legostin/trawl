@@ -22,7 +22,9 @@ the Settings panel.
 - Keychain entry per host: account `git-host:<host>`, existing service
   `trawl`. Reuses `secrets::get/set/delete`-style `keyring::Entry` access but
   bypasses the `secrets.json` index — git-host tokens do not appear in the
-  Secrets section and are not readable via `secret('NAME')` in rule scripts.
+  Secrets section. (They remain reachable by explicit name via
+  `secret('git-host:<host>')`, consistent with scripts/plugins already having
+  full access; the point of the split is UI separation, not isolation.)
   Plugins keep access through the existing `gitHosts.token()` API.
 - `git-hosts.json` changes format: a JSON **array of host names** (the
   Keychain cannot enumerate entries, so an index is required). It no longer
