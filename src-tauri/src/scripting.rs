@@ -141,9 +141,8 @@ fn eval_job(c: &Ctx<'_>, job: &ScriptJob) -> ScriptResult {
 const STD_LIB: &str = include_str!("../js/stdlib.js");
 
 fn build_source(prelude: &str, script: &str) -> String {
-    let prelude = format!("{STD_LIB}\n{prelude}");
-    let prelude = &prelude;
-    format!(
+    let full_prelude = format!("{STD_LIB}\n{prelude}");
+    let prefix = format!(
         r#"
 (function() {{
   try {{
@@ -159,9 +158,13 @@ fn build_source(prelude: &str, script: &str) -> String {
     const response = ctx.response;
     const env = ctx.env;
     /* ── library ── */
-    {prelude}
+    {full_prelude}
     /* ── rule script ── */
-    {script}
+"#
+    );
+    let offset = prefix.lines().count();
+    format!(
+        r#"{prefix}{script}
     return JSON.stringify({{
       action: ctx.__action,
       request: ctx.request,
@@ -173,7 +176,11 @@ fn build_source(prelude: &str, script: &str) -> String {
       trace: ctx.__trace
     }});
   }} catch (e) {{
-    return JSON.stringify({{ action: "error", error: String((e && e.message) || e), trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
+    var __m = String((e && e.message) || e);
+    var __ln = e && e.lineNumber;
+    if (!__ln && e && e.stack) {{ var __sm = String(e.stack).match(/:(\d+)/); if (__sm) __ln = Number(__sm[1]); }}
+    if (__ln && (__ln - {offset}) > 0) {{ __m += " (строка " + (__ln - {offset}) + ")"; }}
+    return JSON.stringify({{ action: "error", error: __m, trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
 "#
@@ -250,9 +257,8 @@ fn native_send(req_json: &str) -> String {
 }
 
 fn build_handler_source(prelude: &str, script: &str) -> String {
-    let prelude = format!("{STD_LIB}\n{prelude}");
-    let prelude = &prelude;
-    format!(
+    let full_prelude = format!("{STD_LIB}\n{prelude}");
+    let prefix = format!(
         r#"
 (function() {{
   try {{
@@ -264,14 +270,24 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
     const env = ctx.env;
     function send(req) {{ var __t0 = Date.now(); var __r = JSON.parse(__native_send(JSON.stringify(req || request))); ctx.__trace.push({{ op: "send", status: __r.status, ms: Date.now() - __t0 }}); return __r; }}
     function sleep(ms) {{ __native_sleep(ms); }}
-    {prelude}
-    const __out = (function() {{ {script} }})();
+    {full_prelude}
+    const __out = (function() {{
+"#
+    );
+    let offset = prefix.lines().count();
+    format!(
+        r#"{prefix}{script}
+    }})();
     if (__out === undefined || __out === null) {{
       return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
     }}
     return JSON.stringify({{ action: "respond", response: __out, env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
   }} catch (e) {{
-    return JSON.stringify({{ action: "error", error: String((e && e.message) || e), trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
+    var __m = String((e && e.message) || e);
+    var __ln = e && e.lineNumber;
+    if (!__ln && e && e.stack) {{ var __sm = String(e.stack).match(/:(\d+)/); if (__sm) __ln = Number(__sm[1]); }}
+    if (__ln && (__ln - {offset}) > 0) {{ __m += " (строка " + (__ln - {offset}) + ")"; }}
+    return JSON.stringify({{ action: "error", error: __m, trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
 "#
@@ -515,6 +531,19 @@ mod tests {
         let res = run("throw new Error('boom');", r#"{"request":{}}"#).await;
         assert_eq!(res.action, "error");
         assert!(res.error.unwrap().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn error_message_contains_user_script_line() {
+        let res = run(
+            "var a = 1;\nvar b = 2;\nthrow new Error('boom');",
+            r#"{"request":{}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "error");
+        let msg = res.error.unwrap();
+        assert!(msg.contains("boom"));
+        assert!(msg.contains("(строка 3)"), "msg: {msg}");
     }
 
     #[tokio::test]
