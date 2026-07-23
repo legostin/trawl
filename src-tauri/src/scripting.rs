@@ -813,4 +813,79 @@ mod tests {
         assert_eq!(res.action, "continue", "err: {:?}", res.error);
         assert_eq!(res.request.unwrap()["__s"], json!(["v3", "adverts", "а"]));
     }
+
+    #[tokio::test]
+    async fn json_mocks_in_request_phase() {
+        let res = run("json(404, { err: 'nope' });", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "mock", "err: {:?}", res.error);
+        let m = res.mock.unwrap();
+        assert_eq!(m["status"], 404);
+        assert_eq!(m["headers"]["content-type"], "application/json");
+        assert_eq!(m["body"], "{\"err\":\"nope\"}");
+    }
+
+    #[tokio::test]
+    async fn json_default_status_200() {
+        let res = run("json({ ok: true });", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "mock");
+        assert_eq!(res.mock.unwrap()["status"], 200);
+    }
+
+    #[tokio::test]
+    async fn json_returns_response_in_handler_phase() {
+        let res = tokio::task::spawn_blocking(|| {
+            execute_handler(
+                "",
+                "return json(201, { created: true });",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+        let r = res.response.unwrap();
+        assert_eq!(r["status"], 201);
+        assert_eq!(r["body"], "{\"created\":true}");
+    }
+
+    #[tokio::test]
+    async fn text_response_and_http_error() {
+        let res = run("textResponse(503, 'busy');", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "mock");
+        let m = res.mock.unwrap();
+        assert_eq!(m["status"], 503);
+        assert_eq!(m["body"], "busy");
+        assert_eq!(m["headers"]["content-type"], "text/plain; charset=utf-8");
+
+        let res = run("httpError(500, 'взрыв');", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "mock");
+        let m = res.mock.unwrap();
+        assert_eq!(m["status"], 500);
+        assert!(m["body"].as_str().unwrap().contains("взрыв"));
+    }
+
+    #[tokio::test]
+    async fn delay_outside_handler_throws_clear_error() {
+        let res = run("delay(10);", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "error");
+        assert!(res.error.unwrap().contains("handler"));
+    }
+
+    #[tokio::test]
+    async fn delay_works_in_handler() {
+        let res = tokio::task::spawn_blocking(|| {
+            execute_handler(
+                "",
+                "delay(5); return json({ ok: 1 });",
+                r#"{"request":{}}"#,
+                Duration::from_secs(5),
+                Arc::new(|_: &str| None),
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+    }
 }
