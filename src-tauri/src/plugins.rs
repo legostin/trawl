@@ -280,31 +280,61 @@ fn http_get_text(url: &str, token: Option<&str>, raw: bool) -> Result<String, St
     resp.text().map_err(|e| e.to_string())
 }
 
-// ── Per-host git tokens (git-hosts.json) ──
+// ── Per-host git tokens (Keychain; git-hosts.json holds host names only) ──
 
 fn git_hosts_path(data_dir: &Path) -> PathBuf {
     data_dir.join("git-hosts.json")
 }
 
-pub fn load_git_hosts(data_dir: &Path) -> HashMap<String, String> {
-    fs::read_to_string(git_hosts_path(data_dir))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+fn git_host_secret(host: &str) -> String {
+    format!("git-host:{host}")
+}
+
+/// Hosts with a stored token, sorted. Migrates the pre-0.9.1 plaintext
+/// `{host: token}` map into the Keychain on first read; the file keeps only
+/// host names afterwards (the Keychain cannot enumerate its entries).
+pub fn list_git_hosts(data_dir: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(git_hosts_path(data_dir)) else {
+        return Vec::new();
+    };
+    if let Ok(hosts) = serde_json::from_str::<Vec<String>>(&text) {
+        return hosts;
+    }
+    let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&text) else {
+        return Vec::new();
+    };
+    let mut hosts: Vec<String> = Vec::new();
+    for (host, token) in &map {
+        if crate::secrets::set_unindexed(&git_host_secret(host), token).is_ok() {
+            hosts.push(host.clone());
+        }
+    }
+    hosts.sort();
+    if let Ok(json) = serde_json::to_string_pretty(&hosts) {
+        let _ = fs::write(git_hosts_path(data_dir), json);
+    }
+    hosts
 }
 
 pub fn host_token(data_dir: &Path, host: &str) -> Option<String> {
-    load_git_hosts(data_dir).get(host).cloned()
+    let _ = list_git_hosts(data_dir); // ensure a pre-0.9.1 file has migrated
+    crate::secrets::get(&git_host_secret(host)).ok().flatten()
 }
 
 /// An empty token removes the host's entry.
 pub fn save_git_host_token(data_dir: &Path, host: &str, token: &str) -> Result<()> {
     fs::create_dir_all(data_dir).context("create data dir")?;
-    let mut hosts = load_git_hosts(data_dir);
-    if token.trim().is_empty() {
-        hosts.remove(host);
+    let mut hosts = list_git_hosts(data_dir);
+    let token = token.trim();
+    if token.is_empty() {
+        crate::secrets::delete_unindexed(&git_host_secret(host))?;
+        hosts.retain(|h| h != host);
     } else {
-        hosts.insert(host.to_string(), token.trim().to_string());
+        crate::secrets::set_unindexed(&git_host_secret(host), token)?;
+        if !hosts.iter().any(|h| h == host) {
+            hosts.push(host.to_string());
+            hosts.sort();
+        }
     }
     fs::write(git_hosts_path(data_dir), serde_json::to_string_pretty(&hosts)?)
         .context("write git-hosts.json")?;
@@ -698,6 +728,62 @@ mod tests {
             encode_seg("ветка/с слэшем"),
             "%D0%B2%D0%B5%D1%82%D0%BA%D0%B0%2F%D1%81%20%D1%81%D0%BB%D1%8D%D1%88%D0%B5%D0%BC"
         );
+    }
+
+    fn tmp_data_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("trawl-githosts-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn git_host_token_roundtrip_in_keychain() {
+        crate::secrets::testutil::mock_store();
+        let dir = tmp_data_dir("roundtrip");
+        save_git_host_token(&dir, "gh-rt.test", "tok-abc").unwrap();
+        assert_eq!(host_token(&dir, "gh-rt.test").as_deref(), Some("tok-abc"));
+        assert_eq!(list_git_hosts(&dir), vec!["gh-rt.test".to_string()]);
+        // The index file holds host names only — never token material.
+        let text = std::fs::read_to_string(dir.join("git-hosts.json")).unwrap();
+        assert!(!text.contains("tok-abc"));
+        // Empty token deletes entry and index row.
+        save_git_host_token(&dir, "gh-rt.test", "").unwrap();
+        assert_eq!(host_token(&dir, "gh-rt.test"), None);
+        assert!(list_git_hosts(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_plaintext_map_migrates_to_keychain() {
+        crate::secrets::testutil::mock_store();
+        let dir = tmp_data_dir("migrate");
+        std::fs::write(
+            dir.join("git-hosts.json"),
+            r#"{ "gh-mig.test": "tok-old", "ghe-mig.test": "tok-ghe" }"#,
+        )
+        .unwrap();
+        // First read migrates: tokens resolve, file is rewritten as a name array.
+        assert_eq!(host_token(&dir, "gh-mig.test").as_deref(), Some("tok-old"));
+        assert_eq!(
+            list_git_hosts(&dir),
+            vec!["gh-mig.test".to_string(), "ghe-mig.test".to_string()]
+        );
+        let text = std::fs::read_to_string(dir.join("git-hosts.json")).unwrap();
+        assert!(!text.contains("tok-old") && !text.contains("tok-ghe"));
+        serde_json::from_str::<Vec<String>>(&text).expect("index is a plain array now");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_or_corrupt_git_hosts_file_is_empty() {
+        crate::secrets::testutil::mock_store();
+        let dir = tmp_data_dir("corrupt");
+        assert!(list_git_hosts(&dir).is_empty());
+        assert_eq!(host_token(&dir, "gh-none.test"), None);
+        std::fs::write(dir.join("git-hosts.json"), "not json").unwrap();
+        assert!(list_git_hosts(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
