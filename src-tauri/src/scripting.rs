@@ -693,4 +693,61 @@ mod tests {
         assert_eq!(req["__b"], 2);
         assert!(req["__a"].is_null());
     }
+
+    #[tokio::test]
+    async fn pick_collects_values_pick_one_first() {
+        let res = run(
+            "request.__ids = pick(request, 'items[*].id'); request.__first = pickOne(request, 'items[*].id'); request.__none = pickOne(request, 'nope');",
+            r#"{"request":{"headers":{},"body":"{\"items\":[{\"id\":10},{\"id\":20}]}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["__ids"], json!([10, 20]));
+        assert_eq!(req["__first"], 10);
+        assert!(req["__none"].is_null());
+    }
+
+    #[tokio::test]
+    async fn remove_at_deletes_from_arrays_and_objects() {
+        let res = run(
+            "request.__n = removeAt(request, 'items[?@.drop==true]'); removeAt(request, 'meta.secret');",
+            r#"{"request":{"headers":{},"body":"{\"items\":[{\"drop\":true},{\"drop\":false},{\"drop\":true}],\"meta\":{\"secret\":1,\"keep\":2}}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        let body: Value = serde_json::from_str(req["body"].as_str().unwrap()).unwrap();
+        assert_eq!(req["__n"], 2);
+        assert_eq!(body["items"].as_array().unwrap().len(), 1);
+        assert_eq!(body["items"][0]["drop"], false);
+        assert!(body["meta"].get("secret").is_none());
+        assert_eq!(body["meta"]["keep"], 2);
+    }
+
+    #[tokio::test]
+    async fn merge_at_deep_merges_each_node() {
+        let res = run(
+            "mergeAt(request, 'items[*]', { flags: { vip: true } });",
+            r#"{"request":{"headers":{},"body":"{\"items\":[{\"id\":1,\"flags\":{\"hot\":true}},{\"id\":2}]}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let body: Value =
+            serde_json::from_str(res.request.unwrap()["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["items"][0]["flags"]["hot"], true, "deep-merge не затирает соседей");
+        assert_eq!(body["items"][0]["flags"]["vip"], true);
+        assert_eq!(body["items"][1]["flags"]["vip"], true);
+    }
+
+    #[tokio::test]
+    async fn merge_at_zero_matches_is_error() {
+        let res = run(
+            "mergeAt(request, 'nope[*]', { a: 1 });",
+            r#"{"request":{"headers":{},"body":"{\"x\":1}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "error");
+        assert!(res.error.unwrap().contains("0 узлов"));
+    }
 }
