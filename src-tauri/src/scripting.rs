@@ -888,4 +888,45 @@ mod tests {
         .unwrap();
         assert_eq!(res.action, "respond", "err: {:?}", res.error);
     }
+
+    #[tokio::test]
+    async fn uuid_and_random_helpers() {
+        let res = run(
+            "request.__u = uuid(); request.__r = randomInt(3, 5); request.__f = randomFrom(['a']);",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        let u = req["__u"].as_str().unwrap();
+        assert_eq!(u.len(), 36);
+        assert_eq!(u.as_bytes()[14], b'4', "uuid v4: {u}");
+        let r = req["__r"].as_i64().unwrap();
+        assert!((3..=5).contains(&r));
+        assert_eq!(req["__f"], "a");
+    }
+
+    #[tokio::test]
+    async fn now_iso_formats_shift_and_tz() {
+        let res = run(
+            "request.__z = nowISO(); request.__p = nowISO('+2d', '+05:00'); request.__m = nowISO('-30m');",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        let z = req["__z"].as_str().unwrap();
+        assert!(z.ends_with('Z') && z.len() == 20, "UTC ISO: {z}");
+        let p = req["__p"].as_str().unwrap();
+        assert!(p.ends_with("+05:00"), "tz-суффикс: {p}");
+        let m = req["__m"].as_str().unwrap();
+        assert!(m.ends_with('Z'));
+    }
+
+    #[tokio::test]
+    async fn now_iso_rejects_bad_shift() {
+        let res = run("nowISO('через день');", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "error");
+        assert!(res.error.unwrap().contains("nowISO"));
+    }
 }

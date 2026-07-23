@@ -303,3 +303,37 @@ function delay(ms) {
   }
   __native_sleep(Math.max(0, Number(ms) || 0));
 }
+
+// ── Генерация данных ──
+function uuid() {
+  var hex = '0123456789abcdef', s = [];
+  for (var i = 0; i < 36; i++) s[i] = hex[Math.floor(Math.random() * 16)];
+  s[14] = '4';
+  s[19] = hex[(parseInt(s[19], 16) & 0x3) | 0x8];
+  s[8] = s[13] = s[18] = s[23] = '-';
+  return s.join('');
+}
+// Целое из [a, b] включительно.
+function randomInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+// nowISO('+2d', '+05:00') → "2026-07-25T…+05:00"; без tz — UTC c 'Z'.
+function nowISO(shift, tz) {
+  var ms = Date.now();
+  if (shift !== undefined && shift !== null) {
+    var m = String(shift).match(/^([+-])(\d+)([smhd])$/);
+    if (!m) throw new Error('nowISO: сдвиг вида "+2d", "-30m", "+1h", "+10s"');
+    var mult = { s: 1e3, m: 6e4, h: 36e5, d: 864e5 }[m[3]];
+    ms += (m[1] === '-' ? -1 : 1) * Number(m[2]) * mult;
+  }
+  var offMin = 0;
+  if (tz !== undefined && tz !== null) {
+    var t = String(tz).match(/^([+-])(\d\d):(\d\d)$/);
+    if (!t) throw new Error('nowISO: tz вида "+05:00"');
+    offMin = (t[1] === '-' ? -1 : 1) * (Number(t[2]) * 60 + Number(t[3]));
+  }
+  var d = new Date(ms + offMin * 6e4);
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  var iso = d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
+    'T' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+  return iso + (tz ? tz : 'Z');
+}
