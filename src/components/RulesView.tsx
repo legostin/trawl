@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { BookMarked, FileCode2, Plus, Save, Trash2 } from "lucide-react";
 import { useRules, type Phase, type Rule } from "../rules";
 import { useProjects } from "../projects";
@@ -26,6 +27,24 @@ const NEW_SCRIPT =
   "// retry example:\n" +
   "// while (response.status === 429) { sleep(1000); response = send(request); }\n" +
   "return response;\n";
+
+interface DryRunResult {
+  flowId: number;
+  action: string;
+  error: string | null;
+  trace: { rule?: string; op: string; path?: string; nodes?: number; status?: number; ms?: number }[];
+  before: { status?: number; body?: string } | null;
+  after: { status?: number; body?: string } | null;
+}
+
+function formatMaybeJson(s: string | undefined): string {
+  if (!s) return "—";
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s;
+  }
+}
 
 export function RulesView() {
   const { rules, selectedId, library, editingLibrary, load, select, editLibrary, upsert, remove, saveLibrary } =
@@ -154,6 +173,25 @@ function RuleEditor({
   const showToast = useToast((s) => s.show);
   const [saving, setSaving] = useState<{ kind: SnippetKind; code: string } | null>(null);
   const [saveName, setSaveName] = useState("");
+  const [dryRun, setDryRun] = useState<DryRunResult | null>(null);
+  const [dryRunBusy, setDryRunBusy] = useState(false);
+
+  const runDryRun = async () => {
+    setDryRunBusy(true);
+    try {
+      const r = await invoke<DryRunResult>("test_rule", {
+        script: draft.script,
+        phase: draft.phase,
+        pattern: draft.pattern,
+        flowId: null,
+      });
+      setDryRun(r);
+    } catch (e) {
+      showToast(String(e));
+    } finally {
+      setDryRunBusy(false);
+    }
+  };
 
   const confirmSave = async () => {
     const name = saveName.trim();
@@ -215,6 +253,9 @@ function RuleEditor({
           onCheckedChange={(v) => patch({ enabled: v })}
         />
         <div className="ml-auto flex items-center gap-1">
+          <Button size="sm" variant="outline" disabled={dryRunBusy} onClick={() => void runDryRun()}>
+            {dryRunBusy ? "Проверяю…" : "Проверить на трафике"}
+          </Button>
           <Button size="sm" onClick={() => void onSave(draft)}>
             <Save />
             Save
@@ -289,6 +330,47 @@ function RuleEditor({
           onInsert={(code) => editorApi.current?.insert(code)}
         />
       </div>
+      {dryRun && (
+        <div className="max-h-64 overflow-auto border-t border-border bg-card p-3 text-xs">
+          <div className="mb-2 flex items-center gap-3">
+            <span className="font-semibold">
+              Dry-run · flow #{dryRun.flowId} · {dryRun.action}
+            </span>
+            <button className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => setDryRun(null)}>
+              закрыть
+            </button>
+          </div>
+          {dryRun.error && <div className="mb-2 text-http-red">{dryRun.error}</div>}
+          {dryRun.trace.length > 0 && (
+            <div className="mb-2 font-mono text-muted-foreground">
+              {dryRun.trace.map((t, i) => (
+                <div key={i}>
+                  {t.op}
+                  {t.path ? `('${t.path}')` : ""}
+                  {t.nodes !== undefined ? ` → ${t.nodes} узлов` : ""}
+                  {t.status !== undefined ? ` → ${t.status} (${t.ms} ms)` : ""}
+                </div>
+              ))}
+            </div>
+          )}
+          {dryRun.after && (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="mb-1 font-semibold text-muted-foreground">До</div>
+                <pre className="overflow-auto whitespace-pre-wrap break-all rounded bg-secondary/40 p-2 font-mono">
+                  {formatMaybeJson(dryRun.before?.body)}
+                </pre>
+              </div>
+              <div>
+                <div className="mb-1 font-semibold text-muted-foreground">После</div>
+                <pre className="overflow-auto whitespace-pre-wrap break-all rounded bg-secondary/40 p-2 font-mono">
+                  {formatMaybeJson(dryRun.after?.body)}
+                </pre>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
