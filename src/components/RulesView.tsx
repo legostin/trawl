@@ -9,7 +9,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { LabeledSwitch, Switch } from "./ui/switch";
-import { STD_FUNCTIONS } from "../scripting/stdlib";
+import { STD_FN_DOCS, DOC_CATEGORIES, JSONPATH_CHEATSHEET } from "../scripting/stdlib-docs";
 import { useSnippets, type SnippetKind } from "../scripting/snippetStore";
 import { setLibraryTypes, setResponseDataType } from "../monaco-setup";
 import { SnippetMenu } from "./SnippetMenu";
@@ -293,6 +293,7 @@ function RuleEditor({
 
 function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: string) => Promise<void> }) {
   const [src, setSrc] = useState(initial);
+  const editorApi = useRef<ScriptEditorApi | null>(null);
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
@@ -309,24 +310,56 @@ function LibraryEditor({ initial, onSave }: { initial: string; onSave: (s: strin
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Standard library (built-in)
           </div>
-          <ul className="flex flex-col gap-2">
-            {STD_FUNCTIONS.map((fn) => (
-              <li key={fn.signature} className="rounded border border-border/60 bg-card px-2 py-1.5">
-                <div className="flex items-center gap-2">
-                  <code className="font-mono text-[11px] text-primary break-all">{fn.signature}</code>
-                  {fn.phase === "handler" && (
-                    <span className="shrink-0 rounded bg-secondary px-1 text-[9px] uppercase text-muted-foreground">
-                      handler
-                    </span>
-                  )}
+          {DOC_CATEGORIES.map((cat) => {
+            const fns = STD_FN_DOCS.filter((f) => f.category === cat);
+            if (fns.length === 0) return null;
+            return (
+              <div key={cat} className="mb-3">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {cat}
                 </div>
-                <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{fn.doc}</div>
+                <ul className="flex flex-col gap-2">
+                  {fns.map((fn) => (
+                    <li key={fn.name} className="rounded border border-border/60 bg-card px-2 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <code className="font-mono text-[11px] text-primary break-all">{fn.signature}</code>
+                        {fn.phase === "handler" && (
+                          <span className="shrink-0 rounded bg-secondary px-1 text-[9px] uppercase text-muted-foreground">
+                            handler
+                          </span>
+                        )}
+                        <button
+                          className="ml-auto shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
+                          title="Вставить пример в скрипт"
+                          onClick={() => editorApi.current?.insert(fn.example + "\n")}
+                        >
+                          вставить
+                        </button>
+                      </div>
+                      <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{fn.doc}</div>
+                      <code className="mt-0.5 block font-mono text-[10px] text-muted-foreground/80 break-all">
+                        {fn.example}
+                      </code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+          <div className="mb-1 mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            JSONPath — шпаргалка
+          </div>
+          <ul className="flex flex-col gap-1">
+            {JSONPATH_CHEATSHEET.map((r) => (
+              <li key={r.syntax} className="flex gap-2 text-[11px]">
+                <code className="shrink-0 font-mono text-primary">{r.syntax}</code>
+                <span className="text-muted-foreground">{r.doc}</span>
               </li>
             ))}
           </ul>
         </div>
         <div className="min-h-0">
-          <ScriptEditor value={src} onChange={setSrc} />
+          <ScriptEditor value={src} onChange={setSrc} apiRef={editorApi} />
         </div>
       </div>
     </div>
