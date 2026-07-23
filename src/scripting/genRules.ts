@@ -1,5 +1,4 @@
 import type { Rule } from "../rules";
-import { accessor } from "@/lib/analyze";
 
 /** env-ключ из пути поля: последний сегмент, безопасный идентификатор. */
 export function keyFromPath(path: string): string {
@@ -7,7 +6,12 @@ export function keyFromPath(path: string): string {
   return seg.replace(/\[\]/g, "").replace(/[^A-Za-z0-9_]/g, "_") || "value";
 }
 
-/** Response-правило: извлекает поле ответа в env проекта. */
+/** FieldInfo-путь (`items[].id`) → JSONPath (`items[*].id`). */
+export function toJsonPath(path: string): string {
+  return path.replace(/\[\]/g, "[*]");
+}
+
+/** Response-правило: извлекает поле ответа в env проекта (pickOne по JSONPath). */
 export function saveToEnvRule(pattern: string, path: string, projectId: string | null): Rule {
   const key = keyFromPath(path);
   return {
@@ -18,13 +22,12 @@ export function saveToEnvRule(pattern: string, path: string, projectId: string |
     phase: "response",
     projectId,
     script:
-      "const data = JSON.parse(response.body || '{}');\n" +
-      `const v = ${accessor(path)};\n` +
-      `if (v !== undefined) env['${key}'] = v;\n`,
+      `const v = pickOne(response, '${toJsonPath(path)}');\n` +
+      `if (v !== null) env['${key}'] = v;\n`,
   };
 }
 
-/** Response-правило: подменяет значение поля в ответе. */
+/** Response-правило: подменяет значение поля в ответе (patch по JSONPath). */
 export function overrideRule(
   pattern: string,
   path: string,
@@ -39,9 +42,6 @@ export function overrideRule(
     pattern,
     phase: "response",
     projectId,
-    script:
-      "const data = JSON.parse(response.body || '{}');\n" +
-      `${accessor(path)} = ${literal};\n` +
-      "response.body = JSON.stringify(data);\n",
+    script: `patch(response, '${toJsonPath(path)}', ${literal});\n`,
   };
 }

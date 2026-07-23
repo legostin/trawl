@@ -23,9 +23,9 @@ import { cn } from "@/lib/utils";
 
 const NEW_SCRIPT =
   "// handler: you perform the request via send() and return the response.\n" +
-  "let response = send(request);\n" +
-  "// retry example:\n" +
-  "// while (response.status === 429) { sleep(1000); response = send(request); }\n" +
+  "const response = send(request);\n" +
+  "// edit the JSON body by JSONPath — patch parses & re-serializes for you:\n" +
+  "// patch(response, 'items[*].price', 0);\n" +
   "return response;\n";
 
 interface DryRunResult {

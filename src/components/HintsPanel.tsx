@@ -4,8 +4,8 @@ import { useFlows } from "../store";
 import { useRules } from "../rules";
 import { useProjects } from "../projects";
 import { useToast } from "../toast";
-import { accessor, type FieldInfo } from "@/lib/analyze";
-import { saveToEnvRule, overrideRule } from "../scripting/genRules";
+import { type FieldInfo } from "@/lib/analyze";
+import { saveToEnvRule, overrideRule, toJsonPath } from "../scripting/genRules";
 import { cn } from "@/lib/utils";
 
 export function HintsPanel({
@@ -70,7 +70,7 @@ export function HintsPanel({
             <FieldRow
               key={f.path}
               field={f}
-              onInsert={() => onInsert("response." + accessor(f.path))}
+              onInsert={() => onInsert(`pickOne(response, '${toJsonPath(f.path)}')`)}
               onEnv={() => void createRule(saveToEnvRule(pattern, f.path, activeId ?? null))}
               onOverride={() =>
                 void createRule(overrideRule(pattern, f.path, f.example, activeId ?? null))
@@ -117,7 +117,7 @@ function FieldRow({
           {field.type === "array" ? "[…]" : (field.example ?? "")}
         </span>
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
-          <IconBtn title="Insert accessor at cursor" onClick={onInsert}>
+          <IconBtn title="Insert pickOne(response, …) at cursor" onClick={onInsert}>
             <Plus className="size-3" />
           </IconBtn>
           <IconBtn title="Save to project env" onClick={onEnv}>
