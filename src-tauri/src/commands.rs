@@ -537,6 +537,70 @@ pub async fn send_request(
         .map_err(|e| e.to_string())
 }
 
+// ── Dry-run (test_rule / test_path) ──
+
+/// Dry-run правила на захваченном flow (или последнем, совпавшем с pattern).
+#[tauri::command]
+pub fn test_rule(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    script: String,
+    phase: String,
+    pattern: String,
+    flow_id: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let env = {
+        let global = state.global_env.read().unwrap();
+        let guard = state.active_project.read().unwrap();
+        crate::projects::merged_env_object(&global, guard.as_ref())
+    };
+    let flow = match flow_id {
+        Some(id) => state.store.get(id).ok_or_else(|| format!("flow {id} не найден в памяти"))?,
+        None => state
+            .store
+            .all()
+            .into_iter()
+            .filter(|f| f.response.is_some())
+            .filter(|f| {
+                crate::rules::glob_match_env(&pattern, &format!("{}{}", f.url.host, f.url.path), &env)
+            })
+            .max_by_key(|f| f.timestamp)
+            .ok_or_else(|| format!("нет захваченного flow под паттерн «{pattern}» — сделайте запрос через прокси"))?,
+    };
+    let prelude = crate::rules::load_library(&rules_dir(&app)?).unwrap_or_default();
+    Ok(crate::dryrun::run(&flow, &script, &phase, &prelude, env, std::time::Duration::from_secs(10)))
+}
+
+/// Счётчик совпадений пути по последнему захваченному flow под pattern.
+#[tauri::command]
+pub fn test_path(
+    state: State<'_, AppState>,
+    path: String,
+    pattern: String,
+) -> Result<Option<serde_json::Value>, String> {
+    if let Some(err) = crate::jsonpath::validate(&path) {
+        return Err(err);
+    }
+    let env = {
+        let global = state.global_env.read().unwrap();
+        let guard = state.active_project.read().unwrap();
+        crate::projects::merged_env_object(&global, guard.as_ref())
+    };
+    let flow = state
+        .store
+        .all()
+        .into_iter()
+        .filter(|f| f.response.as_ref().map(|r| r.body_is_text).unwrap_or(false))
+        .filter(|f| crate::rules::glob_match_env(&pattern, &format!("{}{}", f.url.host, f.url.path), &env))
+        .max_by_key(|f| f.timestamp);
+    let Some(f) = flow else { return Ok(None) };
+    let body = String::from_utf8_lossy(&f.response.as_ref().unwrap().body).to_string();
+    let res: serde_json::Value =
+        serde_json::from_str(&crate::jsonpath::locate(&body, &path)).unwrap_or_default();
+    let nodes = res.get("locations").and_then(|l| l.as_array()).map(|a| a.len());
+    Ok(Some(serde_json::json!({ "flowId": f.id, "nodes": nodes, "error": res.get("error") })))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::proxy::{BpPhase, BreakpointRegistry, Resolution};
