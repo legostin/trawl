@@ -885,7 +885,11 @@ impl HttpHandler for CaptureHandler {
             }
             // ошибка handler
             flow.state = FlowState::Error;
-            flow.error = Some(res.error.unwrap_or_else(|| "handler error".into()));
+            flow.error = Some(format!(
+                "rule \"{}\": {}",
+                hrule.name,
+                res.error.unwrap_or_else(|| "handler error".into())
+            ));
             self.upsert_flow(preinserted, &flow);
             (self.emit)("flow-added", &flow);
             self.persist(&flow);
@@ -978,7 +982,11 @@ impl HttpHandler for CaptureHandler {
                             "rule-error", &rule.name, "request", id, &req_method, &url.host, &url.path,
                             Some(res.error.as_deref().unwrap_or("unknown error")),
                         );
-                        script_error = res.error;
+                        script_error = Some(format!(
+                            "rule \"{}\": {}",
+                            rule.name,
+                            res.error.unwrap_or_else(|| "unknown error".into())
+                        ));
                     }
                 }
             }
@@ -1212,7 +1220,11 @@ impl HttpHandler for CaptureHandler {
                             "rule-error", &rule.name, "response", id, &flow_method, &host_str, &path_str,
                             Some(res.error.as_deref().unwrap_or("unknown error")),
                         );
-                        script_error = res.error;
+                        script_error = Some(format!(
+                            "rule \"{}\": {}",
+                            rule.name,
+                            res.error.unwrap_or_else(|| "unknown error".into())
+                        ));
                     }
                 }
             }
