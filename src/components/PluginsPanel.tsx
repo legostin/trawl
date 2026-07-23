@@ -11,6 +11,7 @@ import { Input } from "./ui/input";
 export function PluginsPanel() {
   const installed = usePlugins((s) => s.installed);
   const updates = usePlugins((s) => s.updates);
+  const blockedUpdates = usePlugins((s) => s.blockedUpdates);
   const load = usePlugins((s) => s.load);
   const install = usePlugins((s) => s.install);
   const remove = usePlugins((s) => s.remove);
@@ -58,7 +59,17 @@ export function PluginsPanel() {
     try {
       await checkUpdates();
       const n = Object.keys(usePlugins.getState().updates).length;
-      show(n ? `${n} update${n > 1 ? "s" : ""} available` : "All plugins up to date");
+      const b = Object.keys(usePlugins.getState().blockedUpdates).length;
+      show(
+        n || b
+          ? [
+              n ? `${n} update${n > 1 ? "s" : ""} available` : null,
+              b ? `${b} need${b > 1 ? "" : "s"} a newer app` : null,
+            ]
+              .filter(Boolean)
+              .join(", ")
+          : "All plugins up to date",
+      );
     } finally {
       setChecking(false);
     }
@@ -221,6 +232,15 @@ export function PluginsPanel() {
                   <ArrowUpCircle />
                   Update to v{updates[p.id]}
                 </Button>
+              )}
+              {blockedUpdates[p.id] && (
+                <span
+                  className="flex shrink-0 items-center gap-1 text-xs text-http-amber"
+                  title={`v${blockedUpdates[p.id].version} requires plugin API ${blockedUpdates[p.id].apiVersion} — this app is older. Update the app to get it.`}
+                >
+                  <AlertTriangle className="size-3.5" />
+                  v{blockedUpdates[p.id].version} needs app update
+                </span>
               )}
               <Button
                 variant="ghost"

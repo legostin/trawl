@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { load as loadYaml } from "js-yaml";
 import { useLayout } from "./layout";
 import { bus } from "./plugins/bus";
-import type { FlowAction, RegisteredMode } from "./plugins/api";
+import { HOST_API_VERSION, type FlowAction, type RegisteredMode } from "./plugins/api";
+
+export { HOST_API_VERSION };
 
 /** An entry in the public plugin catalog (`plugins.yaml`). */
 export interface CatalogEntry {
@@ -46,6 +48,9 @@ export interface Plugin {
   host: string;
   ref: string;
   enabled: boolean;
+  /** Plugin API version the installed bundle needs (from its manifest; empty or
+   *  missing for plugins installed before the registry recorded it). */
+  apiVersion?: string;
 }
 
 export interface PluginDep {
@@ -69,6 +74,12 @@ export interface PluginManifest {
   dependencies?: PluginDep[];
 }
 
+/** Whether a plugin's required API version is satisfied by this app. Missing or
+ *  empty means the plugin predates the gate and is assumed compatible. */
+export function apiCompatible(apiVersion: string | undefined): boolean {
+  return !apiVersion || cmpVersions(apiVersion, HOST_API_VERSION) <= 0;
+}
+
 /** Compare dotted numeric versions. Returns >0 if a is newer than b. */
 export function cmpVersions(a: string, b: string): number {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
@@ -89,6 +100,8 @@ interface PluginsState {
   flowActions: FlowAction[];
   /** pluginId → newer version available in its repo (from the last check). */
   updates: Record<string, string>;
+  /** pluginId → newer version that this app can't run yet (needs a newer host API). */
+  blockedUpdates: Record<string, { version: string; apiVersion: string }>;
   load: () => Promise<void>;
   fetchManifest: (repo: string, reference?: string, host?: string) => Promise<PluginManifest>;
   install: (repo: string, reference?: string) => Promise<void>;
@@ -110,12 +123,17 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   modes: [],
   flowActions: [],
   updates: {},
+  blockedUpdates: {},
   load: async () => set({ installed: await invoke<Plugin[]>("list_plugins") }),
   fetchManifest: (repo, reference, host) =>
     invoke<PluginManifest>("fetch_plugin_manifest", { repo, reference, host }),
   install: async (repo, reference) => {
     const before = new Set(get().installed.map((p) => p.id));
-    const installed = await invoke<Plugin[]>("install_plugin", { repo, reference });
+    const installed = await invoke<Plugin[]>("install_plugin", {
+      repo,
+      reference,
+      hostApiVersion: HOST_API_VERSION,
+    });
     set({ installed });
     // A manifest with dependencies can install several new plugins at once.
     for (const added of installed.filter((p) => !before.has(p.id))) {
@@ -126,8 +144,10 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     const installed = await invoke<Plugin[]>("remove_plugin", { id });
     const updates = { ...get().updates };
     delete updates[id];
+    const blockedUpdates = { ...get().blockedUpdates };
+    delete blockedUpdates[id];
     leaveModeIfActive(id);
-    set({ installed, updates, modes: get().modes.filter((m) => m.id !== id) });
+    set({ installed, updates, blockedUpdates, modes: get().modes.filter((m) => m.id !== id) });
     const { clearPluginTools } = await import("./plugins/mcpBridge");
     await clearPluginTools(id);
     bus.emit("plugin:removed", { id });
@@ -158,6 +178,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   },
   checkUpdates: async () => {
     const found: Record<string, string> = {};
+    const blocked: Record<string, { version: string; apiVersion: string }> = {};
     await Promise.all(
       get().installed.map(async (p) => {
         try {
@@ -166,13 +187,15 @@ export const usePlugins = create<PluginsState>((set, get) => ({
             reference: p.ref,
             host: p.host,
           });
-          if (cmpVersions(m.version, p.version) > 0) found[p.id] = m.version;
+          if (cmpVersions(m.version, p.version) <= 0) return;
+          if (apiCompatible(m.apiVersion)) found[p.id] = m.version;
+          else blocked[p.id] = { version: m.version, apiVersion: m.apiVersion };
         } catch {
           /* offline / manifest gone — skip */
         }
       }),
     );
-    set({ updates: found });
+    set({ updates: found, blockedUpdates: blocked });
   },
   update: async (id) => {
     const p = get().installed.find((x) => x.id === id);
@@ -181,6 +204,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
       repo: p.repo,
       reference: p.ref,
       host: p.host,
+      hostApiVersion: HOST_API_VERSION,
     });
     const updates = { ...get().updates };
     delete updates[id];
