@@ -232,6 +232,25 @@ fn api_content_url(host: &str, repo: &str, git_ref: &str, file: &str) -> String 
     )
 }
 
+/// URL to fetch one file's raw content from, picked by auth state.
+///
+/// Authenticated fetches use the Contents API (fresh, no CDN cache). Without a
+/// token, github.com goes through raw.githubusercontent.com instead: anonymous
+/// api.github.com calls share a 60 req/h per-IP quota and 403 once it's spent
+/// (guaranteed on office NAT/VPN), while the raw host is uncapped — at the
+/// cost of Fastly's ~5 min cache. GHE keeps the API either way.
+fn content_url(host: &str, repo: &str, git_ref: &str, file: &str, authed: bool) -> String {
+    if !authed && host == "github.com" {
+        format!(
+            "https://raw.githubusercontent.com/{repo}/{}/{}",
+            encode_seg(git_ref),
+            encode_path(file.trim_start_matches('/'))
+        )
+    } else {
+        api_content_url(host, repo, git_ref, file)
+    }
+}
+
 fn http_get_text(url: &str, token: Option<&str>, raw: bool) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("trawl-plugin-installer")
@@ -244,7 +263,19 @@ fn http_get_text(url: &str, token: Option<&str>, raw: bool) -> Result<String, St
     }
     let resp = req.send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {} for {url}", resp.status()));
+        let status = resp.status();
+        // GitHub explains failures ("API rate limit exceeded…") in a JSON
+        // `message`; surface it instead of a bare status code.
+        let body = resp.text().unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::to_string))
+            .unwrap_or_else(|| body.chars().take(200).collect::<String>().trim().to_string());
+        return Err(if msg.is_empty() {
+            format!("HTTP {status} for {url}")
+        } else {
+            format!("HTTP {status} for {url}: {msg}")
+        });
     }
     resp.text().map_err(|e| e.to_string())
 }
@@ -286,7 +317,11 @@ fn fetch_manifest_blocking(
     git_ref: &str,
     token: Option<&str>,
 ) -> Result<PluginManifest, String> {
-    let text = http_get_text(&api_content_url(host, repo, git_ref, "trawl-plugin.json"), token, true)?;
+    let text = http_get_text(
+        &content_url(host, repo, git_ref, "trawl-plugin.json", token.is_some()),
+        token,
+        true,
+    )?;
     serde_json::from_str::<PluginManifest>(&text).map_err(|e| format!("invalid manifest: {e}"))
 }
 
@@ -368,7 +403,7 @@ fn install_tree(
     let display = if manifest.name.is_empty() { &manifest.id } else { &manifest.name };
     check_api_version(display, &manifest.api_version, host_api_version)?;
     let bundle = http_get_text(
-        &api_content_url(host, repo, git_ref, &manifest.entry),
+        &content_url(host, repo, git_ref, &manifest.entry, token.is_some()),
         token.as_deref(),
         true,
     )?;
@@ -590,6 +625,55 @@ mod tests {
             api_url("github.example.org", "o/r", "branches"),
             "https://github.example.org/api/v3/repos/o/r/branches"
         );
+    }
+
+    #[test]
+    fn unauthenticated_github_fetch_uses_raw_host() {
+        // No token → raw.githubusercontent.com, which has no 60 req/h API quota.
+        assert_eq!(
+            content_url("github.com", "o/r", "main", "trawl-plugin.json", false),
+            "https://raw.githubusercontent.com/o/r/main/trawl-plugin.json"
+        );
+        assert_eq!(
+            content_url("github.com", "o/r", "feat/x", "dist/plugin.js", false),
+            "https://raw.githubusercontent.com/o/r/feat%2Fx/dist/plugin.js"
+        );
+    }
+
+    #[test]
+    fn authenticated_or_enterprise_fetch_uses_contents_api() {
+        assert_eq!(
+            content_url("github.com", "o/r", "main", "trawl-plugin.json", true),
+            "https://api.github.com/repos/o/r/contents/trawl-plugin.json?ref=main"
+        );
+        // GHE keeps the API even without a token: it has no shared public
+        // rate-limit problem and raw paths differ per instance config.
+        assert_eq!(
+            content_url("github.example.org", "o/r", "main", "trawl-plugin.json", false),
+            "https://github.example.org/api/v3/repos/o/r/contents/trawl-plugin.json?ref=main"
+        );
+    }
+
+    #[test]
+    fn http_error_includes_response_body_message() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf);
+            let body = r#"{"message":"API rate limit exceeded for 1.2.3.4.","documentation_url":"x"}"#;
+            let resp = format!(
+                "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        });
+        let err = http_get_text(&format!("http://{addr}/x"), None, true).unwrap_err();
+        assert!(err.contains("403"), "status kept: {err}");
+        assert!(err.contains("API rate limit exceeded"), "body message surfaced: {err}");
     }
 
     #[test]
