@@ -37,3 +37,24 @@ describe("flows store — breakpoints", () => {
     });
   });
 });
+
+describe("flows store — ensureProxy", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useFlows.setState({ running: false, proxyAddr: null });
+  });
+
+  it("starts the proxy and marks it running when stopped", async () => {
+    invoke.mockResolvedValue("0.0.0.0:8729");
+    await useFlows.getState().ensureProxy();
+    expect(invoke).toHaveBeenCalledWith("start_proxy", { port: 8729 });
+    expect(useFlows.getState().running).toBe(true);
+    expect(useFlows.getState().proxyAddr).toBe("0.0.0.0:8729");
+  });
+
+  it("does nothing when the proxy is already running", async () => {
+    useFlows.setState({ running: true, proxyAddr: "0.0.0.0:8729" });
+    await useFlows.getState().ensureProxy();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
