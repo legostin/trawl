@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "./ui/button";
+import { requestKeychainConsent } from "@/keychainConsent";
 import { Input } from "./ui/input";
 import { deleteGitHostToken, listGitHosts, normalizeHost, setGitHostToken } from "@/gitHosts";
 
@@ -23,6 +24,7 @@ export function GitHostsSection() {
 
   const add = async () => {
     if (!token.trim()) return;
+    if (!(await requestKeychainConsent())) return;
     try {
       await setGitHostToken(normalizeHost(host), token);
       setHost("");
