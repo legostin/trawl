@@ -143,6 +143,20 @@ impl CaptureHandler {
         }
         (self.app_event)(event, serde_json::Value::Object(p));
     }
+
+    /// Дополняет каждый элемент трассы именем правила.
+    fn tag_trace(res: &crate::scripting::ScriptResult, rule_name: &str) -> Vec<serde_json::Value> {
+        res.trace
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                if let Some(o) = t.as_object_mut() {
+                    o.insert("rule".into(), serde_json::Value::String(rule_name.to_string()));
+                }
+                t
+            })
+            .collect()
+    }
 }
 
 fn headers_to_json(headers: &[(String, String)]) -> Value {
@@ -810,6 +824,7 @@ impl HttpHandler for CaptureHandler {
             flow.timestamp = unix_ms();
             flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
             flow.applied_rules = vec![hrule.name.clone()];
+            flow.rule_trace = Self::tag_trace(&res, &hrule.name);
             self.current_id = Some(id);
 
             if res.action == "respond" {
@@ -884,6 +899,7 @@ impl HttpHandler for CaptureHandler {
         let mut work_headers = req_headers.clone();
         let mut work_body = req_body_text.clone();
         let mut applied: Vec<String> = Vec::new();
+        let mut rule_trace: Vec<serde_json::Value> = Vec::new();
         let mut directive = Directive::Continue;
         let mut script_error: Option<String> = None;
         let mut env = self.active_env();
@@ -904,6 +920,7 @@ impl HttpHandler for CaptureHandler {
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
                 self.emit_notifications(&res, &rule.name, id);
+                rule_trace.extend(Self::tag_trace(&res, &rule.name));
                 if let Some(e) = res.env.clone() {
                     env = e;
                 }
@@ -978,6 +995,7 @@ impl HttpHandler for CaptureHandler {
         flow.timestamp = unix_ms();
         flow.timings.sent = Some(self.started.elapsed().as_millis() as u64);
         flow.applied_rules = applied;
+        flow.rule_trace = rule_trace;
         flow.error = script_error;
         self.upsert_flow(preinserted, &flow);
         (self.emit)(if preinserted { "flow-updated" } else { "flow-added" }, &flow);
@@ -1130,6 +1148,7 @@ impl HttpHandler for CaptureHandler {
         let mut work_headers = orig_headers.clone();
         let mut work_body = text_of(&display_body, is_text);
         let mut applied: Vec<String> = Vec::new();
+        let mut rule_trace: Vec<serde_json::Value> = Vec::new();
         let mut script_error: Option<String> = None;
         let mut rule_break = false;
         let mut env = self.active_env();
@@ -1148,6 +1167,7 @@ impl HttpHandler for CaptureHandler {
                 .to_string();
                 let res = self.scripts.run(prelude.clone(), rule.script.clone(), input).await;
                 self.emit_notifications(&res, &rule.name, id);
+                rule_trace.extend(Self::tag_trace(&res, &rule.name));
                 if let Some(e) = res.env.clone() {
                     env = e;
                 }
@@ -1294,6 +1314,7 @@ impl HttpHandler for CaptureHandler {
                     f.applied_rules.push(n.clone());
                 }
             }
+            f.rule_trace.extend(rule_trace.clone());
             if let Some(e) = &script_error {
                 f.error = Some(e.clone());
             }
@@ -1775,6 +1796,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let flow = store.all().into_iter().next().unwrap();
         assert!(flow.applied_rules.contains(&"add-debug".to_string()));
+        assert!(
+            flow.rule_trace.iter().all(|t| t["rule"].is_string()),
+            "trace элементы тегированы именем правила: {:?}", flow.rule_trace
+        );
 
         handle.stop();
         let _ = std::fs::remove_dir_all(&ca_dir);

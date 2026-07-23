@@ -338,6 +338,7 @@ pub fn flow_to_json(flow: &Flow, max_body: usize) -> Value {
         "state": serde_json::to_value(&flow.state).unwrap_or(Value::Null),
         "error": flow.error,
         "appliedRules": flow.applied_rules,
+        "ruleTrace": flow.rule_trace,
         "pausedPhase": flow.paused_phase,
         "timings": serde_json::to_value(&flow.timings).unwrap_or(Value::Null),
         "request": body_json(&flow.request.headers, &flow.request.body, flow.request.body_is_text, max_body, None),

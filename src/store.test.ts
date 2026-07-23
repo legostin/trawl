@@ -13,7 +13,7 @@ const flow = (id: number, patch: Partial<Flow> = {}): Flow => ({
   request: { headers: [], body: "", bodyIsText: true },
   response: null,
   timings: { sent: null, ttfb: null, done: null },
-  state: "pending", error: null, appliedRules: [], ...patch,
+  state: "pending", error: null, appliedRules: [], ruleTrace: [], ...patch,
 });
 
 describe("flows store — breakpoints", () => {

@@ -14,6 +14,7 @@ function make(id: number, host: string, path: string, method = "GET", status = 2
     state: "completed",
     error: null,
     appliedRules: [],
+    ruleTrace: [],
   };
 }
 

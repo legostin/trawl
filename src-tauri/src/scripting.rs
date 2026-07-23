@@ -30,6 +30,9 @@ pub struct ScriptResult {
     /// notify(...) calls collected during the run.
     #[serde(default)]
     pub notifications: Vec<serde_json::Value>,
+    /// Трасса операций stdlib/send за прогон правила.
+    #[serde(default)]
+    pub trace: Vec<serde_json::Value>,
 }
 
 impl ScriptResult {
@@ -43,6 +46,7 @@ impl ScriptResult {
             error: Some(msg.into()),
             env: None,
             notifications: Vec::new(),
+            trace: Vec::new(),
         }
     }
 }
@@ -149,6 +153,7 @@ fn build_source(prelude: &str, script: &str) -> String {
     ctx.abort = function(reason) {{ ctx.__action = "abort"; ctx.__reason = reason || "aborted"; }};
     ctx.breakpoint = function() {{ ctx.__action = "breakpoint"; }};
     ctx.__notifications = [];
+    ctx.__trace = [];
     if (!ctx.env) ctx.env = {{}};
     const request = ctx.request;
     const response = ctx.response;
@@ -164,10 +169,11 @@ fn build_source(prelude: &str, script: &str) -> String {
       mock: ctx.__mock || null,
       reason: ctx.__reason || null,
       env: ctx.env,
-      notifications: ctx.__notifications
+      notifications: ctx.__notifications,
+      trace: ctx.__trace
     }});
   }} catch (e) {{
-    return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
+    return JSON.stringify({{ action: "error", error: String((e && e.message) || e), trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
 "#
@@ -253,18 +259,19 @@ fn build_handler_source(prelude: &str, script: &str) -> String {
     const ctx = JSON.parse(__input);
     if (!ctx.env) ctx.env = {{}};
     ctx.__notifications = [];
+    ctx.__trace = [];
     const request = ctx.request;
     const env = ctx.env;
-    function send(req) {{ return JSON.parse(__native_send(JSON.stringify(req || request))); }}
+    function send(req) {{ var __t0 = Date.now(); var __r = JSON.parse(__native_send(JSON.stringify(req || request))); ctx.__trace.push({{ op: "send", status: __r.status, ms: Date.now() - __t0 }}); return __r; }}
     function sleep(ms) {{ __native_sleep(ms); }}
     {prelude}
     const __out = (function() {{ {script} }})();
     if (__out === undefined || __out === null) {{
-      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env, notifications: ctx.__notifications }});
+      return JSON.stringify({{ action: "error", error: "handler не вернул ответ (нужен return response)", env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
     }}
-    return JSON.stringify({{ action: "respond", response: __out, env: ctx.env, notifications: ctx.__notifications }});
+    return JSON.stringify({{ action: "respond", response: __out, env: ctx.env, notifications: ctx.__notifications, trace: ctx.__trace }});
   }} catch (e) {{
-    return JSON.stringify({{ action: "error", error: String((e && e.message) || e) }});
+    return JSON.stringify({{ action: "error", error: String((e && e.message) || e), trace: (typeof ctx !== "undefined" && ctx.__trace) || [] }});
   }}
 }})()
 "#
@@ -405,6 +412,47 @@ mod tests {
         assert_eq!(res.response.unwrap()["body"], "tok");
         assert_eq!(res.notifications.len(), 1);
         assert_eq!(res.notifications[0]["text"], "from handler");
+    }
+
+    #[tokio::test]
+    async fn trace_records_patch_ops() {
+        let res = run(
+            "patch(request, 'a', 1); tryPatch(request, 'zzz', 2);",
+            r#"{"request":{"headers":{},"body":"{\"a\":0}"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.trace.len(), 2);
+        assert_eq!(res.trace[0]["op"], "patch");
+        assert_eq!(res.trace[0]["nodes"], 1);
+        assert_eq!(res.trace[1]["op"], "tryPatch");
+        assert_eq!(res.trace[1]["nodes"], 0);
+    }
+
+    #[tokio::test]
+    async fn handler_trace_records_send() {
+        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = upstream.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut b = [0u8; 1024];
+            let _ = s.read(&mut b).await;
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+        });
+        let input = format!(
+            r#"{{"request":{{"method":"GET","url":"http://{addr}/","headers":{{}},"body":""}}}}"#
+        );
+        let res = tokio::task::spawn_blocking(move || {
+            execute_handler("", "return send(request);", &input, Duration::from_secs(5), Arc::new(|_: &str| None))
+        })
+        .await
+        .unwrap();
+        assert_eq!(res.action, "respond", "err: {:?}", res.error);
+        assert_eq!(res.trace.len(), 1);
+        assert_eq!(res.trace[0]["op"], "send");
+        assert_eq!(res.trace[0]["status"], 200);
+        assert!(res.trace[0]["ms"].is_number());
     }
 
     #[tokio::test]
