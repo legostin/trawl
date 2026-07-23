@@ -50,6 +50,8 @@ interface FlowsState {
   startProxy: (port: number) => Promise<string>;
   stopProxy: () => Promise<void>;
   toggleProxy: () => Promise<void>;
+  /** Start the proxy if it isn't running (used by plugin sends with viaProxy). */
+  ensureProxy: () => Promise<void>;
 }
 
 export const useFlows = create<FlowsState>((set, get) => ({
@@ -109,5 +111,11 @@ export const useFlows = create<FlowsState>((set, get) => ({
       const addr = await startProxy(8729);
       set({ running: true, proxyAddr: addr });
     }
+  },
+  ensureProxy: async () => {
+    const { running, startProxy } = get();
+    if (running) return;
+    const addr = await startProxy(8729);
+    set({ running: true, proxyAddr: addr });
   },
 }));
