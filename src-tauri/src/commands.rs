@@ -22,6 +22,8 @@ pub struct AppState {
     pub library: Arc<RwLock<String>>,
     /// Активный проект (None = пишем всё). Разделяется с прокси-хендлером.
     pub active_project: Arc<RwLock<Option<Project>>>,
+    /// Глобальные env-переменные (вне проектов). Разделяются с прокси-хендлером.
+    pub global_env: crate::proxy::SharedGlobalEnv,
     pub scripts: crate::scripting::ScriptClient,
     /// Persistent flow DB (SQLite). Initialized once in the Tauri setup hook.
     pub db: OnceLock<DbHandle>,
@@ -45,6 +47,7 @@ impl AppState {
             rules: Arc::new(RwLock::new(Vec::new())),
             library: Arc::new(RwLock::new(String::new())),
             active_project: Arc::new(RwLock::new(None)),
+            global_env: Arc::new(RwLock::new(Vec::new())),
             scripts: crate::scripting::spawn_engine(
                 std::time::Duration::from_secs(1),
                 Arc::new(|name: &str| crate::secrets::get(name).ok().flatten()),
@@ -128,6 +131,7 @@ pub async fn start_proxy(
     *state.breakpoint_timeout.write().unwrap() = bp_settings.timeout_secs;
     *state.pause_others.write().unwrap() = bp_settings.pause_others;
     let pfile = projects::load_projects(&data_dir(&app)?).map_err(|e| e.to_string())?;
+    *state.global_env.write().unwrap() = pfile.global_env.clone();
     *state.active_project.write().unwrap() = pfile
         .active_id
         .and_then(|i| pfile.projects.into_iter().find(|p| p.id == i));
@@ -143,6 +147,7 @@ pub async fn start_proxy(
         state.rules.clone(),
         state.library.clone(),
         state.active_project.clone(),
+        state.global_env.clone(),
         data_dir(&app)?,
         state.db.get().cloned(),
         state.breakpoints.clone(),
@@ -449,6 +454,18 @@ pub fn set_active_project(
 #[tauri::command]
 pub fn get_active_project(state: State<'_, AppState>) -> Option<Project> {
     state.active_project.read().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn save_global_env(
+    app: AppHandle,
+    env: Vec<projects::EnvVar>,
+    state: State<'_, AppState>,
+) -> Result<ProjectsFile, String> {
+    let dir = data_dir(&app)?;
+    projects::update_global_env(&dir, env.clone()).map_err(|e| e.to_string())?;
+    *state.global_env.write().unwrap() = env;
+    projects::load_projects(&dir).map_err(|e| e.to_string())
 }
 
 // ── Persistent flow DB (analytics) ──

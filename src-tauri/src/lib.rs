@@ -71,6 +71,7 @@ pub fn run() {
             commands::delete_project,
             commands::set_active_project,
             commands::get_active_project,
+            commands::save_global_env,
             commands::query_flows,
             commands::flow_count,
             commands::aggregate_flows,
