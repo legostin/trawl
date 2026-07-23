@@ -55,6 +55,7 @@ pub fn run() {
             commands::list_rules,
             commands::save_rule,
             commands::delete_rule,
+            commands::validate_jsonpath,
             commands::list_breakpoints,
             commands::save_breakpoint,
             commands::delete_breakpoint,

@@ -368,6 +368,50 @@ pub fn execute_handler(
     })
 }
 
+/// Литеральные JSONPath-аргументы path-функций (2-й аргумент — строка в '…' или "…").
+/// Список функций синхронизирован с src/scripting/pathContext.ts.
+pub fn extract_path_literals(script: &str) -> Vec<String> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r#"\b(?:patch|tryPatch|pick|pickOne|removeAt|mergeAt)\s*\(\s*[^,()'"]+,\s*(?:'([^'\\]*(?:\\.[^'\\]*)*)'|"([^"\\]*(?:\\.[^"\\]*)*)")"#,
+        )
+        .expect("path literal regex")
+    });
+    re.captures_iter(script)
+        .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
+/// Проверка правила перед сохранением: синтаксис JS + литеральные JSONPath.
+/// `return` в скрипте валиден (handler-фаза), поэтому оборачиваем в функцию.
+pub fn validate_rule_script(script: &str) -> Result<(), String> {
+    let rt = Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context: {e}"))?;
+    ctx.with(|c| {
+        let src = format!("(function() {{\n{script}\n}})");
+        match c.eval::<rquickjs::Value, _>(src) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                let caught = c.catch();
+                let msg = match caught.into_exception() {
+                    Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
+                    None => "синтаксическая ошибка".to_string(),
+                };
+                Err(format!("JS: {msg}"))
+            }
+        }
+    })?;
+    for path in extract_path_literals(script) {
+        if let Some(err) = crate::jsonpath::validate(&path) {
+            return Err(format!("JSONPath \"{path}\": {err}"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,5 +1084,34 @@ mod tests {
         .await;
         assert_eq!(res.action, "continue", "err: {:?}", res.error);
         assert_eq!(res.request.unwrap()["__g"]["odd"], json!([1, 3]));
+    }
+
+    #[test]
+    fn extract_path_literals_finds_second_string_arg() {
+        let script = r#"
+            patch(res, 'items[*].price', 0);
+            tryPatch(res, "a.b", 1);
+            pick(res, 'x');
+            other('not.a.path');
+            patch(res, dynamicPath, 1); // не литерал — пропускаем
+        "#;
+        assert_eq!(extract_path_literals(script), vec!["items[*].price", "a.b", "x"]);
+    }
+
+    #[test]
+    fn validate_rule_script_ok() {
+        assert!(validate_rule_script("const r = send(request);\npatch(r, 'items[*].x', 1);\nreturn r;").is_ok());
+    }
+
+    #[test]
+    fn validate_rule_script_js_syntax_error() {
+        let err = validate_rule_script("this is not ) valid").unwrap_err();
+        assert!(err.contains("JS"), "err: {err}");
+    }
+
+    #[test]
+    fn validate_rule_script_bad_jsonpath() {
+        let err = validate_rule_script("patch(request, '$[', 1);").unwrap_err();
+        assert!(err.contains("JSONPath"), "err: {err}");
     }
 }
