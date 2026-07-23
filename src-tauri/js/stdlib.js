@@ -217,3 +217,55 @@ function mergeAt(target, path, obj) {
   __traceOp('mergeAt', path, locs.length);
   return locs.length;
 }
+
+// ── URL/query ──
+// request.url и request.path должны меняться согласованно.
+function __syncUrl(req) {
+  if (req.url) {
+    var m = String(req.url).match(/^(https?:\/\/[^\/]+)/);
+    if (m) req.url = m[1] + req.path;
+  }
+}
+function __splitPath(req) {
+  var p = req.path || '';
+  var i = p.indexOf('?');
+  return { base: i < 0 ? p : p.slice(0, i), query: i < 0 ? '' : p.slice(i + 1) };
+}
+function __joinPath(req, base, parts) {
+  req.path = parts.length ? base + '?' + parts.join('&') : base;
+  __syncUrl(req);
+}
+function setQueryParam(req, name, value) {
+  var sp = __splitPath(req);
+  var parts = sp.query ? sp.query.split('&') : [];
+  var enc = encodeURIComponent, found = false;
+  for (var i = 0; i < parts.length; i++) {
+    if (decodeURIComponent(parts[i].split('=')[0]) === name) { parts[i] = enc(name) + '=' + enc(String(value)); found = true; }
+  }
+  if (!found) parts.push(enc(name) + '=' + enc(String(value)));
+  __joinPath(req, sp.base, parts);
+}
+function removeQueryParam(req, name) {
+  var sp = __splitPath(req);
+  var parts = (sp.query ? sp.query.split('&') : []).filter(function (p) {
+    return decodeURIComponent(p.split('=')[0]) !== name;
+  });
+  __joinPath(req, sp.base, parts);
+}
+// Меняет host и авторити в url. Заголовок Host не трогаем — им управляет прокси.
+function rewriteHost(req, host) {
+  req.host = String(host);
+  if (req.url) req.url = String(req.url).replace(/^(https?:\/\/)[^\/]+/, '$1' + host);
+}
+// from: строка (заменяются все вхождения) или RegExp. Query-часть не затрагивается.
+function rewritePath(req, from, to) {
+  var sp = __splitPath(req);
+  var np = (from instanceof RegExp) ? sp.base.replace(from, to) : sp.base.split(from).join(to);
+  req.path = sp.query ? np + '?' + sp.query : np;
+  __syncUrl(req);
+}
+function pathSegments(req) {
+  return ((req.path || '').split('?')[0]).split('/')
+    .filter(function (s) { return s.length > 0; })
+    .map(decodeURIComponent);
+}
