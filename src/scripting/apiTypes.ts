@@ -61,9 +61,10 @@ declare const request: TrawlRequest;
 declare const response: TrawlResponse;
 
 /**
- * Environment variables of the active project. Read and write —
- * written values are persisted to the project and available to later requests.
- * Example: env.token = JSON.parse(response.body).token;
+ * Environment variables: Global merged with the active project (project wins
+ * on a key clash). Read and write — written values persist to the active
+ * project (with no active project — to Global) and are available to later
+ * requests. Example: env.token = JSON.parse(response.body).token;
  */
 declare const env: Record<string, string>;
 

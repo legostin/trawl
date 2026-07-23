@@ -19,6 +19,7 @@ import { FilterBar } from "./FilterBar";
 import { ListPanel } from "./ListPanel";
 import { FlowDetail } from "./FlowDetail";
 import { ProjectEditor } from "./ProjectEditor";
+import { VariablesPanel } from "./VariablesPanel";
 import { Toast } from "./Toast";
 import { ResizableGroup, ResizablePanel, ResizableHandle } from "./ui/resizable";
 
@@ -116,6 +117,7 @@ export function AppShell() {
       </div>
 
       <ProjectEditor />
+      <VariablesPanel />
       <Toast />
     </div>
   );
