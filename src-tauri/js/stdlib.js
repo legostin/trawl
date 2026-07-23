@@ -337,3 +337,46 @@ function nowISO(shift, tz) {
     'T' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
   return iso + (tz ? tz : 'Z');
 }
+
+// ── Коллекции ──
+function __keyFn(key) {
+  return typeof key === 'function' ? key : function (x) { return x == null ? undefined : x[key]; };
+}
+function groupBy(arr, key) {
+  var f = __keyFn(key), r = {};
+  for (var i = 0; i < arr.length; i++) {
+    var g = String(f(arr[i]));
+    (r[g] = r[g] || []).push(arr[i]);
+  }
+  return r;
+}
+// Возвращает отсортированную копию (исходный массив не трогает).
+function sortBy(arr, key) {
+  var f = __keyFn(key);
+  return arr.slice().sort(function (a, b) {
+    var x = f(a), y = f(b);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+}
+function uniqBy(arr, key) {
+  var f = __keyFn(key), seen = {}, r = [];
+  for (var i = 0; i < arr.length; i++) {
+    var k = String(f(arr[i]));
+    if (!seen[k]) { seen[k] = 1; r.push(arr[i]); }
+  }
+  return r;
+}
+function chunk(arr, n) {
+  var r = [];
+  for (var i = 0; i < arr.length; i += n) r.push(arr.slice(i, i + n));
+  return r;
+}
+// n случайных элементов без повторов (Фишер–Йетс по копии).
+function sample(arr, n) {
+  var a = arr.slice();
+  for (var i = a.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = a[i]; a[i] = a[j]; a[j] = t;
+  }
+  return a.slice(0, Math.min(n === undefined ? 1 : n, a.length));
+}

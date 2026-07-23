@@ -929,4 +929,39 @@ mod tests {
         assert_eq!(res.action, "error");
         assert!(res.error.unwrap().contains("nowISO"));
     }
+
+    #[tokio::test]
+    async fn collection_helpers() {
+        let res = run(
+            "var xs = [ { t: 'a', v: 3 }, { t: 'b', v: 1 }, { t: 'a', v: 2 } ];\
+             request.__g = groupBy(xs, 't');\
+             request.__s = sortBy(xs, 'v').map(function(x){ return x.v; });\
+             request.__u = uniqBy(xs, 't').length;\
+             request.__c = chunk([1,2,3,4,5], 2);\
+             request.__sm = sample([1,2,3], 2).length;\
+             request.__orig = xs[0].v;",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["__g"]["a"].as_array().unwrap().len(), 2);
+        assert_eq!(req["__g"]["b"].as_array().unwrap().len(), 1);
+        assert_eq!(req["__s"], json!([1, 2, 3]));
+        assert_eq!(req["__u"], 2);
+        assert_eq!(req["__c"], json!([[1, 2], [3, 4], [5]]));
+        assert_eq!(req["__sm"], 2);
+        assert_eq!(req["__orig"], 3, "sortBy не мутирует исходный массив");
+    }
+
+    #[tokio::test]
+    async fn collection_helpers_accept_fn_key() {
+        let res = run(
+            "request.__g = groupBy([1, 2, 3, 4], function(x){ return x % 2 ? 'odd' : 'even'; });",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert_eq!(res.request.unwrap()["__g"]["odd"], json!([1, 3]));
+    }
 }
