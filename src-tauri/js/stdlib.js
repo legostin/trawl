@@ -118,7 +118,8 @@ function __shape(v) {
   if (ks.length > 8) parts.push('…');
   return '{ ' + parts.join(', ') + ' }';
 }
-// Operation trace (ctx.__trace is wired up in Task 9; until then this is a silent no-op).
+// Operation trace: ctx.__trace is created by both script wrappers in scripting.rs.
+// The guard keeps contexts without ctx (validate_rule_script) from throwing.
 function __traceOp(op, path, nodes) {
   try { if (typeof ctx !== 'undefined' && ctx.__trace) ctx.__trace.push({ op: op, path: String(path), nodes: nodes }); } catch (e) {}
 }
@@ -317,6 +318,10 @@ function uuid() {
 // Integer from [a, b] inclusive.
 function randomInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
 function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+// Float from [a, b).
+function randomFloat(a, b) { return a + Math.random() * (b - a); }
+// true with probability p (default 0.5).
+function randomBool(p) { return Math.random() < (p === undefined ? 0.5 : p); }
 // nowISO('+2d', '+05:00') → "2026-07-25T…+05:00"; without tz — UTC with 'Z'.
 function nowISO(shift, tz) {
   var ms = Date.now();
@@ -337,6 +342,41 @@ function nowISO(shift, tz) {
   var iso = d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
     'T' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
   return iso + (tz ? tz : 'Z');
+}
+
+// ── Fake data (for realistic mocks) ──
+var __FAKE_FIRST = ['James', 'Mary', 'John', 'Anna', 'Robert', 'Emma', 'Michael', 'Olivia',
+  'David', 'Sophia', 'Daniel', 'Mia', 'Thomas', 'Alice', 'Peter', 'Nina', 'Victor', 'Clara',
+  'Leo', 'Julia'];
+var __FAKE_LAST = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Miller', 'Wilson', 'Moore', 'Clark',
+  'Hall', 'Young', 'King', 'Wright', 'Scott', 'Green', 'Baker', 'Adams', 'Nelson', 'Carter',
+  'Reed', 'Cook'];
+var __FAKE_DOMAINS = ['example.com', 'mail.test', 'inbox.dev', 'post.example', 'demo.org'];
+var __LOREM_WORDS = ['lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing',
+  'elit', 'sed', 'do', 'eiusmod', 'tempor', 'incididunt', 'ut', 'labore', 'et', 'dolore',
+  'magna', 'aliqua', 'enim', 'ad', 'minim', 'veniam', 'quis', 'nostrud', 'exercitation',
+  'ullamco', 'laboris', 'nisi', 'aliquip', 'ex', 'ea', 'commodo', 'consequat', 'duis',
+  'aute', 'irure', 'in', 'reprehenderit', 'voluptate'];
+function fakeName() { return randomFrom(__FAKE_FIRST) + ' ' + randomFrom(__FAKE_LAST); }
+function fakeEmail() {
+  return randomFrom(__FAKE_FIRST).toLowerCase() + '.' + randomFrom(__FAKE_LAST).toLowerCase() +
+    randomInt(1, 99) + '@' + randomFrom(__FAKE_DOMAINS);
+}
+// Each '#' in the format becomes a random digit. Default: '+1-555-###-####'.
+function fakePhone(format) {
+  return String(format === undefined ? '+1-555-###-####' : format)
+    .replace(/#/g, function () { return String(randomInt(0, 9)); });
+}
+function lorem(nWords) {
+  var out = [];
+  for (var i = 0; i < nWords; i++) out.push(randomFrom(__LOREM_WORDS));
+  return out.join(' ');
+}
+// Array of n items built by fn(i) — for list mocks: fakeList(10, function(i){ return {...}; }).
+function fakeList(n, fn) {
+  var out = [];
+  for (var i = 0; i < n; i++) out.push(fn(i));
+  return out;
 }
 
 // ── Collections ──
@@ -381,3 +421,156 @@ function sample(arr, n) {
   }
   return a.slice(0, Math.min(n === undefined ? 1 : n, a.length));
 }
+
+// ── Auth & encoding (digest/base64 run on the Rust side) ──
+function base64Encode(s) { return __native_base64('encode', String(s)); }
+// Accepts standard and url-safe base64, with or without padding. Invalid input → error.
+function base64Decode(s) {
+  var v = __native_base64('decode', String(s));
+  if (v === undefined || v === null) throw new Error('base64Decode: invalid input');
+  return v;
+}
+// Decodes a JWT without verifying the signature. Accepts a bare token or "Bearer <token>".
+function jwtDecode(token) {
+  var t = String(token || '').replace(/^Bearer\s+/i, '');
+  var parts = t.split('.');
+  if (parts.length < 2) throw new Error('jwtDecode: not a JWT (expected header.payload.signature)');
+  try {
+    return { header: JSON.parse(base64Decode(parts[0])), payload: JSON.parse(base64Decode(parts[1])) };
+  } catch (e) {
+    throw new Error('jwtDecode: malformed JWT segment (' + String((e && e.message) || e) + ')');
+  }
+}
+function sha256(s) { return __native_digest('sha256', '', String(s)); }
+function md5(s) { return __native_digest('md5', '', String(s)); }
+function hmacSha256(key, s) { return __native_digest('hmac-sha256', String(key), String(s)); }
+
+// ── Cookies & forms ──
+// A response is distinguished from a request by a numeric status.
+function __isResponseMsg(msg) { return !!(msg && typeof msg.status === 'number'); }
+function __tryDecodeURI(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
+// Request: parses the Cookie header. Response: the leading name=value of Set-Cookie.
+function cookies(msg) {
+  var out = {};
+  if (__isResponseMsg(msg)) {
+    var sc = header(msg, 'set-cookie');
+    if (sc) {
+      var first = String(sc).split(';')[0];
+      var eq = first.indexOf('=');
+      if (eq > 0) out[first.slice(0, eq).trim()] = __tryDecodeURI(first.slice(eq + 1).trim());
+    }
+    return out;
+  }
+  var raw = header(msg, 'cookie');
+  if (!raw) return out;
+  var parts = String(raw).split(';');
+  for (var i = 0; i < parts.length; i++) {
+    var kv = parts[i].trim();
+    if (!kv) continue;
+    var j = kv.indexOf('=');
+    if (j > 0) out[kv.slice(0, j).trim()] = __tryDecodeURI(kv.slice(j + 1).trim());
+  }
+  return out;
+}
+function cookie(msg, name) {
+  var all = cookies(msg);
+  return Object.prototype.hasOwnProperty.call(all, name) ? all[name] : undefined;
+}
+// Request: rewrites the pair in the Cookie header. Response: writes a Set-Cookie header
+// with attrs { path, domain, maxAge, expires, secure, httpOnly, sameSite }.
+// Note: the header map holds one value per name — one Set-Cookie per scripted response.
+function setCookie(msg, name, value, attrs) {
+  if (__isResponseMsg(msg)) {
+    var a = attrs || {};
+    var parts = [name + '=' + encodeURIComponent(String(value))];
+    if (a.path !== undefined) parts.push('Path=' + a.path);
+    if (a.domain !== undefined) parts.push('Domain=' + a.domain);
+    if (a.maxAge !== undefined) parts.push('Max-Age=' + a.maxAge);
+    if (a.expires !== undefined) parts.push('Expires=' + a.expires);
+    if (a.secure) parts.push('Secure');
+    if (a.httpOnly) parts.push('HttpOnly');
+    if (a.sameSite !== undefined) parts.push('SameSite=' + a.sameSite);
+    setHeader(msg, 'Set-Cookie', parts.join('; '));
+    return;
+  }
+  var all = cookies(msg);
+  all[name] = String(value);
+  var pairs = [];
+  for (var k in all) {
+    if (Object.prototype.hasOwnProperty.call(all, k)) pairs.push(k + '=' + encodeURIComponent(all[k]));
+  }
+  setHeader(msg, 'Cookie', pairs.join('; '));
+}
+// Request: drops the pair (and the header once empty). Response: writes a
+// client-side deletion instruction (Max-Age=0).
+function removeCookie(msg, name, attrs) {
+  if (__isResponseMsg(msg)) {
+    var path = (attrs && attrs.path) !== undefined ? attrs.path : '/';
+    setHeader(msg, 'Set-Cookie', name + '=; Max-Age=0; Path=' + path);
+    return;
+  }
+  var all = cookies(msg);
+  delete all[name];
+  var pairs = [];
+  for (var k in all) {
+    if (Object.prototype.hasOwnProperty.call(all, k)) pairs.push(k + '=' + encodeURIComponent(all[k]));
+  }
+  if (pairs.length) setHeader(msg, 'Cookie', pairs.join('; '));
+  else removeHeader(msg, 'Cookie');
+}
+// Writes a body string and drops the parsed-JSON cache so JSONPath helpers re-read it.
+function __setRawBody(msg, text) {
+  msg.body = text;
+  if (msg.__docCache !== undefined) { try { delete msg.__docCache; } catch (e) { msg.__docCache = undefined; } }
+}
+// Parses an application/x-www-form-urlencoded body into an object.
+function formBody(msg) {
+  var out = {};
+  var raw = (msg && msg.body) || '';
+  if (!raw) return out;
+  var parts = String(raw).split('&');
+  for (var i = 0; i < parts.length; i++) {
+    if (!parts[i]) continue;
+    var kv = parts[i].split('=');
+    var k = __tryDecodeURI(kv[0].replace(/\+/g, ' '));
+    out[k] = __tryDecodeURI((kv[1] || '').replace(/\+/g, ' '));
+  }
+  return out;
+}
+function formParam(msg, name) {
+  var all = formBody(msg);
+  return Object.prototype.hasOwnProperty.call(all, name) ? all[name] : undefined;
+}
+function setFormBody(msg, obj) {
+  var pairs = [];
+  for (var k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      pairs.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(obj[k])));
+    }
+  }
+  __setRawBody(msg, pairs.join('&'));
+  if (!hasHeader(msg, 'content-type')) setHeader(msg, 'Content-Type', 'application/x-www-form-urlencoded');
+}
+function setFormParam(msg, name, value) {
+  var all = formBody(msg);
+  all[name] = String(value);
+  setFormBody(msg, all);
+}
+
+// ── State (in-memory, resets on app restart; dry-run uses an isolated store) ──
+// Increments the named counter and returns the new value (first call → 1).
+function counter(name) { return __native_counter('bump', String(name)); }
+function resetCounter(name) { __native_counter('reset', String(name)); }
+// true only on the first call for this name (per app session).
+function once(name) { return counter(name) === 1; }
+// true on every n-th call for this name (n, 2n, 3n, …).
+function everyNth(name, n) { return counter(name) % n === 0; }
+
+// ── Variables (backed by env; persisted to the active project after a real run) ──
+function getVariable(name, fallback) {
+  if (Object.prototype.hasOwnProperty.call(env, name)) return env[name];
+  return fallback === undefined ? null : fallback;
+}
+// The value is stringified on writeback; persisted after the rule finishes (never in dry-run).
+function setVariable(name, value) { env[name] = value; return value; }
+function deleteVariable(name) { delete env[name]; }

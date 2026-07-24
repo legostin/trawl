@@ -43,6 +43,10 @@ pub fn run(
     });
     let before = resp.clone().unwrap_or(Value::Null);
 
+    // Fresh state per dry-run: counter()/once() start clean and never touch the
+    // store used by live traffic.
+    let state = Arc::new(crate::script_state::ScriptState::default());
+
     let res: ScriptResult = match phase {
         "handler" => {
             let canned = resp.clone().unwrap_or(json!({"status":0,"headers":{},"body":""})).to_string();
@@ -53,6 +57,7 @@ pub fn run(
                 timeout,
                 Arc::new(|_| None),
                 Arc::new(move |_req: &str| canned.clone()),
+                state,
             )
         }
         "response" => scripting::execute_once(
@@ -61,6 +66,7 @@ pub fn run(
             &json!({ "request": req, "response": resp, "env": env }).to_string(),
             timeout,
             Arc::new(|_| None),
+            state,
         ),
         _ => scripting::execute_once(
             prelude,
@@ -68,6 +74,7 @@ pub fn run(
             &json!({ "request": req, "env": env }).to_string(),
             timeout,
             Arc::new(|_| None),
+            state,
         ),
     };
 
@@ -87,6 +94,9 @@ pub fn run(
         "trace": res.trace,
         "before": before,
         "after": after,
+        // What the script would write to variables. Shown for inspection only —
+        // dry-run never persists env.
+        "env": res.env,
     })
 }
 
@@ -127,6 +137,46 @@ mod tests {
             serde_json::from_str(out["after"]["body"].as_str().unwrap()).unwrap();
         assert_eq!(body["items"][0]["x"], 9);
         assert_eq!(out["trace"][1]["op"], "patch");
+    }
+
+    #[test]
+    fn dry_run_reports_env_changes_without_persisting() {
+        let flow = sample_flow();
+        let out = run(
+            &flow,
+            "setVariable('captured', pickOne(response, 'items[*].x'));",
+            "response",
+            "",
+            serde_json::json!({"existing":"yes"}),
+            Duration::from_secs(5),
+        );
+        assert_eq!(out["action"], "continue", "err: {:?}", out["error"]);
+        assert_eq!(out["env"]["captured"], 1);
+        assert_eq!(out["env"]["existing"], "yes");
+    }
+
+    #[test]
+    fn dry_run_counter_is_isolated_from_global_state() {
+        let name = "__t_dryrun_isolated";
+        crate::script_state::global().bump(name); // real traffic has already counted once
+        let script = format!("patch(response, 'items[*].x', counter('{name}'));");
+        for _ in 0..2 {
+            let out = run(
+                &sample_flow(),
+                &script,
+                "response",
+                "",
+                serde_json::json!({}),
+                Duration::from_secs(5),
+            );
+            assert_eq!(out["action"], "continue", "err: {:?}", out["error"]);
+            let body: serde_json::Value =
+                serde_json::from_str(out["after"]["body"].as_str().unwrap()).unwrap();
+            // every dry-run starts from a fresh store: counter is 1, not 2/3
+            assert_eq!(body["items"][0]["x"], 1);
+        }
+        assert_eq!(crate::script_state::global().bump(name), 2, "global state untouched");
+        crate::script_state::global().reset(name);
     }
 
     #[test]

@@ -110,7 +110,7 @@ return res;
 `sendJsonRequest(request)` and `sendWithRetry(request, opts)` are only
 meaningful here, since only the handler phase actually dispatches requests.
 
-### `env` — a variable bag across phases and rules
+### `env` and the Variables API — state across phases and rules
 
 `env` is available in every phase. It's a merged **global + project**
 key/value store: reads see project values overriding global ones, and
@@ -119,11 +119,39 @@ across separate requests — the classic case is capturing a login token in
 one rule and injecting it as a bearer token in another (see the worked
 example below).
 
+The stdlib wraps it in three explicit helpers — prefer these over raw `env`
+access, they make the intent readable and handle the missing-key case:
+
 ```js
-env.token = pickOne(response, 'data.accessToken'); // response phase
+setVariable('token', pickOne(response, 'data.accessToken')); // response phase
 ...
-bearer(env.token);                                  // request phase, later
+bearer(getVariable('token', ''));                            // request phase, later
+deleteVariable('token');                                     // drop it
 ```
+
+**When exactly is a variable persisted?** After the rule (or rule chain)
+finishes running on **real traffic**, the modified `env` is written back:
+
+- with an **active project** — to that project's variables on disk; a write to
+  a key that came from the global env becomes a *project override* (the global
+  value itself is untouched);
+- with **no active project** — to the global variables.
+
+Details worth knowing:
+
+- **Non-string values are stringified** on writeback. `setVariable('n', 42)`
+  is readable as `42` within the same run, but comes back as `"42"` on the next.
+- **Dry-run never persists.** "Test on traffic" and MCP `test_rule` show what
+  the script *would* write (the `env` field of the dry-run output) without
+  saving anything.
+- **Deletion caveat:** deleting a variable that only exists in the *global* env
+  while a project is active does not persist — a project can override global
+  values but not erase them. Deleting a project-level variable resurfaces the
+  global one.
+
+For state that should *not* survive an app restart (attempt counters, "fire
+only once" flags), use the in-memory `counter()`/`once()`/`everyNth()` helpers
+instead — see "State counters" below.
 
 ## The JSONPath superpower
 
@@ -285,6 +313,9 @@ yourself when using these.
 - **`uuid()`** — a random UUID v4 string.
 - **`randomInt(a, b)`** — random integer, inclusive of both bounds.
 - **`randomFrom(arr)`** — a random element of `arr`.
+- **`randomFloat(a, b)`** — random float in `[a, b)`.
+- **`randomBool(p?)`** — `true` with probability `p` (default 0.5) — the
+  one-liner behind percentage-based mocks.
 - **`nowISO(shift?, tz?)`** — current time as ISO-8601, optionally shifted
   and/or in a given timezone offset. `shift` is `±N` followed by
   `s|m|h|d`, e.g. `'+2d'`, `'-30m'`.
@@ -293,6 +324,27 @@ yourself when using these.
   nowISO();                    // now, UTC
   nowISO('+2d', '+05:00');     // two days from now, +05:00 offset
   randomFrom(['A', 'B', 'C']);
+  ```
+
+For realistic mocks there is a small built-in faker — no external data, no
+network:
+
+- **`fakeName()`** / **`fakeEmail()`** / **`fakePhone(format?)`** — a
+  plausible person. In `fakePhone`, every `#` in the format becomes a random
+  digit (default format `'+1-555-###-####'`).
+- **`lorem(nWords)`** — lorem-ipsum text for descriptions and long fields.
+- **`fakeList(n, fn)`** — an array of `n` items built by `fn(i)`; the
+  workhorse for list mocks.
+
+  ```js
+  json({
+    users: fakeList(10, i => ({
+      id: i + 1,
+      name: fakeName(),
+      email: fakeEmail(),
+      bio: lorem(12),
+    })),
+  });
   ```
 
 ### Collections
@@ -307,6 +359,84 @@ yourself when using these.
   ```js
   const byType = groupBy(items, 'type');
   const cheapFirst = sortBy(items, i => i.advertData.price);
+  ```
+
+### Auth & encoding
+
+Hashes and base64 run natively (Rust side) — fast and always available; no
+`atob`/`crypto` polyfills needed.
+
+- **`base64Encode(s)`** / **`base64Decode(s)`** — decode accepts standard
+  *and* url-safe base64, with or without padding; invalid input throws.
+- **`jwtDecode(token)`** — split and decode a JWT into
+  `{ header, payload }` **without verifying the signature** (it's a
+  debugging tool, not an auth check). Accepts a bare token or the whole
+  `'Bearer <token>'` header value.
+- **`sha256(s)`** / **`md5(s)`** — lowercase-hex digests.
+- **`hmacSha256(key, s)`** — lowercase-hex HMAC-SHA256, for APIs that
+  require signed requests.
+
+  ```js
+  const { payload } = jwtDecode(header(request, 'authorization'));
+  if ((payload.exp || 0) * 1000 < Date.now()) notify('token expired');
+
+  setHeader(request, 'X-Signature', hmacSha256(secret('hmac_key'), request.body));
+  setHeader(request, 'Authorization', 'Basic ' + base64Encode('user:' + secret('pw')));
+  ```
+
+### Cookies & forms
+
+Cookie helpers adapt to what you hand them: on a **request** they work on the
+`Cookie` header, on a **response** they work on `Set-Cookie`.
+
+- **`cookies(msg)`** — all cookies as an object (request: every pair of the
+  `Cookie` header; response: the leading `name=value` of `Set-Cookie`).
+- **`cookie(msg, name)`** — one value, `undefined` when absent.
+- **`setCookie(msg, name, value, attrs?)`** — request: add/replace the pair;
+  response: write a `Set-Cookie` header, with `attrs` supporting `path`,
+  `domain`, `maxAge`, `expires`, `secure`, `httpOnly`, `sameSite`.
+- **`removeCookie(msg, name)`** — request: drop the pair (and the header once
+  empty); response: write a deletion instruction (`Max-Age=0`).
+
+Limitation to know: the script header map holds **one value per header name**,
+so a scripted response can carry only one `Set-Cookie`.
+
+For `application/x-www-form-urlencoded` bodies (classic form logins, OAuth
+token endpoints):
+
+- **`formBody(msg)`** — the whole body as a decoded object.
+- **`formParam(msg, name)`** — one field, `undefined` when absent.
+- **`setFormParam(msg, name, value)`** / **`setFormBody(msg, obj)`** —
+  re-encode the body (and set the content-type if missing).
+
+  ```js
+  setCookie(response, 'session', 'test', { path: '/', httpOnly: true });
+  const user = formParam(request, 'username');
+  ```
+
+### State counters (in-memory)
+
+For scenario mocks that need memory *between* requests — "fail the first N",
+"fire only once", "every 5th request misbehaves":
+
+- **`counter(name)`** — increment and return (first call → 1).
+- **`resetCounter(name)`** — start over.
+- **`once(name)`** — `true` only on the first call for this name.
+- **`everyNth(name, n)`** — `true` on calls n, 2n, 3n, …
+
+Two properties to keep in mind:
+
+- State is **in-memory and per app session** — restarting Trawl resets every
+  counter. That's deliberate: debugging scenarios shouldn't leak into
+  tomorrow's session. For state that must survive, use `setVariable()`.
+- **Dry-run is isolated**: "Test on traffic" runs against a fresh store, so
+  `counter()` always returns 1 there and `once()` is always `true` —
+  deterministic tests that never disturb the live counters.
+
+  ```js
+  const attempt = counter('warmup');
+  if (attempt <= 3) return httpError(503, 'attempt ' + attempt);
+  return send(request);
   ```
 
 ### Network (handler phase)

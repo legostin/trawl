@@ -27,6 +27,34 @@
     {
       "label": "Emulate slow network / error",
       "code": "// delay() — handler phase only.\ndelay(2000);\nif (randomInt(1, 100) <= 10) return httpError(500, 'flaky upstream');\nreturn send(request);\n"
+    },
+    {
+      "label": "Scenario: fail first N, then succeed",
+      "code": "// Handler: the first 3 matching requests fail, then traffic passes through.\n// counter() is in-memory — restart the app (or resetCounter) to start over.\nvar attempt = counter('flaky-start');\nif (attempt <= 3) {\n  return httpError(503, 'warming up, attempt ' + attempt);\n}\nreturn send(request);\n"
+    },
+    {
+      "label": "Scenario: paginated mock",
+      "code": "// Request phase: mock a paginated list driven by the ?page= query param.\nvar page = Number(queryParam(request, 'page') || 1);\nvar perPage = 20;\njson({\n  page: page,\n  items: fakeList(perPage, function (i) {\n    var id = (page - 1) * perPage + i + 1;\n    return { id: id, name: fakeName(), description: lorem(8) };\n  }),\n  hasMore: page < 5\n});\n"
+    },
+    {
+      "label": "JWT debugging",
+      "code": "// Request phase: inspect the JWT and warn when it is about to expire.\nvar auth = header(request, 'authorization');\nif (auth) {\n  var jwt = jwtDecode(auth);\n  var expMs = (jwt.payload.exp || 0) * 1000;\n  if (expMs && expMs - Date.now() < 60000) {\n    notify('JWT expires in <60s (sub: ' + jwt.payload.sub + ')', { title: 'Auth' });\n  }\n}\n"
+    },
+    {
+      "label": "Cookie rewrite",
+      "code": "// Response phase: replace the session cookie the server sets.\nif (response) {\n  setCookie(response, 'session', 'test-session', { path: '/', httpOnly: true, sameSite: 'Lax' });\n}\n"
+    },
+    {
+      "label": "A/B percentage mock",
+      "code": "// Handler: 10% of matching traffic gets the mocked B-variant.\nif (randomBool(0.1)) {\n  return json({ variant: 'B', mocked: true });\n}\nreturn send(request);\n"
+    },
+    {
+      "label": "Capture token into a variable",
+      "code": "// Response phase: save the fresh token into a variable after login.\n// Use it in a request rule on other endpoints: bearer(getVariable('token'))\nif (response) {\n  var token = pickOne(response, 'data.accessToken');\n  if (token !== null) setVariable('token', token);\n}\n"
+    },
+    {
+      "label": "Mock a fake user directory",
+      "code": "// Request phase: a realistic user list without touching the backend.\njson({\n  users: fakeList(10, function (i) {\n    return { id: i + 1, name: fakeName(), email: fakeEmail(), phone: fakePhone(), bio: lorem(12) };\n  })\n});\n"
     }
   ],
   "snippets": [
@@ -47,6 +75,34 @@
     { "label": "rewrite path", "code": "rewritePath(request, '/v3/', '/v4/');\n" },
     { "label": "nowISO", "code": "nowISO(null, '+05:00')" },
     { "label": "uuid", "code": "uuid()" },
-    { "label": "override status", "code": "if (response) { response.status = 503; }\n" }
+    { "label": "override status", "code": "if (response) { response.status = 503; }\n" },
+    { "label": "base64 encode", "code": "base64Encode(user + ':' + pass)" },
+    { "label": "base64 decode", "code": "base64Decode(header(request, 'x-payload'))" },
+    { "label": "jwtDecode (auth header)", "code": "const { payload } = jwtDecode(header(request, 'authorization'));\n" },
+    { "label": "sha256", "code": "sha256(request.body)" },
+    { "label": "md5", "code": "md5(request.body)" },
+    { "label": "hmacSha256 sign", "code": "setHeader(request, 'X-Signature', hmacSha256(secret('hmac_key'), request.body));\n" },
+    { "label": "get cookie", "code": "cookie(request, 'session_id')" },
+    { "label": "all cookies", "code": "cookies(request)" },
+    { "label": "set cookie (response)", "code": "setCookie(response, 'session', 'test', { path: '/', httpOnly: true });\n" },
+    { "label": "remove cookie", "code": "removeCookie(request, '_tracking');\n" },
+    { "label": "form body", "code": "formBody(request)" },
+    { "label": "form param", "code": "formParam(request, 'username')" },
+    { "label": "set form param", "code": "setFormParam(request, 'debug', '1');\n" },
+    { "label": "set form body", "code": "setFormBody(request, { username: 'test', password: 'secret' });\n" },
+    { "label": "randomFloat", "code": "randomFloat(1, 5)" },
+    { "label": "randomBool (10%)", "code": "randomBool(0.1)" },
+    { "label": "fakeName", "code": "fakeName()" },
+    { "label": "fakeEmail", "code": "fakeEmail()" },
+    { "label": "fakePhone", "code": "fakePhone()" },
+    { "label": "lorem", "code": "lorem(12)" },
+    { "label": "fakeList", "code": "fakeList(10, function (i) { return { id: i + 1, name: fakeName() }; })" },
+    { "label": "counter", "code": "counter('attempts')" },
+    { "label": "resetCounter", "code": "resetCounter('attempts');\n" },
+    { "label": "once (first call only)", "code": "if (once('warmup')) { }\n" },
+    { "label": "everyNth", "code": "if (everyNth('flaky', 5)) { }\n" },
+    { "label": "getVariable", "code": "getVariable('token', '')" },
+    { "label": "setVariable", "code": "setVariable('token', pickOne(response, 'data.accessToken'));\n" },
+    { "label": "deleteVariable", "code": "deleteVariable('token');\n" }
   ]
 }
