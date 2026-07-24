@@ -99,8 +99,84 @@ declare function uuid(): string;
 declare function randomInt(a: number, b: number): number;
 /** Random element of an array. */
 declare function randomFrom(arr: any[]): any;
+/** Random float in [a, b). */
+declare function randomFloat(a: number, b: number): number;
+/** true with probability p (default 0.5). */
+declare function randomBool(p?: number): boolean;
+/** Random realistic full name, e.g. "Anna Clark". */
+declare function fakeName(): string;
+/** Random realistic email on a test domain, e.g. "anna.clark7@example.com". */
+declare function fakeEmail(): string;
+/** Random phone number; each '#' in the format becomes a digit. Default format: "+1-555-###-####". */
+declare function fakePhone(format?: string): string;
+/** nWords of lorem-ipsum text. */
+declare function lorem(nWords: number): string;
+/** Array of n items built by fn(i) — for list mocks. */
+declare function fakeList(n: number, fn: (i: number) => any): any[];
 /** Current time as ISO 8601. shift: "+2d"/"-30m"/"+1h"/"+10s"; tz: "+05:00" (default UTC, "Z"). */
 declare function nowISO(shift?: string | null, tz?: string | null): string;
+
+/** Base64-encode a string (standard alphabet, with padding). */
+declare function base64Encode(s: string): string;
+/** Decode standard or url-safe base64, with or without padding. Invalid input → throws. */
+declare function base64Decode(s: string): string;
+/** Decode a JWT without verifying the signature. Accepts a bare token or "Bearer <token>". */
+declare function jwtDecode(token: string): { header: any; payload: any };
+/** SHA-256 of a string, lowercase hex. */
+declare function sha256(s: string): string;
+/** MD5 of a string, lowercase hex. */
+declare function md5(s: string): string;
+/** HMAC-SHA256 signature of \`s\` with \`key\`, lowercase hex. */
+declare function hmacSha256(key: string, s: string): string;
+
+/** All cookies as an object. Request: from the Cookie header; response: the leading name=value of Set-Cookie. */
+declare function cookies(msg: TrawlMessage): Record<string, string>;
+/** One cookie value, or undefined when absent. */
+declare function cookie(msg: TrawlMessage, name: string): string | undefined;
+/**
+ * Request: add/replace the pair in the Cookie header. Response: write a Set-Cookie
+ * header with the given attributes. Note: one Set-Cookie per scripted response.
+ */
+declare function setCookie(
+  msg: TrawlMessage,
+  name: string,
+  value: string,
+  attrs?: {
+    path?: string;
+    domain?: string;
+    maxAge?: number;
+    expires?: string;
+    secure?: boolean;
+    httpOnly?: boolean;
+    sameSite?: "Strict" | "Lax" | "None";
+  },
+): void;
+/** Request: drop the cookie pair. Response: write a deletion instruction (Max-Age=0). */
+declare function removeCookie(msg: TrawlMessage, name: string, attrs?: { path?: string }): void;
+/** Parse an application/x-www-form-urlencoded body into an object (decoded). */
+declare function formBody(msg: TrawlMessage): Record<string, string>;
+/** One form field from the urlencoded body, or undefined when absent. */
+declare function formParam(msg: TrawlMessage, name: string): string | undefined;
+/** Encode \`obj\` as an urlencoded body; sets the content-type if missing. */
+declare function setFormBody(msg: TrawlMessage, obj: Record<string, string | number | boolean>): void;
+/** Add/replace one field in the urlencoded body. */
+declare function setFormParam(msg: TrawlMessage, name: string, value: string | number): void;
+
+/** Increment the named in-memory counter and return the new value (first call → 1). Resets on app restart; dry-run uses an isolated store. */
+declare function counter(name: string): number;
+/** Reset the named counter so the next counter() call returns 1. */
+declare function resetCounter(name: string): void;
+/** true only on the first call for this name (per app session). */
+declare function once(name: string): boolean;
+/** true on every n-th call for this name (n, 2n, 3n, …). */
+declare function everyNth(name: string, n: number): boolean;
+
+/** Read a variable from env; fallback (default null) when absent. */
+declare function getVariable(name: string, fallback?: any): any;
+/** Write a variable to env and return the value. Persisted to the active project (or global env) after a real run; never persisted by dry-run. Non-strings are stringified on writeback. */
+declare function setVariable(name: string, value: any): any;
+/** Delete a variable from env. Deleting a global variable while a project is active does not persist. */
+declare function deleteVariable(name: string): void;
 
 /** Group an array by a field name or key function. */
 declare function groupBy(arr: any[], key: string | ((x: any) => unknown)): Record<string, any[]>;

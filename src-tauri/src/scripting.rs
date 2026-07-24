@@ -77,6 +77,55 @@ impl ScriptClient {
     }
 }
 
+/// Registers the natives shared by every engine flavor: secrets, JSONPath,
+/// digest/base64 and the counter store. `state` is the app-wide store for real
+/// traffic and a fresh instance for dry-run — the closure must capture it, not
+/// reach for a global, or dry-run isolation silently breaks.
+fn register_common_natives(
+    c: &Ctx<'_>,
+    secrets: &SecretFn,
+    state: &Arc<crate::script_state::ScriptState>,
+) -> Result<(), rquickjs::Error> {
+    let g = c.globals();
+    let sfn = secrets.clone();
+    g.set(
+        "__native_secret",
+        Function::new(c.clone(), move |name: String| -> Option<String> { sfn(&name) })?,
+    )?;
+    g.set(
+        "__native_jsonpath_locate",
+        Function::new(c.clone(), |doc: String, path: String| -> String {
+            crate::jsonpath::locate(&doc, &path)
+        })?,
+    )?;
+    g.set(
+        "__native_digest",
+        Function::new(c.clone(), |kind: String, key: String, data: String| -> Option<String> {
+            crate::hashing::digest(&kind, &key, &data)
+        })?,
+    )?;
+    g.set(
+        "__native_base64",
+        Function::new(c.clone(), |op: String, data: String| -> Option<String> {
+            crate::hashing::base64(&op, &data)
+        })?,
+    )?;
+    let st = state.clone();
+    g.set(
+        "__native_counter",
+        Function::new(c.clone(), move |op: String, name: String| -> f64 {
+            match op.as_str() {
+                "bump" => st.bump(&name) as f64,
+                _ => {
+                    st.reset(&name);
+                    0.0
+                }
+            }
+        })?,
+    )?;
+    Ok(())
+}
+
 /// Spins up the engine on a dedicated thread (the QuickJS runtime isn't Send across await).
 pub fn spawn_engine(timeout: Duration, secrets: SecretFn) -> ScriptClient {
     let (tx, mut rx) = mpsc::unbounded_channel::<ScriptJob>();
@@ -92,17 +141,8 @@ pub fn spawn_engine(timeout: Duration, secrets: SecretFn) -> ScriptClient {
             }
             let ctx = Context::full(&rt).expect("create quickjs context");
             ctx.with(|c| {
-                let sfn = secrets.clone();
-                let f = Function::new(c.clone(), move |name: String| -> Option<String> {
-                    sfn(&name)
-                })
-                .expect("bind secret fn");
-                c.globals().set("__native_secret", f).expect("set secret fn");
-                let jp = Function::new(c.clone(), |doc: String, path: String| -> String {
-                    crate::jsonpath::locate(&doc, &path)
-                })
-                .expect("bind jsonpath fn");
-                c.globals().set("__native_jsonpath_locate", jp).expect("set jsonpath fn");
+                register_common_natives(&c, &secrets, &crate::script_state::global())
+                    .expect("register natives");
             });
 
             while let Some(job) = rx.blocking_recv() {
@@ -313,11 +353,14 @@ pub fn execute_handler(
         js_timeout,
         secrets,
         Arc::new(|req: &str| native_send(req)),
+        crate::script_state::global(),
     )
 }
 
-/// Like `execute_handler`, but with a swappable send() implementation — used
-/// by dry-run to replay a captured response instead of making a real network call.
+/// Like `execute_handler`, but with a swappable send() implementation and state
+/// store — used by dry-run to replay a captured response instead of making a
+/// real network call, with counters isolated from live traffic.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_handler_with_send(
     prelude: &str,
     script: &str,
@@ -325,6 +368,7 @@ pub fn execute_handler_with_send(
     js_timeout: Duration,
     secrets: SecretFn,
     send_impl: SendFn,
+    state: Arc<crate::script_state::ScriptState>,
 ) -> ScriptResult {
     let rt = match Runtime::new() {
         Ok(r) => r,
@@ -360,21 +404,9 @@ pub fn execute_handler_with_send(
             Err(e) => return ScriptResult::error(format!("bind sleep: {e}")),
         };
         let _ = g.set("__native_sleep", sleep_fn);
-        let sfn = secrets.clone();
-        let secret_fn = match Function::new(c.clone(), move |name: String| -> Option<String> {
-            sfn(&name)
-        }) {
-            Ok(f) => f,
-            Err(e) => return ScriptResult::error(format!("bind secret: {e}")),
-        };
-        let _ = g.set("__native_secret", secret_fn);
-        let jp_fn = match Function::new(c.clone(), |doc: String, path: String| -> String {
-            crate::jsonpath::locate(&doc, &path)
-        }) {
-            Ok(f) => f,
-            Err(e) => return ScriptResult::error(format!("bind jsonpath: {e}")),
-        };
-        let _ = g.set("__native_jsonpath_locate", jp_fn);
+        if let Err(e) = register_common_natives(&c, &secrets, &state) {
+            return ScriptResult::error(format!("bind natives: {e}"));
+        }
 
         let src = build_handler_source(prelude, script);
         match c.eval::<String, _>(src) {
@@ -400,6 +432,7 @@ pub fn execute_once(
     input_json: &str,
     js_timeout: Duration,
     secrets: SecretFn,
+    state: Arc<crate::script_state::ScriptState>,
 ) -> ScriptResult {
     let rt = match Runtime::new() {
         Ok(r) => r,
@@ -419,14 +452,8 @@ pub fn execute_once(
         if g.set("__input", input_json.to_string()).is_err() {
             return ScriptResult::error("set input failed");
         }
-        let sfn = secrets.clone();
-        if let Ok(f) = Function::new(c.clone(), move |name: String| -> Option<String> { sfn(&name) }) {
-            let _ = g.set("__native_secret", f);
-        }
-        if let Ok(f) = Function::new(c.clone(), |doc: String, path: String| -> String {
-            crate::jsonpath::locate(&doc, &path)
-        }) {
-            let _ = g.set("__native_jsonpath_locate", f);
+        if let Err(e) = register_common_natives(&c, &secrets, &state) {
+            return ScriptResult::error(format!("bind natives: {e}"));
         }
         let src = build_source(prelude, script);
         match c.eval::<String, _>(src) {
@@ -627,6 +654,257 @@ mod tests {
         .await;
         assert_eq!(res.action, "continue");
         assert_eq!(res.request.unwrap()["__found"], "application/json");
+    }
+
+    #[tokio::test]
+    async fn stdlib_base64_and_hashes() {
+        let res = run(
+            "request.b64 = base64Encode('hello');\n\
+             request.plain = base64Decode('aGVsbG8=');\n\
+             request.url64 = base64Decode('Pj4-Pz8_');\n\
+             request.sha = sha256('abc');\n\
+             request.md = md5('abc');\n\
+             request.mac = hmacSha256('Jefe', 'what do ya want for nothing?');",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["b64"], "aGVsbG8=");
+        assert_eq!(req["plain"], "hello");
+        assert_eq!(req["url64"], ">>>???");
+        assert_eq!(req["sha"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(req["md"], "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(req["mac"], "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+
+    #[tokio::test]
+    async fn stdlib_base64_decode_invalid_throws() {
+        let res = run("base64Decode('!!!');", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "error");
+        assert!(res.error.unwrap().contains("base64Decode"));
+    }
+
+    #[tokio::test]
+    async fn stdlib_jwt_decode() {
+        // {"alg":"HS256","typ":"JWT"} . {"sub":"42","name":"Ann"} . <fake sig>
+        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsIm5hbWUiOiJBbm4ifQ.sig";
+        let script = format!(
+            "var t = jwtDecode('Bearer {jwt}');\n\
+             request.alg = t.header.alg; request.sub = t.payload.sub; request.nm = t.payload.name;"
+        );
+        let res = run(&script, r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["alg"], "HS256");
+        assert_eq!(req["sub"], "42");
+        assert_eq!(req["nm"], "Ann");
+    }
+
+    #[tokio::test]
+    async fn stdlib_jwt_decode_malformed_throws() {
+        let res = run("jwtDecode('not-a-jwt');", r#"{"request":{"headers":{}}}"#).await;
+        assert_eq!(res.action, "error");
+        assert!(res.error.unwrap().contains("jwtDecode"));
+    }
+
+    #[tokio::test]
+    async fn stdlib_request_cookies_read_write_remove() {
+        let res = run(
+            "request.all = cookies(request);\n\
+             request.one = cookie(request, 'b');\n\
+             setCookie(request, 'c', 'x y');\n\
+             removeCookie(request, 'a');",
+            r#"{"request":{"headers":{"Cookie":"a=1; b=two"}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["all"]["a"], "1");
+        assert_eq!(req["all"]["b"], "two");
+        assert_eq!(req["one"], "two");
+        let header = req["headers"]["Cookie"].as_str().unwrap();
+        assert!(!header.contains("a=1"), "cookie a removed: {header}");
+        assert!(header.contains("b=two"));
+        assert!(header.contains("c=x%20y"));
+    }
+
+    #[tokio::test]
+    async fn stdlib_request_remove_last_cookie_drops_header() {
+        let res = run(
+            "removeCookie(request, 'only');",
+            r#"{"request":{"headers":{"Cookie":"only=1"}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        assert!(res.request.unwrap()["headers"]["Cookie"].is_null());
+    }
+
+    #[tokio::test]
+    async fn stdlib_response_set_cookie_with_attrs() {
+        let res = run(
+            "response.before = cookies(response);\n\
+             setCookie(response, 'sid', 'abc', { path: '/', maxAge: 60, httpOnly: true, secure: true, sameSite: 'Lax' });",
+            r#"{"request":{"headers":{}},"response":{"status":200,"headers":{"Set-Cookie":"old=v; Path=/"},"body":""}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let resp = res.response.unwrap();
+        assert_eq!(resp["before"]["old"], "v");
+        let sc = resp["headers"]["Set-Cookie"].as_str().unwrap();
+        assert!(sc.starts_with("sid=abc"), "sc: {sc}");
+        assert!(sc.contains("Path=/"));
+        assert!(sc.contains("Max-Age=60"));
+        assert!(sc.contains("HttpOnly"));
+        assert!(sc.contains("Secure"));
+        assert!(sc.contains("SameSite=Lax"));
+    }
+
+    #[tokio::test]
+    async fn stdlib_response_remove_cookie_expires_it() {
+        let res = run(
+            "removeCookie(response, 'sid');",
+            r#"{"request":{"headers":{}},"response":{"status":200,"headers":{},"body":""}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let sc = res.response.unwrap()["headers"]["Set-Cookie"].as_str().unwrap().to_string();
+        assert!(sc.starts_with("sid=;"), "sc: {sc}");
+        assert!(sc.contains("Max-Age=0"));
+    }
+
+    #[tokio::test]
+    async fn stdlib_form_helpers_roundtrip() {
+        let res = run(
+            "request.form = formBody(request);\n\
+             request.q = formParam(request, 'q');\n\
+             setFormParam(request, 'page', '2');\n\
+             request.after = formBody(request);",
+            r#"{"request":{"headers":{"Content-Type":"application/x-www-form-urlencoded"},"body":"q=a+b&tag=x%26y"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["form"]["q"], "a b");
+        assert_eq!(req["form"]["tag"], "x&y");
+        assert_eq!(req["q"], "a b");
+        assert_eq!(req["after"]["page"], "2");
+        assert_eq!(req["after"]["q"], "a b");
+    }
+
+    #[tokio::test]
+    async fn stdlib_set_form_body_encodes_and_sets_content_type() {
+        let res = run(
+            "setFormBody(request, { user: 'ann smith', n: 2 });",
+            r#"{"request":{"headers":{},"body":""}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["body"], "user=ann%20smith&n=2");
+        assert_eq!(req["headers"]["Content-Type"], "application/x-www-form-urlencoded");
+    }
+
+    #[tokio::test]
+    async fn stdlib_fake_data_generators() {
+        let res = run(
+            "request.f = randomFloat(1, 2);\n\
+             request.b = randomBool(1);\n\
+             request.nb = randomBool(0);\n\
+             request.name = fakeName();\n\
+             request.mail = fakeEmail();\n\
+             request.phone = fakePhone();\n\
+             request.text = lorem(5);\n\
+             request.list = fakeList(3, function(i) { return { n: i }; });",
+            r#"{"request":{"headers":{}}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        let f = req["f"].as_f64().unwrap();
+        assert!((1.0..2.0).contains(&f));
+        assert_eq!(req["b"], true);
+        assert_eq!(req["nb"], false);
+        assert!(req["name"].as_str().unwrap().contains(' '));
+        let mail = req["mail"].as_str().unwrap();
+        assert!(mail.contains('@') && mail.contains('.'), "mail: {mail}");
+        let phone = req["phone"].as_str().unwrap();
+        assert!(phone.chars().filter(|c| c.is_ascii_digit()).count() >= 7, "phone: {phone}");
+        assert_eq!(req["text"].as_str().unwrap().split(' ').count(), 5);
+        assert_eq!(req["list"].as_array().unwrap().len(), 3);
+        assert_eq!(req["list"][2]["n"], 2);
+    }
+
+    #[tokio::test]
+    async fn stdlib_counter_persists_across_runs_and_resets() {
+        let client = spawn_engine(Duration::from_millis(500), Arc::new(|_: &str| None));
+        let script = "request.n = counter('__t_counter_runs');".to_string();
+        let r1 = client.run(String::new(), script.clone(), r#"{"request":{}}"#.into()).await;
+        let r2 = client.run(String::new(), script, r#"{"request":{}}"#.into()).await;
+        assert_eq!(r1.request.unwrap()["n"], 1, "err: {:?}", r1.error);
+        assert_eq!(r2.request.unwrap()["n"], 2);
+        let r3 = client
+            .run(
+                String::new(),
+                "resetCounter('__t_counter_runs'); request.n = counter('__t_counter_runs');".into(),
+                r#"{"request":{}}"#.into(),
+            )
+            .await;
+        assert_eq!(r3.request.unwrap()["n"], 1);
+    }
+
+    #[tokio::test]
+    async fn stdlib_counter_shared_between_handler_runs() {
+        for expected in 1..=2 {
+            let res = tokio::task::spawn_blocking(move || {
+                execute_handler(
+                    "",
+                    "return { status: 200, headers: {}, body: String(counter('__t_counter_handler')) };",
+                    r#"{"request":{}}"#,
+                    Duration::from_secs(5),
+                    Arc::new(|_: &str| None),
+                )
+            })
+            .await
+            .unwrap();
+            assert_eq!(res.action, "respond", "err: {:?}", res.error);
+            assert_eq!(res.response.unwrap()["body"], expected.to_string());
+        }
+        crate::script_state::global().reset("__t_counter_handler");
+    }
+
+    #[tokio::test]
+    async fn stdlib_once_and_every_nth() {
+        let client = spawn_engine(Duration::from_millis(500), Arc::new(|_: &str| None));
+        let script = "request.o = once('__t_once'); request.e = everyNth('__t_nth', 3);".to_string();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let r = client.run(String::new(), script.clone(), r#"{"request":{}}"#.into()).await;
+            let req = r.request.unwrap();
+            seen.push((req["o"].as_bool().unwrap(), req["e"].as_bool().unwrap()));
+        }
+        assert_eq!(seen, vec![(true, false), (false, false), (false, true)]);
+    }
+
+    #[tokio::test]
+    async fn stdlib_variables_wrap_env() {
+        let res = run(
+            "request.v = getVariable('token');\n\
+             request.missing = getVariable('nope');\n\
+             request.fb = getVariable('nope', 'dflt');\n\
+             setVariable('fresh', 'val');\n\
+             deleteVariable('token');",
+            r#"{"request":{},"env":{"token":"abc"}}"#,
+        )
+        .await;
+        assert_eq!(res.action, "continue", "err: {:?}", res.error);
+        let req = res.request.unwrap();
+        assert_eq!(req["v"], "abc");
+        assert!(req["missing"].is_null());
+        assert_eq!(req["fb"], "dflt");
+        let env = res.env.unwrap();
+        assert_eq!(env["fresh"], "val");
+        assert!(env.get("token").is_none() || env["token"].is_null());
     }
 
     #[tokio::test]
@@ -1216,6 +1494,7 @@ mod tests {
                 Duration::from_secs(5),
                 Arc::new(|_: &str| None),
                 Arc::new(move |_req: &str| canned.clone()),
+                Arc::new(crate::script_state::ScriptState::default()),
             )
         })
         .await

@@ -137,7 +137,7 @@ pub fn core_tools() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "get_scripting_reference",
-            description: "Rule scripting reference: ctx API typings, stdlib typings and the shared library source. Read before writing rule scripts.",
+            description: "Rule scripting reference: ctx API typings, stdlib typings, the shared library source, the cookbook and the deep rule-editor guide (phases, env/variables semantics, JSONPath). Read before writing rule scripts.",
             schema: obj(json!({}), &[]),
         },
         ToolDef {
@@ -418,6 +418,7 @@ const SCRIPT_API_DTS: &str = include_str!("../../../src/scripting/apiTypes.ts");
 const SCRIPT_STDLIB: &str = include_str!("../../../src/scripting/stdlib.ts");
 const SCRIPT_DOCS_MANIFEST: &str = include_str!("../../../src/scripting/stdlib-docs.ts");
 const SCRIPT_COOKBOOK: &str = include_str!("../../../docs/scripting-cookbook.md");
+const SCRIPT_GUIDE: &str = include_str!("../../../docs/rule-editor-guide.md");
 
 fn tool_list_rules(deps: &Deps, args: &Value) -> Result<Value, String> {
     let rules = crate::rules::load_rules(&deps.rules_dir).map_err(|e| e.to_string())?;
@@ -485,8 +486,9 @@ fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
         "stdlib": SCRIPT_STDLIB,
         "docsManifest": SCRIPT_DOCS_MANIFEST,
         "cookbook": SCRIPT_COOKBOOK,
+        "guide": SCRIPT_GUIDE,
         "librarySource": library,
-        "commonMistakes": "send() has no .data (only sendJsonRequest does). Mutating a parsed object doesn't change body — you need setJsonBody (patch/removeAt/mergeAt do it for you). handler must return response. patch with 0 nodes is an error, use tryPatch for optional fields. delay() is handler-phase only.",
+        "commonMistakes": "send() has no .data (only sendJsonRequest does). Mutating a parsed object doesn't change body — you need setJsonBody (patch/removeAt/mergeAt do it for you). handler must return response. patch with 0 nodes is an error, use tryPatch for optional fields. delay() is handler-phase only. counter()/once()/everyNth() state is in-memory per app session and isolated per dry-run (counter always starts at 1 in test_rule). setVariable persists only after a real run — dry-run reports env changes without saving; non-strings are stringified on writeback; deleting a global variable while a project is active does not persist. One Set-Cookie per scripted response.",
     }))
 }
 
@@ -768,6 +770,12 @@ mod tests {
         assert!(v["apiTypes"].as_str().unwrap().contains("API_DTS"));
         assert!(v["stdlib"].as_str().unwrap().contains("STD_DTS"));
         assert!(v["librarySource"].is_string());
+        let guide = v["guide"].as_str().unwrap();
+        assert!(guide.contains("The three phases"), "deep guide is bundled");
+        assert!(guide.contains("Variables API"), "env/variables semantics are bundled");
+        let mistakes = v["commonMistakes"].as_str().unwrap();
+        assert!(mistakes.contains("counter"), "state caveats present");
+        assert!(mistakes.contains("dry-run"), "dry-run caveats present");
     }
 
     #[test]

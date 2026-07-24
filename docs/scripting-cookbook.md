@@ -105,6 +105,104 @@ phase: handler
 return sendWithRetry(request, { retries: 5, delay: 500 });
 ```
 
+## 16. Fail the first 3 requests, then pass through
+phase: handler
+```js
+const attempt = counter('warmup');
+if (attempt <= 3) return httpError(503, 'warming up, attempt ' + attempt);
+return send(request);
+```
+
+## 17. Mock an endpoint only once per session
+phase: request
+```js
+if (once('first-config')) {
+  json({ featureFlags: { newUi: true }, firstLaunch: true });
+}
+```
+
+## 18. Fail every 5th request
+phase: handler
+```js
+if (everyNth('flaky', 5)) return httpError(500, 'every 5th fails');
+return send(request);
+```
+
+## 19. Decode and inspect a JWT from the Authorization header
+phase: request
+```js
+const auth = header(request, 'authorization');
+if (auth) {
+  const { payload } = jwtDecode(auth);
+  if ((payload.exp || 0) * 1000 - Date.now() < 60000) {
+    notify('JWT expires in <60s (sub: ' + payload.sub + ')', { title: 'Auth' });
+  }
+}
+```
+
+## 20. Sign outgoing requests with HMAC-SHA256
+phase: request
+```js
+setHeader(request, 'X-Signature', hmacSha256(secret('hmac_key'), request.body));
+```
+
+## 21. Add Basic auth from a secret
+phase: request
+```js
+setHeader(request, 'Authorization', 'Basic ' + base64Encode('admin:' + secret('admin_pw')));
+```
+
+## 22. Rewrite the session cookie on responses
+phase: response
+```js
+setCookie(response, 'session', 'test-session', { path: '/', httpOnly: true, sameSite: 'Lax' });
+```
+
+## 23. Strip a tracking cookie from all requests
+phase: request
+```js
+removeCookie(request, '_tracking');
+```
+
+## 24. Capture credentials from a form login into variables
+phase: request, pattern: `*/auth/login*`
+```js
+const user = formParam(request, 'username');
+if (user !== undefined) setVariable('lastLoginUser', user);
+```
+
+## 25. Paginated fake list keyed by the page query param
+phase: request
+```js
+const page = Number(queryParam(request, 'page') || 1);
+json({
+  page: page,
+  items: fakeList(20, i => ({ id: (page - 1) * 20 + i + 1, name: fakeName(), description: lorem(8) })),
+  hasMore: page < 5,
+});
+```
+
+## 26. A/B: mock 10% of traffic
+phase: handler
+```js
+if (randomBool(0.1)) return json({ variant: 'B', mocked: true });
+return send(request);
+```
+
+## 27. Fake user directory with realistic data
+phase: request
+```js
+json({
+  users: fakeList(10, i => ({
+    id: i + 1,
+    name: fakeName(),
+    email: fakeEmail(),
+    phone: fakePhone(),
+    bio: lorem(12),
+  })),
+});
+```
+
 ## Common mistakes
 - `send()` returns `{status, headers, body}` — it has NO `.data` field.
   Parsed JSON is given by `sendJsonRequest()` (`.data` field) or `jsonBody(res)`.
@@ -114,3 +212,13 @@ return sendWithRetry(request, { retries: 5, delay: 500 });
 - A handler rule must return a response: `return res;`.
 - `patch` with 0 matches is an error (fail-closed). For optional fields, use `tryPatch`.
 - `delay()` only works in the handler phase.
+- `counter()`/`once()`/`everyNth()` state is in-memory and per app session — it
+  resets on restart. Dry-run ("Test on traffic") uses an isolated store, so
+  inside a dry-run `counter()` always starts at 1 and `once()` is always true.
+- `setVariable()` persists only after a rule runs on real traffic; dry-run shows
+  the change in its output but never saves it.
+- Deleting a variable that only exists in the global env while a project is
+  active does not persist the deletion (the project can only override, not
+  erase, global variables).
+- The script header map holds one value per header name, so a scripted response
+  can carry only one `Set-Cookie`.
