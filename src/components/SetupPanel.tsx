@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import {
   AlertTriangle,
@@ -45,6 +45,13 @@ export function SetupPanel() {
   const [chromeLaunched, setChromeLaunched] = useState(false);
   const running = useFlows((s) => s.running);
   const httpsSeen = useFlows((s) => s.flows.some((f) => f.url.scheme === "https"));
+
+  // Re-read proxy state right after a toggle so the button flips without waiting for the poll.
+  const refreshProxy = useCallback(() => {
+    systemProxyEnabled()
+      .then(setProxyOn)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     getSetupInfo().then(setInfo).catch(() => {});
@@ -129,11 +136,15 @@ export function SetupPanel() {
         )}
       </div>
 
-      {scenario === "mac" && <MacSteps certPath={certPath} />}
+      {scenario === "mac" && (
+        <MacSteps certPath={certPath} proxyOn={proxyOn} onProxyToggled={refreshProxy} />
+      )}
       {scenario === "chrome" && (
         <ChromeSteps certPath={certPath} onLaunched={() => setChromeLaunched(true)} />
       )}
-      {scenario === "ios" && <IosSteps certPath={certPath} />}
+      {scenario === "ios" && (
+        <IosSteps certPath={certPath} proxyOn={proxyOn} onProxyToggled={refreshProxy} />
+      )}
       {scenario === "android" && <AndroidSteps />}
       {scenario === "phone" && <PhoneSteps ip={ip} port={port} qr={qr} certPath={certPath} />}
 
@@ -244,15 +255,22 @@ function TrustStep({ certPath }: { certPath: string }) {
   );
 }
 
-function MacSteps({ certPath }: { certPath: string }) {
+function MacSteps({
+  certPath,
+  proxyOn,
+  onProxyToggled,
+}: {
+  certPath: string;
+  proxyOn: boolean | null;
+  onProxyToggled: () => void;
+}) {
   return (
     <>
       <TrustStep certPath={certPath} />
       <Step n={2} icon={<Settings className="size-4" />} title="Route the Mac through the proxy">
         <p>Sets the system HTTP/HTTPS proxy to 127.0.0.1:8729. Every app that honors it is captured.</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <ActionButton icon={<Power />} label="Enable system proxy" run={() => setSystemProxy(true)} done="System proxy on" />
-          <ActionButton icon={<PowerOff />} label="Disable" variant="ghost" run={() => setSystemProxy(false)} done="System proxy off" />
+          <SystemProxyToggle proxyOn={proxyOn} onToggled={onProxyToggled} />
         </div>
       </Step>
     </>
@@ -281,7 +299,15 @@ function ChromeSteps({ certPath, onLaunched }: { certPath: string; onLaunched: (
   );
 }
 
-function IosSteps({ certPath }: { certPath: string }) {
+function IosSteps({
+  certPath,
+  proxyOn,
+  onProxyToggled,
+}: {
+  certPath: string;
+  proxyOn: boolean | null;
+  onProxyToggled: () => void;
+}) {
   return (
     <>
       <Step n={1} icon={<Smartphone className="size-4" />} title="Boot a simulator">
@@ -297,8 +323,7 @@ function IosSteps({ certPath }: { certPath: string }) {
       <Step n={3} icon={<Settings className="size-4" />} title="Route through the proxy">
         <p>The simulator uses the Mac’s network, so enable the system proxy.</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <ActionButton icon={<Power />} label="Enable system proxy" run={() => setSystemProxy(true)} done="System proxy on" />
-          <ActionButton icon={<PowerOff />} label="Disable" variant="ghost" run={() => setSystemProxy(false)} done="System proxy off" />
+          <SystemProxyToggle proxyOn={proxyOn} onToggled={onProxyToggled} />
         </div>
       </Step>
     </>
@@ -429,6 +454,30 @@ function ActionButton({
         </span>
       )}
     </>
+  );
+}
+
+// Single state-aware control: label/icon/action follow the live proxy state
+// (polled into `proxyOn`), instead of showing separate Enable + Disable buttons.
+function SystemProxyToggle({ proxyOn, onToggled }: { proxyOn: boolean | null; onToggled: () => void }) {
+  const on = proxyOn === true;
+  return (
+    <ActionButton
+      icon={on ? <PowerOff /> : <Power />}
+      label={
+        proxyOn === null
+          ? "Enable system proxy"
+          : on
+            ? "Disable system proxy"
+            : "Enable system proxy"
+      }
+      variant={on ? "ghost" : "outline"}
+      run={async () => {
+        await setSystemProxy(!on);
+        onToggled();
+      }}
+      done={on ? "System proxy off" : "System proxy on"}
+    />
   );
 }
 
