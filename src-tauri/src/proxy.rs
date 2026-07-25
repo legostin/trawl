@@ -384,7 +384,7 @@ impl CaptureHandler {
                         f.paused_phase = None;
                     }
                 });
-                if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                if let Some(u) = self.store.get(id) {
                     (self.emit)("flow-updated", &u);
                     (self.emit)("breakpoint-timeout", &u);
                 }
@@ -445,7 +445,7 @@ impl CaptureHandler {
                 body_is_text: true,
             });
         });
-        if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+        if let Some(u) = self.store.get(id) {
             (self.emit)("flow-paused", &u);
         }
         let resolution = self.await_resolution(id, BpPhase::Response).await;
@@ -498,7 +498,7 @@ impl CaptureHandler {
             f.timings.done = Some(done);
             f.state = FlowState::Completed;
         });
-        if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+        if let Some(u) = self.store.get(id) {
             (self.emit)("flow-updated", &u);
             self.persist(&u);
         }
@@ -719,7 +719,7 @@ impl HttpHandler for CaptureHandler {
                             f.request.body = req_body_text.clone().into_bytes();
                         }
                     });
-                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    if let Some(u) = self.store.get(id) {
                         (self.emit)("flow-updated", &u);
                         (self.emit)("flow-resumed", &u);
                     }
@@ -730,7 +730,7 @@ impl HttpHandler for CaptureHandler {
                         f.paused_phase = None;
                         f.error = Some(reason.clone());
                     });
-                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    if let Some(u) = self.store.get(id) {
                         (self.emit)("flow-updated", &u);
                         (self.emit)("flow-resumed", &u);
                         self.persist(&u);
@@ -752,7 +752,7 @@ impl HttpHandler for CaptureHandler {
                         f.state = FlowState::Completed;
                         f.paused_phase = None;
                     });
-                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    if let Some(u) = self.store.get(id) {
                         (self.emit)("flow-updated", &u);
                         (self.emit)("flow-resumed", &u);
                         self.persist(&u);
@@ -857,7 +857,7 @@ impl HttpHandler for CaptureHandler {
                                 });
                                 f.state = FlowState::Completed;
                             });
-                            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                            if let Some(u) = self.store.get(id) {
                                 (self.emit)("flow-updated", &u);
                                 if explicit {
                                     (self.emit)("flow-resumed", &u);
@@ -871,7 +871,7 @@ impl HttpHandler for CaptureHandler {
                                 f.state = FlowState::Error;
                                 f.error = Some(reason.clone());
                             });
-                            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                            if let Some(u) = self.store.get(id) {
                                 (self.emit)("flow-updated", &u);
                                 if explicit {
                                     (self.emit)("flow-resumed", &u);
@@ -1019,7 +1019,7 @@ impl HttpHandler for CaptureHandler {
                 f.state = FlowState::Paused;
                 f.paused_phase = Some("request".into());
             });
-            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+            if let Some(u) = self.store.get(id) {
                 (self.emit)("flow-paused", &u);
             }
             let mut explicit_resume = false;
@@ -1054,7 +1054,7 @@ impl HttpHandler for CaptureHandler {
                         f.state = FlowState::Completed;
                         f.paused_phase = None;
                     });
-                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    if let Some(u) = self.store.get(id) {
                         (self.emit)("flow-updated", &u);
                         (self.emit)("flow-resumed", &u);
                         self.persist(&u);
@@ -1072,7 +1072,7 @@ impl HttpHandler for CaptureHandler {
                     f.request.body = work_body.clone().into_bytes();
                 }
             });
-            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+            if let Some(u) = self.store.get(id) {
                 (self.emit)("flow-updated", &u);
                 if explicit_resume {
                     (self.emit)("flow-resumed", &u);
@@ -1092,7 +1092,7 @@ impl HttpHandler for CaptureHandler {
                     f.state = FlowState::Error;
                     f.error = Some(reason.clone());
                 });
-                if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                if let Some(u) = self.store.get(id) {
                     (self.emit)("flow-updated", &u);
                     self.persist(&u);
                 }
@@ -1137,7 +1137,7 @@ impl HttpHandler for CaptureHandler {
         };
 
         // ── response-phase scripts ──
-        let found = self.store.all().into_iter().find(|f| f.id == id);
+        let found = self.store.get(id);
         let flow_method = found.as_ref().map(|f| f.method.clone()).unwrap_or_default();
         let flow_url = found.map(|f| f.url);
         let (targets, host_str, path_str) = match &flow_url {
@@ -1253,7 +1253,7 @@ impl HttpHandler for CaptureHandler {
                     body_is_text: is_text,
                 });
             });
-            if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+            if let Some(u) = self.store.get(id) {
                 (self.emit)("flow-paused", &u);
             }
             match self.await_resolution(id, BpPhase::Response).await {
@@ -1275,7 +1275,7 @@ impl HttpHandler for CaptureHandler {
                         f.paused_phase = None;
                         f.error = Some(reason.clone());
                     });
-                    if let Some(u) = self.store.all().into_iter().find(|f| f.id == id) {
+                    if let Some(u) = self.store.get(id) {
                         (self.emit)("flow-updated", &u);
                         (self.emit)("flow-resumed", &u);
                         self.persist(&u);
@@ -1331,7 +1331,7 @@ impl HttpHandler for CaptureHandler {
                 f.error = Some(e.clone());
             }
         });
-        if let Some(updated) = self.store.all().into_iter().find(|f| f.id == id) {
+        if let Some(updated) = self.store.get(id) {
             (self.emit)("flow-updated", &updated);
             if explicit_resume {
                 (self.emit)("flow-resumed", &updated);
