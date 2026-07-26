@@ -261,6 +261,19 @@ Requires host API `1.6.0`.
 
 ---
 
+## Capture control
+
+Requires host API `1.8.0`. Point a browser you launch at Trawl's proxy:
+
+```ts
+const { running, port } = await host.capture.start();   // starts it if stopped
+host.capture.status();                                  // { running, port }
+const off = host.capture.onChange((s) => host.log("capture", s));
+await host.capture.stop();
+```
+
+`port` is the live proxy port — never assume a fixed one.
+
 ## Native dialogs and child processes
 
 Requires host API `1.8.0`. Both are available to every plugin — feature-detect

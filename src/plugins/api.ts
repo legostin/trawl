@@ -172,6 +172,20 @@ export interface TrawlMcp {
   unregisterTool(name: string): Promise<void>;
 }
 
+export interface CaptureStatus {
+  running: boolean;
+  /** The proxy's port while it runs — what a plugin points a browser at. */
+  port: number | null;
+}
+
+export interface TrawlCapture {
+  status(): CaptureStatus;
+  /** Start the proxy if it isn't running; resolves with the live status. */
+  start(): Promise<CaptureStatus>;
+  stop(): Promise<void>;
+  onChange(cb: (status: CaptureStatus) => void): () => void;
+}
+
 export interface TrawlDialog {
   /** Native folder picker. Resolves to null when the user cancels. */
   pickFolder(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
@@ -230,6 +244,8 @@ export interface TrawlHost {
   storage: TrawlStorage;
   secrets: TrawlSecrets;
   mcp: TrawlMcp;
+  /** Proxy control: point a spawned browser at Trawl. Requires 1.8.0. */
+  capture: TrawlCapture;
   /** Native dialogs. Requires host API 1.8.0 — feature-detect before use. */
   dialog: TrawlDialog;
   /** Child processes owned by this plugin. Requires host API 1.8.0. */

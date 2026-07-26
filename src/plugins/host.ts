@@ -44,6 +44,7 @@ import {
   type RuleDraft,
   type TrawlHost,
   type TrawlUi,
+  type CaptureStatus,
 } from "./api";
 
 /** Snapshot the active project (id/name/env) from the projects store. */
@@ -139,6 +140,13 @@ function maybeEmitFlowError(payload: unknown): void {
   }
 }
 
+/** Proxy state in the shape plugins consume: running + the port to point at. */
+function captureStatus(): CaptureStatus {
+  const { running, proxyAddr } = useFlows.getState();
+  const port = proxyAddr ? Number(proxyAddr.split(":").pop()) : null;
+  return { running, port: Number.isFinite(port) ? port : null };
+}
+
 /** Build a host object bound to one plugin. Each bundle gets its own, so calls
  *  made later (a spawn on a click) are still attributed to the right plugin. */
 export function makeHost(pluginId: string | null): TrawlHost {
@@ -220,6 +228,24 @@ export function makeHost(pluginId: string | null): TrawlHost {
       remove: (name: string) => deleteSecret(name),
     },
     mcp: { registerTool, unregisterTool },
+    capture: {
+      status: () => captureStatus(),
+      start: async () => {
+        await useFlows.getState().ensureProxy();
+        return captureStatus();
+      },
+      stop: async () => {
+        if (useFlows.getState().running) await useFlows.getState().stopProxy();
+      },
+      onChange: (cb) => {
+        const off1 = bus.on("capture:started", () => cb(captureStatus()));
+        const off2 = bus.on("capture:stopped", () => cb(captureStatus()));
+        return () => {
+          off1();
+          off2();
+        };
+      },
+    },
     dialog: dialogApi(),
     process: processApi(pluginId),
     ui: {
