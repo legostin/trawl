@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -110,7 +111,11 @@ pub fn spawn(
     cmd.args(&req.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Its own process group, so stopping it stops the whole tree. `npx`
+        // execs node, which runs a browser: killing only the wrapper leaves
+        // both behind.
+        .process_group(0);
 
     if let Some(path) = login_path() {
         cmd.env("PATH", path);
@@ -197,6 +202,22 @@ pub fn list(app: &AppHandle, state: &ProcState, plugin_id: Option<&str>) -> Vec<
 }
 
 fn stop(entry: &mut Entry) {
+    // The group first: children of the spawned command (node, browsers) are in
+    // it, and they are what the user sees left behind.
+    let pid = entry.child.id() as i32;
+    unsafe {
+        libc::killpg(pid, libc::SIGTERM);
+    }
+    // Give the tree a moment to shut down cleanly, then insist.
+    for _ in 0..20 {
+        match entry.child.try_wait() {
+            Ok(Some(_)) => return,
+            _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+    unsafe {
+        libc::killpg(pid, libc::SIGKILL);
+    }
     let _ = entry.child.kill();
     let _ = entry.child.wait(); // reap, so no zombie is left behind
 }
@@ -278,6 +299,46 @@ mod tests {
         assert!(req.args.is_empty());
         assert!(req.env.is_empty());
         assert!(req.cwd.is_none());
+    }
+
+    /// Stopping a wrapper must take its children with it: the agent is `npx`,
+    /// which execs node, which runs a browser — killing only the wrapper is
+    /// exactly how a browser gets left on screen.
+    #[test]
+    fn stop_takes_the_whole_process_tree() {
+        // A shell that spawns a long-lived grandchild and waits.
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "sleep 300 & echo $!; wait"])
+            .stdout(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("spawn");
+
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let grandchild: i32 = line.trim().parse().expect("grandchild pid");
+        assert_eq!(unsafe { libc::kill(grandchild, 0) }, 0, "grandchild should be alive");
+
+        let mut entry = Entry {
+            info: ProcessInfo {
+                id: "p_tree".into(),
+                pid: child.id(),
+                plugin_id: "test".into(),
+                command: "sh".into(),
+                started_at: now_ms(),
+            },
+            child,
+        };
+        stop(&mut entry);
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            unsafe { libc::kill(grandchild, 0) },
+            -1,
+            "the grandchild must be gone, not orphaned",
+        );
     }
 
     /// The panic this module exists to avoid: spawning from a plain thread, with
