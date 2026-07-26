@@ -17,6 +17,13 @@ plugins:
     repo: legostin/trawl-plugin-schema-check
     tags: [testing, schema, diff]
 
+  - id: devices
+    name: Devices
+    description: Test-automation devices — record browser scenarios and replay them with Playwright, with each step linked to its captured traffic.
+    author: legostin
+    repo: legostin/trawl-plugin-devices
+    tags: [testing, browser, playwright, automation]
+
   - id: notifications
     name: Notifications
     description: Subscribe to any core or plugin event and deliver messages to Telegram — templates with payload hints, JS conditions, throttling, and notify() from rule scripts.
