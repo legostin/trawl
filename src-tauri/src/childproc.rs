@@ -4,17 +4,21 @@
 //! The user's real PATH is resolved once from their login shell and reused for
 //! every spawn. Processes are owned by the plugin that started them so they can
 //! be killed when it is disabled, reloaded, or the app exits.
+//!
+//! Deliberately `std::process` rather than `tokio::process`: these calls arrive
+//! from Tauri commands and from the app's exit handler, none of which are
+//! guaranteed to run inside the tokio runtime — and tokio's child processes
+//! panic when touched without a reactor.
 
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::io::{BufRead, BufReader, Read};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tauri::{AppHandle, Emitter, State};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessInfo {
@@ -74,7 +78,7 @@ pub fn login_path() -> Option<String> {
     LOGIN_PATH
         .get_or_init(|| {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-            let out = std::process::Command::new(&shell)
+            let out = Command::new(&shell)
                 .args(["-lc", "printf %s \"$PATH\""])
                 .output()
                 .ok()?;
@@ -106,8 +110,7 @@ pub fn spawn(
     cmd.args(&req.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
 
     if let Some(path) = login_path() {
         cmd.env("PATH", path);
@@ -121,7 +124,7 @@ pub fn spawn(
 
     let mut child = cmd.spawn()?;
     let id = format!("p_{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-    let pid = child.id().unwrap_or(0);
+    let pid = child.id();
 
     if let Some(stdout) = child.stdout.take() {
         pump(app.clone(), id.clone(), "stdout", stdout);
@@ -141,21 +144,17 @@ pub fn spawn(
         started_at: now_ms(),
     };
 
-    state
-        .entries
-        .lock()
-        .unwrap()
-        .push(Entry { info: info.clone(), child });
+    state.entries.lock().unwrap().push(Entry {
+        info: info.clone(),
+        child,
+    });
     Ok(info)
 }
 
-fn pump<R>(app: AppHandle, id: String, stream: &'static str, reader: R)
-where
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
-{
-    tauri::async_runtime::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(text)) = lines.next_line().await {
+fn pump<R: Read + Send + 'static>(app: AppHandle, id: String, stream: &'static str, reader: R) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(text) = line else { break };
             let _ = app.emit(
                 "plugin-process-output",
                 OutputEvent {
@@ -197,12 +196,17 @@ pub fn list(app: &AppHandle, state: &ProcState, plugin_id: Option<&str>) -> Vec<
     out
 }
 
+fn stop(entry: &mut Entry) {
+    let _ = entry.child.kill();
+    let _ = entry.child.wait(); // reap, so no zombie is left behind
+}
+
 /// Kill one process. Unknown ids are a no-op.
 pub fn kill(state: &ProcState, id: &str) {
     let mut entries = state.entries.lock().unwrap();
     if let Some(at) = entries.iter().position(|e| e.info.id == id) {
         let mut entry = entries.remove(at);
-        let _ = futures_kill(&mut entry.child);
+        stop(&mut entry);
     }
 }
 
@@ -214,7 +218,7 @@ pub fn kill_plugin(state: &ProcState, plugin_id: &str) {
         .partition(|e| e.info.plugin_id == plugin_id);
     *entries = others;
     for mut entry in mine {
-        let _ = futures_kill(&mut entry.child);
+        stop(&mut entry);
     }
 }
 
@@ -222,38 +226,11 @@ pub fn kill_plugin(state: &ProcState, plugin_id: &str) {
 pub fn kill_all(state: &ProcState) {
     let mut entries = state.entries.lock().unwrap();
     for mut entry in entries.drain(..) {
-        let _ = futures_kill(&mut entry.child);
-    }
-}
-
-fn futures_kill(child: &mut Child) -> Result<()> {
-    child.start_kill()?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn login_path_is_resolved_or_absent() {
-        // Either the login shell answered, or we fall back — never an empty string.
-        assert!(login_path().map(|p| !p.is_empty()).unwrap_or(true));
-    }
-
-    #[test]
-    fn spawn_request_defaults_are_empty() {
-        let req: SpawnRequest = serde_json::from_str(r#"{"command":"echo"}"#).unwrap();
-        assert_eq!(req.command, "echo");
-        assert!(req.args.is_empty());
-        assert!(req.env.is_empty());
-        assert!(req.cwd.is_none());
+        stop(&mut entry);
     }
 }
 
 // ---- Tauri commands -------------------------------------------------------
-
-use tauri::State;
 
 #[tauri::command]
 pub fn plugin_spawn(
@@ -282,4 +259,52 @@ pub fn plugin_list_processes(
 #[tauri::command]
 pub fn plugin_kill_processes(state: State<'_, ProcState>, plugin_id: String) {
     kill_plugin(&state, &plugin_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_path_is_resolved_or_absent() {
+        // Either the login shell answered, or we fall back — never an empty string.
+        assert!(login_path().map(|p| !p.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn spawn_request_defaults_are_empty() {
+        let req: SpawnRequest = serde_json::from_str(r#"{"command":"echo"}"#).unwrap();
+        assert_eq!(req.command, "echo");
+        assert!(req.args.is_empty());
+        assert!(req.env.is_empty());
+        assert!(req.cwd.is_none());
+    }
+
+    /// The panic this module exists to avoid: spawning from a plain thread, with
+    /// no tokio runtime anywhere in sight, must simply work.
+    #[test]
+    fn spawns_and_reaps_without_a_runtime() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "printf hello; sleep 5"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+
+        let mut buf = [0u8; 5];
+        child.stdout.as_mut().unwrap().read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
+
+        let mut entry = Entry {
+            info: ProcessInfo {
+                id: "p_test".into(),
+                pid: child.id(),
+                plugin_id: "test".into(),
+                command: "sh".into(),
+                started_at: now_ms(),
+            },
+            child,
+        };
+        stop(&mut entry);
+        assert!(entry.child.try_wait().unwrap().is_some(), "child should be reaped");
+    }
 }
