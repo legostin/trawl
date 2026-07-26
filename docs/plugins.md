@@ -116,6 +116,8 @@ interface TrawlHost {
   secrets: TrawlSecrets;           // app-wide named secrets (Keychain)
   rules: TrawlRules;               // create a rule and open the editor
   storage: TrawlStorage;           // project-scoped key/value persistence
+  capture: TrawlCapture;           // start/stop the proxy, read its port (1.8.0)
+  editor: TrawlEditor;             // completions in the code editor (1.9.0)
   dialog: TrawlDialog;             // native folder/file pickers (1.8.0)
   process: TrawlProcess;           // child processes owned by this plugin (1.8.0)
   ui: TrawlUi;                     // reusable host components
@@ -260,6 +262,31 @@ Rules:
 Requires host API `1.6.0`.
 
 ---
+
+## Editor completions
+
+Requires host API `1.9.0`. `host.ui.ScriptEditor` is the same Monaco editor the
+rules editor uses; a plugin can add its own completions to it and drive it
+imperatively:
+
+```ts
+const off = host.editor.registerCompletions({
+  language: "javascript",
+  triggerCharacters: ["'", "\""],
+  provide: ({ linePrefix, text }) =>
+    linePrefix.endsWith("run('")
+      ? scripts.map((path) => ({ label: path, kind: "file" }))
+      : steps.map((name) => ({ label: name, insert: `${name}($0)`, kind: "function" })),
+});
+
+const editor = host.react.useRef<ScriptEditorApi | null>(null);
+<host.ui.ScriptEditor value={code} onChange={setCode} apiRef={editor} />;
+editor.current?.insert("{{BASE_URL}}");
+```
+
+The provider sees only the line prefix and the document text, so no editor
+internals leak into plugins. A `$0` in `insert` marks where the caret lands.
+Return the unsubscribe function's result to remove the provider.
 
 ## Capture control
 

@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.8.0";
+export const HOST_API_VERSION = "1.9.0";
 
 export interface RegisteredMode {
   id: string;
@@ -33,17 +33,55 @@ export interface FlowAction {
   run(flow: Flow): void;
 }
 
+/** Imperative handle on the host's code editor. */
+export interface ScriptEditorApi {
+  /** Insert text at the cursor (replacing the selection). */
+  insert(text: string): void;
+  /** Replace the whole document, keeping undo history. */
+  replaceAll(text: string): void;
+  getSelectionText(): string;
+  getValue(): string;
+}
+
+export interface CompletionItem {
+  label: string;
+  /** What gets inserted; defaults to `label`. `$0` marks the caret. */
+  insert?: string;
+  detail?: string;
+  documentation?: string;
+  kind?: "function" | "variable" | "file" | "snippet" | "keyword";
+}
+
+export interface CompletionContext {
+  /** Text of the line up to the caret — enough to decide what to offer. */
+  linePrefix: string;
+  /** The whole document. */
+  text: string;
+}
+
+/** Plugin-supplied completions in the host's editor (requires 1.9.0). */
+export interface TrawlEditor {
+  registerCompletions(spec: {
+    language?: string;
+    triggerCharacters?: string[];
+    provide(context: CompletionContext): CompletionItem[];
+  }): () => void;
+}
+
 /** Reusable host UI components (so plugins render bodies/headers consistently). */
 export interface TrawlUi {
   BodyViewer: React.ComponentType<{ msg: HttpMessage | ResponseMessage | null }>;
   HeadersTable: React.ComponentType<{ headers: [string, string][]; emptyText?: string }>;
   MethodBadge: React.ComponentType<{ method: string; className?: string }>;
   StatusBadge: React.ComponentType<{ status: number | undefined; className?: string }>;
-  /** Monaco-backed code editor wired to the host's completion setup. */
+  /** Monaco-backed code editor wired to the host's completion setup —
+   *  the same component the rules editor uses. */
   ScriptEditor: React.ComponentType<{
     value: string;
     onChange: (v: string) => void;
     language?: string;
+    /** Imperative handle: insert at the cursor, replace all, read selection. */
+    apiRef?: React.MutableRefObject<ScriptEditorApi | null>;
   }>;
   /** Host's themed button (variant/size are loosely typed here to avoid leaking cva internals). */
   Button: React.ComponentType<
@@ -246,6 +284,8 @@ export interface TrawlHost {
   mcp: TrawlMcp;
   /** Proxy control: point a spawned browser at Trawl. Requires 1.8.0. */
   capture: TrawlCapture;
+  /** Completions in the host's code editor. Requires 1.9.0. */
+  editor: TrawlEditor;
   /** Native dialogs. Requires host API 1.8.0 — feature-detect before use. */
   dialog: TrawlDialog;
   /** Child processes owned by this plugin. Requires host API 1.8.0. */

@@ -34,6 +34,7 @@ import { useUpdater } from "@/updater";
 import { bus } from "./bus";
 import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
 import { dialogApi, processApi } from "./procApi";
+import { editorApi } from "./editorApi";
 import {
   HOST_API_VERSION,
   type ActiveProject,
@@ -246,6 +247,7 @@ export function makeHost(pluginId: string | null): TrawlHost {
         };
       },
     },
+    editor: editorApi(),
     dialog: dialogApi(),
     process: processApi(pluginId),
     ui: {
