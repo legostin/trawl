@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Design specs and implementation plans — kept locally, not published
+docs/superpowers/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
