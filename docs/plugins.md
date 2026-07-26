@@ -44,7 +44,7 @@ Placed at the repo root:
   "description": "Postman-style HTTP client for Trawl.",
   "author": "you",
   "entry": "dist/plugin.js",
-  "apiVersion": "1.5.0",
+  "apiVersion": "1.8.0",
   "dependencies": []
 }
 ```
@@ -104,7 +104,7 @@ const host = window.__TRAWL__;
 
 ```ts
 interface TrawlHost {
-  version: string;                 // host API version, e.g. "1.5.0"
+  version: string;                 // host API version, e.g. "1.8.0"
   react: typeof React;             // the host's React (use for hooks if needed)
 
   events: PluginEvents;            // pub/sub bus (see Events)
@@ -116,6 +116,8 @@ interface TrawlHost {
   secrets: TrawlSecrets;           // app-wide named secrets (Keychain)
   rules: TrawlRules;               // create a rule and open the editor
   storage: TrawlStorage;           // project-scoped key/value persistence
+  dialog: TrawlDialog;             // native folder/file pickers (1.8.0)
+  process: TrawlProcess;           // child processes owned by this plugin (1.8.0)
   ui: TrawlUi;                     // reusable host components
   util: TrawlUtil;                 // bodyText(), buildCurl()
 
@@ -258,6 +260,41 @@ Rules:
 Requires host API `1.6.0`.
 
 ---
+
+## Native dialogs and child processes
+
+Requires host API `1.8.0`. Both are available to every plugin — feature-detect
+(`if (host.process) …`) so your plugin still loads on an older app.
+
+```ts
+const folder = await host.dialog.pickFolder({ title: "Where to keep scenarios" });
+const file = await host.dialog.pickFile({ filters: [{ name: "JSON", extensions: ["json"] }] });
+```
+
+```ts
+const proc = await host.process.spawn({
+  command: "npx",
+  args: ["-y", "my-sidecar@latest", "--port=8787"],
+});
+const offOutput = host.process.onOutput(proc.id, ({ stream, text }) => host.log(stream, text));
+const offExit = host.process.onExit(proc.id, ({ code }) => host.log("exited", code));
+await host.process.kill(proc.id);
+await host.process.list();   // this plugin's running processes
+```
+
+Rules:
+
+- **`command` is resolved against the user's login-shell PATH**, so `npx`, `node`
+  and other tools installed via nvm or Homebrew are found even though a GUI app
+  normally inherits a minimal PATH. Pass arguments as an array — there is no
+  shell string, so nothing needs quoting.
+- **Processes belong to the plugin that started them** and are killed when it is
+  disabled or reloaded, and when the app quits.
+- **The first spawn asks the user once**, showing the plugin id and the exact
+  command. A refusal rejects the `spawn` call.
+- **Capture the host during initialization** (`const host = window.__TRAWL__` at
+  the top level of your bundle). That is the object that knows which plugin you
+  are; a host read later cannot spawn.
 
 ## Events
 

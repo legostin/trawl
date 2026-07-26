@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.7.0";
+export const HOST_API_VERSION = "1.8.0";
 
 export interface RegisteredMode {
   id: string;
@@ -172,6 +172,50 @@ export interface TrawlMcp {
   unregisterTool(name: string): Promise<void>;
 }
 
+export interface TrawlDialog {
+  /** Native folder picker. Resolves to null when the user cancels. */
+  pickFolder(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
+  /** Native file picker. `filters` is [{ name, extensions }]. */
+  pickFile(options?: {
+    title?: string;
+    defaultPath?: string;
+    filters?: { name: string; extensions: string[] }[];
+  }): Promise<string | null>;
+}
+
+export interface ProcessInfo {
+  id: string;
+  pid: number;
+  pluginId: string;
+  command: string;
+  startedAt: number;
+}
+
+export interface ProcessLine {
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
+/** Child processes owned by the calling plugin. Killed when it is disabled,
+ *  reloaded, or the app exits — a plugin's process never outlives the app. */
+export interface TrawlProcess {
+  /** Start a process. `command` is resolved against the user's login-shell PATH,
+   *  so `npx` and friends work from a GUI app. */
+  spawn(request: {
+    command: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+  }): Promise<ProcessInfo>;
+  /** Subscribe to a process's output lines; returns an unsubscribe fn. */
+  onOutput(id: string, cb: (line: ProcessLine) => void): () => void;
+  /** Subscribe to a process's exit; returns an unsubscribe fn. */
+  onExit(id: string, cb: (event: { code: number | null }) => void): () => void;
+  kill(id: string): Promise<void>;
+  /** This plugin's still-running processes. */
+  list(): Promise<ProcessInfo[]>;
+}
+
 /** The host object exposed to plugins as `window.__TRAWL__`. */
 export interface TrawlHost {
   version: string;
@@ -186,6 +230,10 @@ export interface TrawlHost {
   storage: TrawlStorage;
   secrets: TrawlSecrets;
   mcp: TrawlMcp;
+  /** Native dialogs. Requires host API 1.8.0 — feature-detect before use. */
+  dialog: TrawlDialog;
+  /** Child processes owned by this plugin. Requires host API 1.8.0. */
+  process: TrawlProcess;
   ui: TrawlUi;
   util: TrawlUtil;
   registerMode(mode: RegisteredMode): void;

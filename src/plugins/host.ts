@@ -33,6 +33,7 @@ import { listSecrets, getSecret, setSecret, deleteSecret } from "@/secrets";
 import { useUpdater } from "@/updater";
 import { bus } from "./bus";
 import { initMcpBridge, registerTool, unregisterTool } from "./mcpBridge";
+import { dialogApi, processApi } from "./procApi";
 import {
   HOST_API_VERSION,
   type ActiveProject,
@@ -138,12 +139,10 @@ function maybeEmitFlowError(payload: unknown): void {
   }
 }
 
-/** Install the host API on `window` and bridge app state into the event bus. */
-export function installHost(): void {
-  if (installed) return;
-  installed = true;
-
-  const host: TrawlHost = {
+/** Build a host object bound to one plugin. Each bundle gets its own, so calls
+ *  made later (a spawn on a click) are still attributed to the right plugin. */
+export function makeHost(pluginId: string | null): TrawlHost {
+  return {
     version: HOST_API_VERSION,
     react: React,
     events: {
@@ -221,6 +220,8 @@ export function installHost(): void {
       remove: (name: string) => deleteSecret(name),
     },
     mcp: { registerTool, unregisterTool },
+    dialog: dialogApi(),
+    process: processApi(pluginId),
     ui: {
       BodyViewer,
       HeadersTable,
@@ -248,10 +249,16 @@ export function installHost(): void {
     setMode: (id: string) => useLayout.getState().setMode(id),
     log: (...args) => console.log("[plugin]", ...args),
   };
+}
+
+/** Install the host API on `window` and bridge app state into the event bus. */
+export function installHost(): void {
+  if (installed) return;
+  installed = true;
 
   window.React = React;
   window.ReactJSXRuntime = JsxRuntime;
-  window.__TRAWL__ = host;
+  window.__TRAWL__ = makeHost(null);
   initMcpBridge();
 
   // Bridge Tauri capture events into the plugin bus.

@@ -1,5 +1,6 @@
 mod breakpoints;
 mod ca;
+mod childproc;
 mod commands;
 mod db;
 pub mod dryrun;
@@ -28,8 +29,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(mcp::McpState::new())
+        .manage(childproc::ProcState::new())
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<AppState>();
@@ -93,6 +96,10 @@ pub fn run() {
             plugins::set_plugin_enabled,
             plugins::remove_plugin,
             plugins::read_plugin_bundle,
+            childproc::plugin_spawn,
+            childproc::plugin_kill_process,
+            childproc::plugin_list_processes,
+            childproc::plugin_kill_processes,
             plugins::plugin_storage_get,
             plugins::plugin_storage_set,
             plugins::git_host_token_set,
@@ -120,6 +127,13 @@ pub fn run() {
             mcp::plugin_bridge::mcp_clear_plugin_tools,
             mcp::plugin_bridge::mcp_tool_result,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Plugin-started processes must not outlive the app.
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                childproc::kill_all(&app.state::<childproc::ProcState>());
+            }
+        });
 }

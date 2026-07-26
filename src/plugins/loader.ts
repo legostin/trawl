@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { apiCompatible, HOST_API_VERSION, usePlugins, type Plugin } from "@/plugins";
 import { useToast } from "@/toast";
 import { clearPluginTools, setLoadingPlugin } from "./mcpBridge";
+import { makeHost } from "./host";
+import { killPluginProcesses } from "./procApi";
 
 /** True when the cached bundle can run on this app; otherwise warn instead of
  *  executing it (an incompatible bundle would crash at render with a cryptic
@@ -23,9 +25,15 @@ function guardApiVersion(p: Plugin): boolean {
 async function loadBundle(id: string): Promise<void> {
   const code = await invoke<string>("read_plugin_bundle", { id });
   await clearPluginTools(id);
+  // A reload replaces the bundle, so anything the previous injection started
+  // would otherwise keep running unowned.
+  await killPluginProcesses(id).catch(() => {});
   const blob = new Blob([code], { type: "text/javascript" });
   const url = URL.createObjectURL(blob);
   setLoadingPlugin(id);
+  // The bundle captures `window.__TRAWL__` at init; hand it a host that knows
+  // which plugin it belongs to.
+  window.__TRAWL__ = makeHost(id);
   try {
     document
       .querySelectorAll(`script[data-trawl-plugin="${CSS.escape(id)}"]`)
@@ -40,6 +48,10 @@ async function loadBundle(id: string): Promise<void> {
     });
   } finally {
     setLoadingPlugin(null);
+    // Back to an unowned host: a late `window.__TRAWL__` read gets an object
+    // whose process API refuses to spawn rather than one attributed to whoever
+    // happened to load last.
+    window.__TRAWL__ = makeHost(null);
     URL.revokeObjectURL(url);
   }
 }
