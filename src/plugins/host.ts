@@ -199,16 +199,28 @@ export function makeHost(pluginId: string | null): TrawlHost {
         bus.on("project:changed", () => cb(activeProject())),
     },
     rules: {
-      create: async (draft: RuleDraft) => {
+      create: async (draft: RuleDraft, options?: { open?: boolean }) => {
+        const id = crypto.randomUUID();
         await useRules.getState().upsert({
-          id: crypto.randomUUID(),
+          id,
           enabled: true,
           projectId: useProjects.getState().activeId ?? null,
           ...draft,
         });
-        // Land the user in the rules editor with the new rule selected.
-        useLayout.getState().setMode("traffic");
-        useFlows.getState().setView("rules");
+        // Land the user in the rules editor with the new rule selected — unless
+        // the caller is automating, where a mode switch would be a surprise.
+        if (options?.open !== false) {
+          useLayout.getState().setMode("traffic");
+          useFlows.getState().setView("rules");
+        }
+        return id;
+      },
+      remove: (id: string) => useRules.getState().remove(id),
+      list: async () => {
+        const activeId = useProjects.getState().activeId ?? null;
+        return useRules
+          .getState()
+          .rules.filter((r) => r.projectId === null || r.projectId === activeId);
       },
     },
     gitHosts: {

@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.9.0";
+export const HOST_API_VERSION = "1.10.0";
 
 export interface RegisteredMode {
   id: string;
@@ -138,8 +138,13 @@ export interface RuleDraft {
 }
 
 export interface TrawlRules {
-  /** Create a rule in the active project and open it in the rules editor. */
-  create(draft: RuleDraft): Promise<void>;
+  /** Create a rule in the active project; resolves with its id. By default the
+   *  rules editor opens on it — pass `{ open: false }` for automation. */
+  create(draft: RuleDraft, options?: { open?: boolean }): Promise<string>;
+  /** Delete a rule. Unknown ids are a no-op. Requires 1.10.0. */
+  remove(id: string): Promise<void>;
+  /** Rules of the active project plus global ones. Requires 1.10.0. */
+  list(): Promise<(RuleDraft & { id: string; enabled: boolean; projectId: string | null })[]>;
 }
 
 /** Per-host git access tokens (entered once at plugin-install time). Plugins

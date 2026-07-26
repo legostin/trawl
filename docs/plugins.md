@@ -175,18 +175,29 @@ host.projects.setEnv(env): Promise<void>
 host.projects.onChange(cb): () => void
 ```
 
-### `rules` — create a rule
+### `rules` — create, delete, list
 
 ```ts
-await host.rules.create({
+const id = await host.rules.create({
   name: "add auth",
   pattern: "api.example.com/*",
   phase: "request",              // "request" | "response" | "both" | "handler"
   script: "setHeader(request,'authorization','Bearer '+env.token);",
 });
+
+await host.rules.remove(id);
+await host.rules.list();         // active project's rules plus global ones
 ```
 
-The rule is created in the active project and the rules editor is opened.
+The rule is created in the active project and the rules editor opens on it. Pass
+`{ open: false }` as the second argument when automating — a temporary rule that
+yanks the user into another view is a surprise:
+
+```ts
+const id = await host.rules.create(draft, { open: false });
+```
+
+`remove` and `list` require host API 1.10.0.
 
 ### `storage` — persist plugin data
 
