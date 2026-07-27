@@ -369,3 +369,45 @@ mod tests {
         assert!(entry.child.try_wait().unwrap().is_some(), "child should be reaped");
     }
 }
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    /// The app is often stopped by a signal rather than by closing its window,
+    /// and a plugin's programs must not survive that. This covers the piece the
+    /// signal thread calls; the wiring itself lives in lib.rs.
+    #[test]
+    fn kill_all_reaps_every_registered_child() {
+        let state = ProcState::new();
+        let mut pids = Vec::new();
+
+        for _ in 0..3 {
+            let child = Command::new("/bin/sh")
+                .args(["-c", "sleep 300"])
+                .process_group(0)
+                .spawn()
+                .expect("spawn");
+            pids.push(child.id() as i32);
+            state.entries.lock().unwrap().push(Entry {
+                info: ProcessInfo {
+                    id: format!("p_{}", child.id()),
+                    pid: child.id(),
+                    plugin_id: "test".into(),
+                    command: "sleep".into(),
+                    started_at: now_ms(),
+                },
+                child,
+            });
+        }
+        assert!(pids.iter().all(|pid| unsafe { libc::kill(*pid, 0) } == 0));
+
+        kill_all(&state);
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        for pid in pids {
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child {pid} outlived the app");
+        }
+        assert!(state.entries.lock().unwrap().is_empty());
+    }
+}

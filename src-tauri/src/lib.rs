@@ -35,6 +35,26 @@ pub fn run() {
         .manage(childproc::ProcState::new())
         .setup(|app| {
             use tauri::Manager;
+
+            // A signal (a terminal Ctrl-C, a `kill`, a supervisor stopping the
+            // app) skips Tauri's exit event, and plugin-started programs would
+            // outlive the app that owns them. Handled on a thread, not in a
+            // signal handler, so taking the registry's lock is safe.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+                    match signal_hook::iterator::Signals::new([SIGINT, SIGTERM, SIGHUP]) {
+                        Ok(mut signals) => {
+                            if signals.forever().next().is_some() {
+                                childproc::kill_all(&handle.state::<childproc::ProcState>());
+                                handle.exit(0);
+                            }
+                        }
+                        Err(e) => eprintln!("cannot watch for signals: {e}"),
+                    }
+                });
+            }
             let state = app.state::<AppState>();
             if let Err(e) = commands::init_db(app.handle(), &state) {
                 eprintln!("failed to initialize flow DB: {e}");
