@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.10.0";
+export const HOST_API_VERSION = "1.11.0";
 
 export interface RegisteredMode {
   id: string;
@@ -41,6 +41,11 @@ export interface ScriptEditorApi {
   replaceAll(text: string): void;
   getSelectionText(): string;
   getValue(): string;
+  /** Mark lines (1-based) and scroll the first one into view. Pass an empty
+   *  array to clear. Requires host API 1.11.0. */
+  highlightLines?(lines: number[], kind?: "error" | "warning" | "info"): void;
+  /** Insert whole lines before line `at` (1-based), keeping undo history. */
+  insertLines?(at: number, text: string): void;
 }
 
 export interface CompletionItem {

@@ -119,3 +119,29 @@
     overflow: hidden;
   }
 }
+
+/* Lines a plugin asked to mark — a failing step, most often. */
+.trawl-line-error {
+  background: rgba(239, 68, 68, 0.14);
+}
+.trawl-gutter-error {
+  background: rgb(239, 68, 68);
+  width: 3px !important;
+  margin-left: 3px;
+}
+.trawl-line-warning {
+  background: rgba(245, 158, 11, 0.14);
+}
+.trawl-gutter-warning {
+  background: rgb(245, 158, 11);
+  width: 3px !important;
+  margin-left: 3px;
+}
+.trawl-line-info {
+  background: rgba(59, 130, 246, 0.12);
+}
+.trawl-gutter-info {
+  background: rgb(59, 130, 246);
+  width: 3px !important;
+  margin-left: 3px;
+}

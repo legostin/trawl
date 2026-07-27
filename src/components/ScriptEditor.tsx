@@ -1,19 +1,14 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
-import type { MutableRefObject } from "react";
+import { useRef, type MutableRefObject } from "react";
+import type { editor as MonacoEditor } from "monaco-editor";
 import "../monaco-setup";
 import { attachPathDiagnostics } from "../scripting/pathHints";
 import { useTheme } from "./ThemeProvider";
 
-export interface ScriptEditorApi {
-  /** Insert text at the current cursor/selection. */
-  insert: (text: string) => void;
-  /** Replace the whole document (kept in the undo stack). */
-  replaceAll: (text: string) => void;
-  /** Current selection text (empty when nothing is selected). */
-  getSelectionText: () => string;
-  /** Full document text. */
-  getValue: () => string;
-}
+// One definition, shared with plugins: the host hands this very component to
+// them, so a second copy of the type is a copy that drifts.
+export type { ScriptEditorApi } from "@/plugins/api";
+import type { ScriptEditorApi } from "@/plugins/api";
 
 export function ScriptEditor({
   value,
@@ -27,6 +22,7 @@ export function ScriptEditor({
   apiRef?: MutableRefObject<ScriptEditorApi | null>;
 }) {
   const { theme } = useTheme();
+  const decorations = useRef<MonacoEditor.IEditorDecorationsCollection | null>(null);
 
   const handleMount: OnMount = (editor) => {
     if (language === "javascript") attachPathDiagnostics(editor);
@@ -52,6 +48,36 @@ export function ScriptEditor({
         return sel && model ? model.getValueInRange(sel) : "";
       },
       getValue: () => editor.getModel()?.getValue() ?? "",
+
+      /** Mark lines a caller cares about — a failing step, say — and show them. */
+      highlightLines: (lines, kind = "error") => {
+        decorations.current?.clear();
+        if (!lines.length) return;
+        decorations.current = editor.createDecorationsCollection(
+          lines.map((line) => ({
+            range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+            options: {
+              isWholeLine: true,
+              className: `trawl-line-${kind}`,
+              linesDecorationsClassName: `trawl-gutter-${kind}`,
+            },
+          })),
+        );
+        editor.revealLineInCenterIfOutsideViewport(lines[0]!);
+      },
+
+      insertLines: (at, text) => {
+        const model = editor.getModel();
+        if (!model) return;
+        const line = Math.max(1, Math.min(at, model.getLineCount() + 1));
+        editor.executeEdits("insert-lines", [
+          {
+            range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+            text: text.endsWith("\n") ? text : `${text}\n`,
+            forceMoveMarkers: true,
+          },
+        ]);
+      },
     };
   };
 

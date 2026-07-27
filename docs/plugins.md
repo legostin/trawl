@@ -299,6 +299,14 @@ The provider sees only the line prefix and the document text, so no editor
 internals leak into plugins. A `$0` in `insert` marks where the caret lands.
 Return the unsubscribe function's result to remove the provider.
 
+The handle also marks lines and inserts whole ones — enough to point at a
+failure and patch it in place (host API 1.11.0):
+
+```ts
+editor.current?.highlightLines([12], "error");   // [] clears the marks
+editor.current?.insertLines(12, "click({ role: 'button', name: 'OK' })");
+```
+
 ## Capture control
 
 Requires host API `1.8.0`. Point a browser you launch at Trawl's proxy:
