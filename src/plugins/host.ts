@@ -244,7 +244,15 @@ export function makeHost(pluginId: string | null): TrawlHost {
     capture: {
       status: () => captureStatus(),
       start: async () => {
-        await useFlows.getState().ensureProxy();
+        try {
+          await useFlows.getState().ensureProxy();
+        } catch (err) {
+          // The backend can hold a proxy handle the UI has forgotten about (a
+          // reload resets the store). Treat "already running" as running rather
+          // than leaving the caller stuck on a rejected start.
+          if (!/already running/i.test(String(err))) throw err;
+          useFlows.setState({ running: true });
+        }
         return captureStatus();
       },
       stop: async () => {
