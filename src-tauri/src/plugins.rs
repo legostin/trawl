@@ -608,11 +608,32 @@ pub fn plugin_storage_get(app: AppHandle, key: String) -> Result<Option<String>,
     fs::read_to_string(&path).map(Some).map_err(|e| e.to_string())
 }
 
+/// Сохранить значение плагина так, чтобы его нельзя было потерять на полпути.
+///
+/// Прямая запись в целевой файл оставляет обрезанный JSON, если процесс умер в
+/// середине, а плагин читает такой файл как «пусто» и затирает его следующим
+/// сохранением. Пишем во временный файл и переименовываем: обрыв оставляет
+/// прежнюю версию. Предыдущее значение кладём рядом как `.bak` — плагин может
+/// прочитать его обычным `storage.get(key + ".bak")`.
+fn write_plugin_value(dir: &Path, key: &str, value: &str) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let name = safe_key(key);
+    let path = dir.join(format!("{name}.json"));
+
+    if let Ok(previous) = fs::read(&path) {
+        if previous != value.as_bytes() {
+            let _ = fs::write(dir.join(format!("{name}.bak.json")), previous);
+        }
+    }
+
+    let tmp = dir.join(format!("{name}.json.tmp"));
+    fs::write(&tmp, value)?;
+    fs::rename(&tmp, &path)
+}
+
 #[tauri::command]
 pub fn plugin_storage_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
-    let dir = plugin_data_dir(&app)?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::write(dir.join(format!("{}.json", safe_key(&key))), value).map_err(|e| e.to_string())
+    write_plugin_value(&plugin_data_dir(&app)?, &key, &value).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -730,6 +751,44 @@ mod tests {
         let err = http_get_text(&format!("http://{addr}/x"), None, true).unwrap_err();
         assert!(err.contains("403"), "status kept: {err}");
         assert!(err.contains("API rate limit exceeded"), "body message surfaced: {err}");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trawl-plugin-store-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn writing_keeps_the_previous_value_as_a_backup() {
+        let dir = scratch("backup");
+        write_plugin_value(&dir, "coll.p1", "{\"items\":[1]}").unwrap();
+        write_plugin_value(&dir, "coll.p1", "{\"items\":[1,2]}").unwrap();
+
+        assert_eq!(fs::read_to_string(dir.join("coll.p1.json")).unwrap(), "{\"items\":[1,2]}");
+        // The value before this write, so a bad parse has something to fall back on.
+        assert_eq!(fs::read_to_string(dir.join("coll.p1.bak.json")).unwrap(), "{\"items\":[1]}");
+    }
+
+    #[test]
+    fn writing_leaves_no_temporary_file_behind() {
+        let dir = scratch("tmp");
+        write_plugin_value(&dir, "coll.p2", "{}").unwrap();
+
+        // A rename, not a truncate-and-write: nothing half-written survives.
+        assert!(!dir.join("coll.p2.json.tmp").exists());
+        assert!(dir.join("coll.p2.json").exists());
+    }
+
+    #[test]
+    fn rewriting_the_same_value_does_not_destroy_the_backup() {
+        let dir = scratch("same");
+        write_plugin_value(&dir, "k", "one").unwrap();
+        write_plugin_value(&dir, "k", "two").unwrap();
+        write_plugin_value(&dir, "k", "two").unwrap();
+
+        // Saving twice in a row must not push the only good copy out.
+        assert_eq!(fs::read_to_string(dir.join("k.bak.json")).unwrap(), "one");
     }
 
     #[test]
