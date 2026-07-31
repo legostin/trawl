@@ -256,6 +256,20 @@ pub fn core_tools() -> Vec<ToolDef> {
     ]
 }
 
+/// Какую часть состояния меняет тул — чтобы интерфейс перечитал именно её.
+///
+/// Живёт рядом со списком тулов, а не у вызывающего: добавляя тул, автор видит
+/// эту таблицу в том же файле. Молчание после записи выглядит как «MCP не
+/// сработал» — правило создано, а в списке его нет.
+pub fn changed_by(name: &str) -> Option<&'static str> {
+    match name {
+        "save_rule" | "delete_rule" => Some("rules"),
+        "save_project" | "delete_project" | "set_active_project" => Some("projects"),
+        "save_breakpoint" | "delete_breakpoint" | "resolve_breakpoint" => Some("breakpoints"),
+        _ => None,
+    }
+}
+
 pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "get_status" => tool_get_status(deps),
@@ -608,6 +622,34 @@ mod tests {
     use crate::commands::AppState;
     use crate::model::{Flow, HttpMessage, UrlParts};
     use serde_json::json;
+
+    #[test]
+    fn every_writing_tool_says_what_it_changed() {
+        // The window keeps its own copy of this state; a tool that writes
+        // without saying so leaves the user looking at a list that is missing
+        // what they just created.
+        let writes: Vec<&str> = core_tools()
+            .iter()
+            .map(|t| t.name)
+            .filter(|n| {
+                n.starts_with("save_")
+                    || n.starts_with("delete_")
+                    || n.starts_with("set_")
+                    || n.starts_with("resolve_")
+            })
+            .collect();
+        assert!(!writes.is_empty());
+
+        let silent: Vec<&&str> = writes.iter().filter(|n| changed_by(n).is_none()).collect();
+        assert!(silent.is_empty(), "these write but announce nothing: {silent:?}");
+    }
+
+    #[test]
+    fn reading_tools_announce_nothing() {
+        assert_eq!(changed_by("query_flows"), None);
+        assert_eq!(changed_by("list_rules"), None);
+        assert_eq!(changed_by("save_rule"), Some("rules"));
+    }
 
     fn test_deps<'a>(state: &'a AppState, tmp: &std::path::Path) -> Deps<'a> {
         Deps {

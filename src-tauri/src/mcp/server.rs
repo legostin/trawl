@@ -103,7 +103,17 @@ impl<R: tauri::Runtime> ServerHandler for TrawlMcp<R> {
                     data_dir: crate::commands::data_dir(&app)?,
                     rules_dir: crate::commands::rules_dir(&app)?,
                 };
-                core_tools::dispatch(&deps, &name, &args)
+                let out = core_tools::dispatch(&deps, &name, &args);
+                // The window holds its own copy of this state and has no way to
+                // learn that MCP changed it; without this a rule created from a
+                // chat simply is not in the list.
+                if out.is_ok() {
+                    if let Some(what) = core_tools::changed_by(&name) {
+                        use tauri::Emitter;
+                        let _ = app.emit("state-changed", serde_json::json!({ "what": what }));
+                    }
+                }
+                out
             })
             .await
             .map_err(|e| e.to_string())
