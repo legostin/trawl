@@ -63,7 +63,7 @@ pub fn core_tools() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "get_flow",
-            description: "Full flow by id from the in-memory capture (recent traffic): headers, bodies, applied rules, timings. Text bodies are truncated to maxBodyBytes.",
+            description: "Flow by id. From the live capture it is complete: headers, bodies, applied rules, timings, with text bodies truncated to maxBodyBytes. The live capture is a ring buffer and does not survive a restart, so an older flow comes from history instead — metadata only, marked with bodies:false.",
             schema: obj(
                 json!({
                     "id": { "type": "integer" },
@@ -407,8 +407,24 @@ fn tool_query_flows(deps: &Deps, args: &Value) -> Result<Value, String> {
 fn tool_get_flow(deps: &Deps, args: &Value) -> Result<Value, String> {
     let id = u64_arg(args, "id").ok_or("missing id")?;
     let max = u64_arg(args, "maxBodyBytes").unwrap_or(50_000) as usize;
-    let flow = deps.state.store.get(id).ok_or_else(|| format!("flow {id} not found in memory"))?;
-    Ok(flow_to_json(&flow, max))
+    if let Some(flow) = deps.state.store.get(id) {
+        return Ok(flow_to_json(&flow, max));
+    }
+    // Live capture is a ring buffer and does not survive a restart; history
+    // does, but keeps metadata only. Saying "not found" for a flow that is
+    // plainly in the history reads as if it never happened.
+    // A missing history is still an answer about the flow, not about the
+    // database: the caller asked where their request went.
+    let found = reader(deps).and_then(|db| db.get_row(id).map_err(|e| e.to_string()));
+    match found {
+        Ok(Some(row)) => Ok(json!({
+            "flow": row,
+            "bodies": false,
+            "note": "из истории: заголовки и тела хранятся только в живом захвате и не пережили перезапуск",
+        })),
+        Ok(None) => Err(format!("flow {id} not found in the live capture nor in the history")),
+        Err(e) => Err(format!("flow {id} not found in the live capture, and the history is unavailable: {e}")),
+    }
 }
 
 fn tool_flow_count(deps: &Deps, args: &Value) -> Result<Value, String> {
@@ -622,6 +638,24 @@ mod tests {
     use crate::commands::AppState;
     use crate::model::{Flow, HttpMessage, UrlParts};
     use serde_json::json;
+
+    #[test]
+    fn a_flow_that_left_memory_is_answered_from_history() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let _ = state.db.set(crate::db::DbHandle::open(tmp.path().join("h.db")).unwrap());
+        state.db().unwrap().record(&sample_flow(7, b"{}", true), None);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Nothing in the ring buffer: exactly the state after a restart.
+        let deps = test_deps(&state, tmp.path());
+        let out = tool_get_flow(&deps, &json!({ "id": 7 })).expect("history answers");
+        assert_eq!(out["bodies"], json!(false));
+        assert_eq!(out["flow"]["host"], json!("api.test"));
+
+        let missing = tool_get_flow(&deps, &json!({ "id": 999 })).unwrap_err();
+        assert!(missing.contains("nor in the history"), "{missing}");
+    }
 
     #[test]
     fn every_writing_tool_says_what_it_changed() {

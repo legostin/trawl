@@ -263,6 +263,18 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// One row by id. History keeps metadata only — no headers, no bodies —
+    /// but it is the difference between "that flow is gone" and "that flow
+    /// never existed", which are very different answers to give someone.
+    pub fn get_row(&self, id: u64) -> Result<Option<FlowRow>> {
+        let mut stmt = self.conn.prepare("SELECT * FROM flows WHERE id = ?")?;
+        let mut rows = stmt.query_map([id as i64], row_to_flow)?;
+        Ok(match rows.next() {
+            Some(row) => Some(row?),
+            None => None,
+        })
+    }
+
     pub fn count(&self, q: &FlowQuery) -> Result<u64> {
         let (where_sql, params) = build_where(q);
         let sql = format!("SELECT COUNT(*) FROM flows{where_sql}");
