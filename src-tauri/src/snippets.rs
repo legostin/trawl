@@ -40,6 +40,6 @@ pub fn load_snippets(dir: &Path) -> Result<SnippetsFile> {
 pub fn save_snippets(dir: &Path, file: &SnippetsFile) -> Result<()> {
     fs::create_dir_all(dir).context("create scripting dir")?;
     let text = serde_json::to_string_pretty(file).context("serialize snippets")?;
-    fs::write(dir.join("snippets.json"), text).context("write snippets.json")?;
+    crate::atomicfile::write_atomic(&dir.join("snippets.json"), text).context("write snippets.json")?;
     Ok(())
 }

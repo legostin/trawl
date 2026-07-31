@@ -165,7 +165,7 @@ pub fn load_projects(dir: &Path) -> Result<ProjectsFile> {
 pub fn save_projects(dir: &Path, file: &ProjectsFile) -> Result<()> {
     fs::create_dir_all(dir).context("create projects dir")?;
     let text = serde_json::to_string_pretty(file).context("serialize projects")?;
-    fs::write(dir.join("projects.json"), text).context("write projects.json")?;
+    crate::atomicfile::write_atomic(&dir.join("projects.json"), text).context("write projects.json")?;
     Ok(())
 }
 

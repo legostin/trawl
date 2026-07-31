@@ -64,14 +64,14 @@ pub fn load_settings(dir: &Path) -> BreakpointSettings {
 pub fn save_settings(dir: &Path, settings: &BreakpointSettings) -> Result<()> {
     fs::create_dir_all(dir).context("create settings dir")?;
     let text = serde_json::to_string_pretty(settings).context("serialize settings")?;
-    fs::write(dir.join("breakpoint-settings.json"), text).context("write settings")?;
+    crate::atomicfile::write_atomic(&dir.join("breakpoint-settings.json"), text).context("write settings")?;
     Ok(())
 }
 
 pub fn save_breakpoints(dir: &Path, bps: &[Breakpoint]) -> Result<()> {
     fs::create_dir_all(dir).context("create breakpoints dir")?;
     let text = serde_json::to_string_pretty(bps).context("serialize breakpoints")?;
-    fs::write(dir.join("breakpoints.json"), text).context("write breakpoints.json")?;
+    crate::atomicfile::write_atomic(&dir.join("breakpoints.json"), text).context("write breakpoints.json")?;
     Ok(())
 }
 

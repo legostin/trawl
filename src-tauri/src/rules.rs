@@ -135,7 +135,7 @@ pub fn load_rules(dir: &Path) -> Result<Vec<Rule>> {
 pub fn save_rules(dir: &Path, rules: &[Rule]) -> Result<()> {
     fs::create_dir_all(dir).context("create rules dir")?;
     let text = serde_json::to_string_pretty(rules).context("serialize rules")?;
-    fs::write(dir.join("rules.json"), text).context("write rules.json")?;
+    crate::atomicfile::write_atomic(&dir.join("rules.json"), text).context("write rules.json")?;
     Ok(())
 }
 
@@ -149,7 +149,7 @@ pub fn load_library(dir: &Path) -> Result<String> {
 
 pub fn save_library(dir: &Path, source: &str) -> Result<()> {
     fs::create_dir_all(dir).context("create rules dir")?;
-    fs::write(dir.join("library.js"), source).context("write library.js")?;
+    crate::atomicfile::write_atomic(&dir.join("library.js"), source).context("write library.js")?;
     Ok(())
 }
 

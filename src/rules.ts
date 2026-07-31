@@ -34,11 +34,18 @@ export const useRules = create<RulesState>((set) => ({
   library: "",
   editingLibrary: false,
   load: async () => {
-    const [rules, library] = await Promise.all([
-      invoke<Rule[]>("list_rules"),
-      invoke<string>("get_library"),
-    ]);
-    set({ rules, library });
+    try {
+      const [rules, library] = await Promise.all([
+        invoke<Rule[]>("list_rules"),
+        invoke<string>("get_library"),
+      ]);
+      set({ rules, library });
+    } catch (e) {
+      // An unreadable rules.json used to look exactly like having no rules,
+      // which is the worst way to be told your work is unreachable. The list
+      // keeps whatever it had; the message says what actually happened.
+      useToast.getState().show(`Правила не прочитаны: ${String(e)}`);
+    }
   },
   select: (id) => set({ selectedId: id, editingLibrary: false }),
   editLibrary: () => set({ editingLibrary: true, selectedId: null }),

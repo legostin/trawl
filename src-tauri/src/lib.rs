@@ -1,3 +1,4 @@
+mod atomicfile;
 mod breakpoints;
 mod ca;
 mod childproc;
