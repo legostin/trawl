@@ -18,6 +18,9 @@ import { useFlows } from "../store";
 import { useToast } from "../toast";
 import {
   getSetupInfo,
+  nextSetupInfo,
+  proxyLocation,
+  DEFAULT_PORT,
   caCertPath,
   revealCaCert,
   trustCaMacos,
@@ -54,11 +57,30 @@ export function SetupPanel() {
   }, []);
 
   useEffect(() => {
-    getSetupInfo().then(setInfo).catch(() => {});
     caCertPath().then(setCertPath).catch(() => {});
     QRCode.toDataURL("http://trawl/", { margin: 1, width: 320 })
       .then(setQr)
       .catch(() => setQr(""));
+  }, []);
+
+  // The LAN IP changes under us when the machine joins another network, so keep re-reading it.
+  // A failed poll leaves the last known info in place; the next tick recovers.
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const next = await getSetupInfo();
+        if (alive) setInfo((prev) => nextSetupInfo(prev, next));
+      } catch {
+        /* not in Tauri */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, []);
 
   // Live status polling for scenarios that go through the system proxy.
@@ -94,7 +116,7 @@ export function SetupPanel() {
   }, [scenario]);
 
   const ip = info?.lanIp ?? "<no network>";
-  const port = info?.port ?? 8729;
+  const port = info?.port ?? DEFAULT_PORT;
 
   return (
     <div className="mx-auto h-full max-w-2xl overflow-auto p-6">
@@ -128,7 +150,7 @@ export function SetupPanel() {
           <AlertTriangle className="size-4 text-http-amber" />
         )}
         {running ? (
-          <span>Proxy running on {info ? `${ip}:${port}` : `port ${port}`}.</span>
+          <span>Proxy running on {proxyLocation(info)}.</span>
         ) : (
           <span>
             Press <b>Start</b> in the top bar first — otherwise nothing is captured.

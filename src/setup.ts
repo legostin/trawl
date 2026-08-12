@@ -6,6 +6,16 @@ export interface SetupInfo {
   certHost: string;
 }
 
+export const DEFAULT_PORT = 8729;
+
+/** Keeps the previous info while the LAN IP is unchanged, so a poll that found nothing new costs no re-render. */
+export const nextSetupInfo = (prev: SetupInfo | null, next: SetupInfo): SetupInfo =>
+  prev && prev.lanIp === next.lanIp ? prev : next;
+
+/** "10.0.0.5:8729" once an IP is known, "port 8729" while there is no network. */
+export const proxyLocation = (info: SetupInfo | null): string =>
+  info?.lanIp ? `${info.lanIp}:${info.port}` : `port ${info?.port ?? DEFAULT_PORT}`;
+
 export const getSetupInfo = (): Promise<SetupInfo> => invoke<SetupInfo>("get_setup_info");
 export const getCaPem = (): Promise<string> => invoke<string>("get_ca_pem");
 export const caCertPath = (): Promise<string> => invoke<string>("ca_cert_path");
