@@ -136,6 +136,44 @@ pub fn core_tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "save_plugin",
+            description: "Create or update a plugin written by you and load it into the running app immediately, no restart. `source` is the whole plugin.js and replaces what was there. It must be plain JS calling window.__TRAWL__ — no JSX, no import/export. Call get_plugin_reference first.",
+            schema: obj(
+                json!({
+                    "plugin": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string", "description": "stable id, 1-64 chars of a-z 0-9 - _; also the mode id you register" },
+                            "name": { "type": "string" },
+                            "source": { "type": "string", "description": "the whole plugin.js" },
+                            "description": { "type": "string" },
+                            "version": { "type": "string", "description": "dotted numeric; omit to keep the current one" }
+                        },
+                        "required": ["id", "name", "source"]
+                    }
+                }),
+                &["plugin"],
+            ),
+        },
+        ToolDef {
+            name: "delete_plugin",
+            description: "Remove a plugin you wrote. Refuses plugins the user installed from a repository.",
+            schema: obj(json!({ "id": { "type": "string" } }), &["id"]),
+        },
+        ToolDef {
+            name: "list_plugins",
+            description: "Installed plugins. Give an id to also get that plugin's source and the error its last load threw, if any.",
+            schema: obj(
+                json!({ "id": { "type": "string", "description": "also return this plugin's source and lastLoadError" } }),
+                &[],
+            ),
+        },
+        ToolDef {
+            name: "get_plugin_reference",
+            description: "How to write a plugin in this app: the host API surface, the authoring rules and a complete working example. Read before writing one.",
+            schema: obj(json!({}), &[]),
+        },
+        ToolDef {
             name: "get_scripting_reference",
             description: "Rule scripting reference: ctx API typings, stdlib typings, the shared library source, the cookbook and the deep rule-editor guide (phases, env/variables semantics, JSONPath). Read before writing rule scripts.",
             schema: obj(json!({}), &[]),
@@ -263,6 +301,7 @@ pub fn core_tools() -> Vec<ToolDef> {
 /// сработал» — правило создано, а в списке его нет.
 pub fn changed_by(name: &str) -> Option<&'static str> {
     match name {
+        "save_plugin" | "delete_plugin" => Some("plugins"),
         "save_rule" | "delete_rule" => Some("rules"),
         "save_project" | "delete_project" | "set_active_project" => Some("projects"),
         "save_breakpoint" | "delete_breakpoint" | "resolve_breakpoint" => Some("breakpoints"),
@@ -301,6 +340,10 @@ pub fn scope_args_to_project(name: &str, args: &Value, project_id: Option<&str>)
 
 pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> {
     match name {
+        "save_plugin" => tool_save_plugin(deps, args),
+        "delete_plugin" => tool_delete_plugin(deps, args),
+        "list_plugins" => tool_list_plugins(deps, args),
+        "get_plugin_reference" => tool_plugin_reference(),
         "get_status" => tool_get_status(deps),
         "query_flows" => tool_query_flows(deps, args),
         "get_flow" => tool_get_flow(deps, args),
@@ -538,6 +581,97 @@ fn tool_test_rule(deps: &Deps, args: &Value) -> Result<Value, String> {
     Ok(crate::dryrun::run(&flow, &script, &phase, &prelude, env, std::time::Duration::from_secs(10)))
 }
 
+const PLUGIN_API_DTS: &str = include_str!("../../../src/plugins/api.ts");
+const PLUGIN_GUIDE: &str = include_str!("../../../docs/plugins.md");
+const PLUGIN_AUTHORING: &str = include_str!("../../../docs/agent-plugins.md");
+
+fn tool_save_plugin(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let raw = args.get("plugin").cloned().ok_or("missing plugin")?;
+    let id = raw
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("missing plugin.id")?
+        .to_string();
+    let existed = crate::plugins::load_plugins(&deps.data_dir)
+        .map_err(|e| e.to_string())?
+        .plugins
+        .iter()
+        .any(|p| p.id == id);
+
+    let draft = crate::plugins::LocalPluginDraft {
+        id: id.clone(),
+        name: raw
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or("missing plugin.name")?
+            .to_string(),
+        source: raw
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or("missing plugin.source")?
+            .to_string(),
+        description: raw
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: raw
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    let bytes = draft.source.len();
+    let plugin = crate::plugins::save_local_plugin(&deps.data_dir, draft)?;
+    Ok(json!({
+        "pluginId": id,
+        "created": !existed,
+        "bytes": bytes,
+        "plugin": plugin,
+        "note": "Loaded into the running window. Any MCP tool it registers becomes callable only after the next tools/list — ask the user to send another message rather than retrying.",
+    }))
+}
+
+fn tool_delete_plugin(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let id = str_arg(args, "id").ok_or("missing id")?;
+    crate::plugins::delete_local_plugin(&deps.data_dir, &id)?;
+    Ok(json!({ "pluginId": id, "removed": true }))
+}
+
+fn tool_list_plugins(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let want = str_arg(args, "id");
+    let file = crate::plugins::load_plugins(&deps.data_dir).map_err(|e| e.to_string())?;
+    let status = deps.state.plugin_load_status.read().unwrap();
+    let rows: Vec<Value> = file
+        .plugins
+        .iter()
+        .filter(|p| want.as_ref().is_none_or(|id| &p.id == id))
+        .map(|p| {
+            let mut row = serde_json::to_value(p).unwrap_or_else(|_| json!({}));
+            // Source only on request: a plain listing should not carry every
+            // bundle in the app.
+            if want.is_some() {
+                let path = crate::plugins::plugins_dir(&deps.data_dir)
+                    .join(&p.id)
+                    .join("plugin.js");
+                if let Ok(src) = std::fs::read_to_string(path) {
+                    row["source"] = json!(src);
+                }
+                row["lastLoadError"] = json!(status.get(&p.id).cloned().flatten());
+            }
+            row
+        })
+        .collect();
+    Ok(json!({ "plugins": rows }))
+}
+
+fn tool_plugin_reference() -> Result<Value, String> {
+    Ok(json!({
+        "authoring": PLUGIN_AUTHORING,
+        "apiTypes": PLUGIN_API_DTS,
+        "guide": PLUGIN_GUIDE,
+        "commonMistakes": "JSX does not compile — use host.react.createElement. import/export does not parse — the bundle is a classic script. Hooks must come from host.react, not a bare React. registerMode takes the component function, not an element. flow.response is null until the response arrives, so status lives there. host.mcp.registerTool works only synchronously during init, and the tool is callable only after the client re-lists. Top-level state is lost on every reload — persist with host.storage.",
+    }))
+}
+
 fn tool_scripting_reference(deps: &Deps) -> Result<Value, String> {
     let library = crate::rules::load_library(&deps.rules_dir).unwrap_or_default();
     Ok(json!({
@@ -731,6 +865,104 @@ mod tests {
         );
         f.applied_rules = vec!["r1".into()];
         f
+    }
+
+    #[test]
+    fn saving_a_plugin_writes_it_and_names_the_id_it_touched() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let out = dispatch(
+            &deps,
+            "save_plugin",
+            &json!({ "plugin": { "id": "probe", "name": "Probe", "source": "(function(){})();" } }),
+        )
+        .unwrap();
+        // The id is what carries the live reload to the right plugin.
+        assert_eq!(out["pluginId"], "probe");
+        assert_eq!(out["created"], true);
+        let bundle = crate::plugins::plugins_dir(tmp.path())
+            .join("probe")
+            .join("plugin.js");
+        assert_eq!(
+            std::fs::read_to_string(bundle).unwrap(),
+            "(function(){})();"
+        );
+    }
+
+    #[test]
+    fn a_plugin_that_does_not_parse_is_refused_by_the_tool() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let err = dispatch(
+            &deps,
+            "save_plugin",
+            &json!({ "plugin": { "id": "broken", "name": "B", "source": "function ( {" } }),
+        )
+        .unwrap_err();
+        assert!(err.contains("JS"), "got {err}");
+    }
+
+    #[test]
+    fn listing_plugins_hides_the_source_until_an_id_is_given() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        dispatch(
+            &deps,
+            "save_plugin",
+            &json!({ "plugin": { "id": "probe", "name": "Probe", "source": "(function(){})();" } }),
+        )
+        .unwrap();
+
+        let all = dispatch(&deps, "list_plugins", &json!({})).unwrap();
+        let row = &all["plugins"][0];
+        assert_eq!(row["id"], "probe");
+        assert!(row.get("source").is_none(), "the plain listing stays cheap");
+
+        let one = dispatch(&deps, "list_plugins", &json!({ "id": "probe" })).unwrap();
+        assert_eq!(one["plugins"][0]["source"], "(function(){})();");
+    }
+
+    #[test]
+    fn deleting_a_plugin_names_the_id_so_the_window_can_forget_it() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        dispatch(
+            &deps,
+            "save_plugin",
+            &json!({ "plugin": { "id": "probe", "name": "Probe", "source": "(function(){})();" } }),
+        )
+        .unwrap();
+        let out = dispatch(&deps, "delete_plugin", &json!({ "id": "probe" })).unwrap();
+        assert_eq!(out["pluginId"], "probe");
+        assert!(dispatch(&deps, "list_plugins", &json!({})).unwrap()["plugins"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn the_plugin_reference_teaches_the_no_bundler_dialect() {
+        let state = AppState::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let deps = test_deps(&state, tmp.path());
+        let out = dispatch(&deps, "get_plugin_reference", &json!({})).unwrap();
+        let authoring = out["authoring"].as_str().unwrap();
+        // Guards against someone "improving" the example back into JSX.
+        assert!(authoring.contains("createElement"));
+        assert!(authoring.contains("registerMode"));
+        assert!(!authoring.contains("\n  return <"), "the example must not use JSX");
+        assert!(out["apiTypes"].as_str().unwrap().contains("HOST_API_VERSION"));
+    }
+
+    #[test]
+    fn plugin_writes_announce_what_they_changed() {
+        assert_eq!(changed_by("save_plugin"), Some("plugins"));
+        assert_eq!(changed_by("delete_plugin"), Some("plugins"));
+        assert_eq!(changed_by("list_plugins"), None);
     }
 
     #[test]

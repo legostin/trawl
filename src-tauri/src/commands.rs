@@ -37,6 +37,10 @@ pub struct AppState {
     pub breakpoint_timeout: Arc<RwLock<u64>>,
     /// Hold new requests while any flow is paused on a breakpoint.
     pub pause_others: Arc<RwLock<bool>>,
+    /// What each plugin's last injection threw, keyed by plugin id (None = it
+    /// loaded). In memory only: it describes this window, and a stale error
+    /// surviving a restart would be worse than none.
+    pub plugin_load_status: Arc<RwLock<std::collections::HashMap<String, Option<String>>>>,
 }
 
 impl AppState {
@@ -58,6 +62,7 @@ impl AppState {
             pending_breakpoints: Arc::new(Mutex::new(std::collections::HashMap::new())),
             breakpoint_timeout: Arc::new(RwLock::new(0)),
             pause_others: Arc::new(RwLock::new(false)),
+            plugin_load_status: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 

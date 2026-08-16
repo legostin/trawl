@@ -250,7 +250,7 @@ mod tests {
     fn core_tool_count_and_registered_plugin_tool_are_discoverable() {
         assert_eq!(
             core_tools::core_tools().len(),
-            20,
+            24,
             "core tool count changed — list_tools's static half moved without updating this test"
         );
 
