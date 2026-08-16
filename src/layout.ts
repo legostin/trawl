@@ -5,10 +5,19 @@ import { create } from "zustand";
 export type Mode = string;
 
 const COLLAPSE_KEY = "trawl-sidebar-collapsed";
+const AGENT_KEY = "trawl-agent-open";
 
 function initialCollapsed(): boolean {
   try {
     return localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function initialAgentOpen(): boolean {
+  try {
+    return localStorage.getItem(AGENT_KEY) === "1";
   } catch {
     return false;
   }
@@ -19,6 +28,8 @@ interface LayoutState {
   setMode: (m: Mode) => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
+  agentOpen: boolean;
+  toggleAgent: () => void;
 }
 
 export const useLayout = create<LayoutState>((set) => ({
@@ -34,5 +45,16 @@ export const useLayout = create<LayoutState>((set) => ({
         /* ignore */
       }
       return { sidebarCollapsed };
+    }),
+  agentOpen: initialAgentOpen(),
+  toggleAgent: () =>
+    set((s) => {
+      const agentOpen = !s.agentOpen;
+      try {
+        localStorage.setItem(AGENT_KEY, agentOpen ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return { agentOpen };
     }),
 }));

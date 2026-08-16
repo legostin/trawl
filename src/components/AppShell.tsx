@@ -12,6 +12,7 @@ import { PluginMode } from "./PluginMode";
 import { TopBar } from "./TopBar";
 import { StatusBar } from "./StatusBar";
 import { SetupPanel } from "./SetupPanel";
+import { AgentPanel } from "./AgentPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { RulesView } from "./RulesView";
 import { BreakpointsView } from "./BreakpointsView";
@@ -31,6 +32,7 @@ export function AppShell() {
   const detailCollapsed = useFlows((s) => s.detailCollapsed);
   const loadProjects = useProjects((s) => s.load);
   const mode = useLayout((s) => s.mode);
+  const agentOpen = useLayout((s) => s.agentOpen);
   const pluginModes = usePlugins((s) => s.modes);
   useKeyboardShortcuts();
 
@@ -52,8 +54,12 @@ export function AppShell() {
   return (
     <div className="flex h-full bg-background text-foreground">
       <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar />
+      {/* The agent sits beside <main>, never inside a Pane: panes only toggle
+          display, so anything in one belongs to a single screen, and the
+          conversation has to survive switching screens. */}
+      <ResizableGroup direction="horizontal" className="min-w-0 flex-1">
+        <ResizablePanel id="shell" order={1} minSize={40} className="flex min-w-0 flex-col">
+          <TopBar />
 
         <main className="min-h-0 flex-1">
           {/* Every panel stays mounted; only the active one is shown. Switching
@@ -115,8 +121,17 @@ export function AppShell() {
           )}
         </main>
 
-        <StatusBar />
-      </div>
+          <StatusBar />
+        </ResizablePanel>
+        {agentOpen && (
+          <>
+            <ResizableHandle />
+            <ResizablePanel id="agent" order={2} defaultSize={28} minSize={20} className="min-h-0">
+              <AgentPanel />
+            </ResizablePanel>
+          </>
+        )}
+      </ResizableGroup>
 
       <ProjectEditor />
       <VariablesPanel />
