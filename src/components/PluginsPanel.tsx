@@ -219,10 +219,18 @@ export function PluginsPanel() {
                     </span>
                   )}
                 </div>
-                <div className="truncate font-mono text-xs text-muted-foreground">
-                  {p.host && p.host !== "github.com" ? `${p.host}/` : ""}
-                  {p.repo}@{p.ref}
-                </div>
+                {p.origin === "local" ? (
+                  // No repo to name, and "@" on its own reads like a bug.
+                  // Where it came from is the useful fact instead.
+                  <div className="truncate text-xs text-muted-foreground">
+                    written in this app by the agent
+                  </div>
+                ) : (
+                  <div className="truncate font-mono text-xs text-muted-foreground">
+                    {p.host && p.host !== "github.com" ? `${p.host}/` : ""}
+                    {p.repo}@{p.ref}
+                  </div>
+                )}
                 {p.description && (
                   <div className="mt-0.5 truncate text-xs text-muted-foreground">{p.description}</div>
                 )}

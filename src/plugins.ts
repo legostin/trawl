@@ -99,6 +99,9 @@ interface PluginsState {
   installed: Plugin[];
   /** Modes registered by loaded plugins at runtime. */
   modes: RegisteredMode[];
+  /** Bumped whenever a bundle registers a mode. Error boundaries key off it, so
+   *  a plugin that has been fixed stops showing its previous crash. */
+  reloads: number;
   /** Action buttons registered into the request-detail toolbar. */
   flowActions: FlowAction[];
   /** pluginId → newer version available in its repo (from the last check). */
@@ -124,6 +127,7 @@ interface PluginsState {
 export const usePlugins = create<PluginsState>((set, get) => ({
   installed: [],
   modes: [],
+  reloads: 0,
   flowActions: [],
   updates: {},
   blockedUpdates: {},
@@ -158,6 +162,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   },
   registerMode: (mode) =>
     set((s) => ({
+      reloads: s.reloads + 1,
       modes: s.modes.some((m) => m.id === mode.id)
         ? s.modes.map((m) => (m.id === mode.id ? mode : m))
         : [...s.modes, mode],

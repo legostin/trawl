@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useLayout, type Mode } from "../layout";
 import { usePlugins } from "../plugins";
+import { PluginErrorBoundary } from "./PluginErrorBoundary";
 import { useFlows } from "../store";
 import { PulseDot } from "./PulseDot";
 import { cn } from "@/lib/utils";
@@ -136,7 +137,12 @@ function NavItem({
       )}
     >
       <span className="relative shrink-0">
-        <Icon className="size-4" />
+        {/* A plugin supplies this icon and it renders in the app's own chrome.
+            Unguarded, one that throws unmounts the whole tree — including the
+            Plugins panel needed to remove it. */}
+        <PluginErrorBoundary fallback={() => <Puzzle className="size-4" />}>
+          <Icon className="size-4" />
+        </PluginErrorBoundary>
         {pulse ? (
           <span className="absolute -right-1 -top-1">
             <PulseDot />

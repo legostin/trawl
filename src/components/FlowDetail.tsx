@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PluginErrorBoundary } from "./PluginErrorBoundary";
 import {
   ChevronDown,
   CircleDot,
@@ -130,16 +131,14 @@ export function FlowDetail() {
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {flowActions.map((a) => (
-              <Button
-                key={a.id}
-                variant="outline"
-                size="sm"
-                title={a.label}
-                onClick={() => a.run(flow)}
-              >
-                {a.icon && <a.icon />}
-                {a.label}
-              </Button>
+              // Plugin-supplied, rendered in core chrome: a throwing icon here
+              // would take the window down with it.
+              <PluginErrorBoundary key={a.id} fallback={() => null}>
+                <Button variant="outline" size="sm" title={a.label} onClick={() => a.run(flow)}>
+                  {a.icon && <a.icon />}
+                  {a.label}
+                </Button>
+              </PluginErrorBoundary>
             ))}
             <ProjectAction host={flow.url.host} />
             <Button
