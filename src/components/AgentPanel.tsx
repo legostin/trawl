@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
 import { useAgent } from "../agent/agentStore";
 import { describeScreen } from "../agent/screenContext";
 import type { ChatItem } from "../agent/chatItems";
@@ -8,6 +8,7 @@ import { useFlows } from "../store";
 import { useProjects } from "../projects";
 import { Button } from "./ui/button";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { CopyableCommand } from "./CopyableCommand";
 
 export function AgentPanel() {
   const items = useAgent((s) => s.items);
@@ -17,6 +18,10 @@ export function AgentPanel() {
   const send = useAgent((s) => s.send);
   const interrupt = useAgent((s) => s.interrupt);
   const reset = useAgent((s) => s.reset);
+  const harnesses = useAgent((s) => s.harnesses);
+  const checkHarnesses = useAgent((s) => s.checkHarnesses);
+  // Null means "not looked yet" — only an actual empty result is a verdict.
+  const noHarness = harnesses !== null && harnesses.every((h) => h.path === null);
 
   const [draft, setDraft] = useState("");
   const mode = useLayout((s) => s.mode);
@@ -30,7 +35,8 @@ export function AgentPanel() {
 
   useEffect(() => {
     void init();
-  }, [init]);
+    void checkHarnesses();
+  }, [init, checkHarnesses]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -92,6 +98,10 @@ export function AgentPanel() {
         </div>
       )}
 
+      {noHarness ? (
+        <MissingHarness onRecheck={() => void checkHarnesses()} />
+      ) : (
+        <>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3 text-sm">
         {items.length === 0 && (
           <p className="text-muted-foreground">
@@ -120,6 +130,47 @@ export function AgentPanel() {
           className="w-full resize-none rounded-md border border-border bg-background p-2 text-sm outline-none focus:border-primary"
         />
       </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shown before the user types anything, because discovering the requirement
+ * through a failed send is a worse way to learn it.
+ */
+function MissingHarness({ onRecheck }: { onRecheck: () => void }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="flex flex-col items-center gap-1 text-center text-muted-foreground">
+        <Sparkles className="size-6 opacity-40" />
+        <div className="text-sm font-medium text-foreground">No agent found</div>
+        <p className="max-w-xs text-xs opacity-70">
+          Trawl talks to a coding agent you already have installed — it runs on your own
+          subscription and Trawl never asks for an API key. Install one of these, then check again.
+        </p>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div>
+          <div className="text-xs font-medium">Claude Code</div>
+          <CopyableCommand cmd="npm install -g @anthropic-ai/claude-code" />
+        </div>
+        <div>
+          <div className="text-xs font-medium">Codex CLI</div>
+          <CopyableCommand cmd="npm install -g @openai/codex" />
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs text-muted-foreground opacity-70">
+        Already installed? Trawl looks for it on the PATH your login shell provides, so a command
+        installed only inside an activated environment will not be found.
+      </p>
+
+      <Button variant="secondary" size="sm" className="mt-3 w-full" onClick={onRecheck}>
+        <RefreshCw className="size-3.5" /> Check again
+      </Button>
     </div>
   );
 }

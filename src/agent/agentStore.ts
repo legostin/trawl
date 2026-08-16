@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { agentSend, agentInterrupt, agentReset, type AgentEvent } from "./agent";
+import {
+  agentSend,
+  agentInterrupt,
+  agentReset,
+  agentHarnesses,
+  type AgentEvent,
+  type HarnessAvailability,
+} from "./agent";
 import { applyEvent, type ChatItem } from "./chatItems";
 
 interface AgentStore {
@@ -8,6 +15,10 @@ interface AgentStore {
   running: boolean;
   /** Null until the harness has told us whether it reached our MCP server. */
   trawlConnected: boolean | null;
+  /** Null while unknown — the panel must not accuse the user of missing a
+   *  harness before it has actually looked. */
+  harnesses: HarnessAvailability[] | null;
+  checkHarnesses: () => Promise<void>;
   init: () => Promise<void>;
   send: (text: string, screenContext: string) => Promise<void>;
   interrupt: () => Promise<void>;
@@ -20,6 +31,15 @@ export const useAgent = create<AgentStore>((set) => ({
   items: [],
   running: false,
   trawlConnected: null,
+  harnesses: null,
+  checkHarnesses: async () => {
+    try {
+      set({ harnesses: await agentHarnesses() });
+    } catch {
+      // Outside Tauri there is nothing to look at; leaving this null keeps the
+      // panel quiet rather than claiming nothing is installed.
+    }
+  },
   init: async () => {
     // The panel mounts once and lives for the whole app, but guard anyway:
     // a second listener would double every message in the transcript.

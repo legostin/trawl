@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod events;
+pub mod harness;
 pub mod mcp_config;
 
 use events::AgentEvent;
