@@ -62,6 +62,12 @@ struct Entry {
 #[derive(Default)]
 pub struct ProcState {
     entries: Mutex<Vec<Entry>>,
+    /// Plugins the user has agreed may start programs, for this run of the app.
+    ///
+    /// Kept here rather than in the webview: a plugin shares the page with the
+    /// host, so a grant stored in `localStorage` is one the grantee can write
+    /// for itself.
+    spawn_granted: Mutex<std::collections::HashSet<String>>,
 }
 
 impl ProcState {
@@ -253,13 +259,60 @@ pub fn kill_all(state: &ProcState) {
 
 // ---- Tauri commands -------------------------------------------------------
 
+/// Asks the user, once per plugin per app run, before it may start programs.
+///
+/// The prompt is a native dialog on purpose. An in-app modal is drawn by the
+/// same page the plugin runs in, so a plugin can dismiss it, pre-approve itself
+/// or answer the event on the user's behalf. A window the OS owns is the only
+/// one page script cannot click.
+async fn allowed_to_spawn(app: &AppHandle, state: &ProcState, plugin_id: &str, cmd: &str) -> bool {
+    if state
+        .spawn_granted
+        .lock()
+        .unwrap()
+        .contains(plugin_id)
+    {
+        return true;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tauri_plugin_dialog::DialogExt::dialog(app)
+        .message(format!(
+            "The plugin \"{plugin_id}\" wants to run a program on your machine, with your permissions:\n\n{cmd}\n\nAllow it for the rest of this session?"
+        ))
+        .title("Trawl — a plugin wants to run a program")
+        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+            "Allow".into(),
+            "Deny".into(),
+        ))
+        .show(move |granted| {
+            let _ = tx.send(granted);
+        });
+    if rx.await.unwrap_or(false) {
+        state
+            .spawn_granted
+            .lock()
+            .unwrap()
+            .insert(plugin_id.to_string());
+        true
+    } else {
+        false
+    }
+}
+
 #[tauri::command]
-pub fn plugin_spawn(
+pub async fn plugin_spawn(
     app: AppHandle,
     state: State<'_, ProcState>,
     plugin_id: String,
     request: SpawnRequest,
 ) -> Result<ProcessInfo, String> {
+    let shown = std::iter::once(request.command.clone())
+        .chain(request.args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !allowed_to_spawn(&app, &state, &plugin_id, &shown).await {
+        return Err(format!("\"{plugin_id}\" was not allowed to run a program"));
+    }
     spawn(&app, &state, &plugin_id, request).map_err(|e| e.to_string())
 }
 

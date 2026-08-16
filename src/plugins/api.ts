@@ -262,7 +262,11 @@ export interface ProcessLine {
 }
 
 /** Child processes owned by the calling plugin. Killed when it is disabled,
- *  reloaded, or the app exits — a plugin's process never outlives the app. */
+ *  reloaded, removed, or the app exits — a plugin's process never outlives it.
+ *
+ *  The first spawn asks the user in a native dialog, once per plugin per run of
+ *  the app. The prompt is not drawn in the page: a plugin shares the page with
+ *  the host and could otherwise answer for the user. */
 export interface TrawlProcess {
   /** Start a process. `command` is resolved against the user's login-shell PATH,
    *  so `npx` and friends work from a GUI app. */

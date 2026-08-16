@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { ProcessInfo, ProcessLine, TrawlDialog, TrawlProcess } from "./api";
-import { requestSpawnConsent } from "./spawnConsent";
 
 interface RawProcessInfo {
   id: string;
@@ -61,8 +60,9 @@ export const processApi = (pluginId: string | null): TrawlProcess => {
   return {
     spawn: async (request) => {
       const id = owner();
-      const shown = [request.command, ...(request.args ?? [])].join(" ");
-      if (!(await requestSpawnConsent(id, shown))) throw new Error("the user declined to run the command");
+      // Consent is asked for by the backend, in a window the OS owns. Asking
+      // here as well would double the prompt, and a check living in the same
+      // page as the plugin is one the plugin can answer for itself.
       const raw = await invoke<RawProcessInfo>("plugin_spawn", { pluginId: id, request });
       return toInfo(raw);
     },
