@@ -6,6 +6,7 @@ import type { ChatItem } from "../agent/chatItems";
 import { useLayout } from "../layout";
 import { useFlows } from "../store";
 import { Button } from "./ui/button";
+import { AgentMarkdown } from "./AgentMarkdown";
 
 export function AgentPanel() {
   const items = useAgent((s) => s.items);
@@ -122,7 +123,7 @@ function ChatBubble({ item }: { item: ChatItem }) {
         <div className="ml-6 whitespace-pre-wrap rounded-md bg-muted/40 px-3 py-2">{item.text}</div>
       );
     case "assistant":
-      return <div className="whitespace-pre-wrap">{item.text}</div>;
+      return <AgentMarkdown text={item.text} />;
     case "tool":
       return <div className="font-mono text-xs text-muted-foreground">→ {item.name}</div>;
     case "error":

@@ -27,21 +27,26 @@ changed. When the harness comes up without those tools anyway, the panel says
 so — an agent that cannot see the traffic otherwise sounds much like one that
 is simply being brief.
 
-## What it cannot do yet
+## What it can change
 
-This first version is **read-only**. The agent is launched with an allowlist
-holding only the tools that change nothing, so it can explain, count and
-compare, but it cannot save a rule, resolve a breakpoint or send a request.
-Ask it to change something and it will tell you it cannot.
+The agent is granted Trawl's MCP server as a whole, so it can edit rules,
+breakpoints and projects, and use tools your plugins contribute. Ask it to
+disable a rule and it will.
 
-Tools contributed by plugins are not offered to the agent either. The
-allowlist is built from Trawl's own tool registry, which knows which of its
-tools change something; a plugin's tool makes no such promise, so it stays out
-until there is a way to ask you first.
+**These changes happen immediately, without a confirmation prompt.** That is a
+deliberate trade for now, and the reason it is tolerable is the blast radius:
+everything the agent can touch is Trawl's own state, visible in the UI and
+undoable there. Confirmation cards, showing each change before it happens, are
+the next piece of work.
 
-Writing — with each change confirmed in the app before it happens — is the
-next step, along with support for `codex` and access to your project's
-repository.
+## What it cannot do
+
+It has no access to your files and no shell. Nothing outside the Trawl MCP
+server is on its allowlist, and in this mode there is no way for it to ask for
+more — so a request that genuinely needs a file or a command is refused rather
+than half-attempted.
+
+Support for `codex` and access to your project's repository come later.
 
 ## The conversation
 

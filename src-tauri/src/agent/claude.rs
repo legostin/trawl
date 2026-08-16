@@ -1,5 +1,4 @@
 use crate::agent::events::{AgentEvent, Usage};
-use crate::agent::mcp_config::read_only_tools;
 use serde_json::Value;
 
 /// Everything that differs between one launch of the harness and the next.
@@ -30,16 +29,13 @@ pub fn build_args(cfg: &LaunchConfig) -> Vec<String> {
     args.push("--append-system-prompt".into());
     args.push(cfg.system_prompt.clone());
 
-    // Phase 1 has no approval channel, so the harness must never reach a point
-    // where it would need one: only non-mutating Trawl tools, nothing else.
+    // The whole Trawl server, named as a server rather than tool by tool: that
+    // is what reaches tools contributed by plugins, which no list kept here
+    // would know about. Nothing outside it is granted, and that omission is
+    // what keeps the agent off the disk and out of a shell — there is no
+    // approval channel yet to ask for either.
     args.push("--allowedTools".into());
-    args.push(
-        read_only_tools()
-            .iter()
-            .map(|t| format!("mcp__trawl__{t}"))
-            .collect::<Vec<_>>()
-            .join(","),
-    );
+    args.push("mcp__trawl".into());
 
     if let Some(id) = &cfg.resume {
         args.push("--resume".into());
@@ -251,19 +247,31 @@ mod tests {
             .any(|w| w[0] == "--resume" && w[1] == "sess-1"));
     }
 
-    #[test]
-    fn phase_one_allows_only_tools_that_change_nothing() {
-        let args = build_args(&cfg());
+    fn allowlist(args: &[String]) -> String {
         let i = args
             .iter()
             .position(|a| a == "--allowedTools")
             .expect("allowlist");
-        let allowed = &args[i + 1];
-        assert!(allowed.contains("mcp__trawl__query_flows"));
-        // save_rule mutates; send_request fires real traffic. Neither belongs
-        // in a phase that has no way to ask the user first.
-        assert!(!allowed.contains("save_rule"));
-        assert!(!allowed.contains("send_request"));
+        args[i + 1].clone()
+    }
+
+    #[test]
+    fn the_whole_trawl_server_is_granted_including_plugin_tools() {
+        // Naming the server rather than each tool is what lets the agent reach
+        // tools contributed by plugins, which no hand-kept list would know
+        // about.
+        assert_eq!(allowlist(&build_args(&cfg())), "mcp__trawl");
+    }
+
+    #[test]
+    fn nothing_outside_trawl_is_granted() {
+        // The allowlist is the only thing keeping the agent off the disk and
+        // out of a shell: what is not named here needs a permission this phase
+        // has no way to ask for.
+        let allowed = allowlist(&build_args(&cfg()));
+        for tool in ["Bash", "Write", "Edit", "Read"] {
+            assert!(!allowed.contains(tool), "{tool} must not be granted");
+        }
     }
 
     #[test]
