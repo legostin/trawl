@@ -35,6 +35,7 @@ pub fn run() {
         .manage(AppState::new())
         .manage(mcp::McpState::new())
         .manage(childproc::ProcState::new())
+        .manage(agent::AgentState::new())
         .setup(|app| {
             use tauri::Manager;
 
@@ -74,6 +75,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            agent::agent_send,
+            agent::agent_interrupt,
+            agent::agent_reset,
+            agent::agent_status,
             commands::start_proxy,
             commands::stop_proxy,
             commands::get_flows,
