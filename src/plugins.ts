@@ -51,6 +51,9 @@ export interface Plugin {
   /** Plugin API version the installed bundle needs (from its manifest; empty or
    *  missing for plugins installed before the registry recorded it). */
   apiVersion?: string;
+  /** Where it came from. "local" was written inside the app and has no repo,
+   *  so it never checks for updates. Missing in older registries = "git". */
+  origin?: "git" | "local";
 }
 
 export interface PluginDep {
@@ -142,15 +145,8 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   },
   remove: async (id) => {
     const installed = await invoke<Plugin[]>("remove_plugin", { id });
-    const updates = { ...get().updates };
-    delete updates[id];
-    const blockedUpdates = { ...get().blockedUpdates };
-    delete blockedUpdates[id];
-    leaveModeIfActive(id);
-    set({ installed, updates, blockedUpdates, modes: get().modes.filter((m) => m.id !== id) });
-    const { clearPluginTools } = await import("./plugins/mcpBridge");
-    await clearPluginTools(id);
-    bus.emit("plugin:removed", { id });
+    set({ installed });
+    await forgetPlugin(id);
   },
   setEnabled: async (id, enabled) => {
     const installed = await invoke<Plugin[]>("set_plugin_enabled", { id, enabled });
@@ -180,7 +176,11 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     const found: Record<string, string> = {};
     const blocked: Record<string, { version: string; apiVersion: string }> = {};
     await Promise.all(
-      get().installed.map(async (p) => {
+      // A plugin written in-app has no repo. Asking about one anyway fetches a
+      // URL that cannot exist, which falls through to the authenticated path
+      // and reads the Keychain — a prompt on every launch, which is exactly
+      // what the unauthenticated-first fetch was built to avoid.
+      get().installed.filter((p) => p.origin !== "local" && p.repo).map(async (p) => {
         try {
           const m = await invoke<PluginManifest>("fetch_plugin_manifest", {
             repo: p.repo,
@@ -211,3 +211,37 @@ export const usePlugins = create<PluginsState>((set, get) => ({
     set({ installed, updates });
   },
 }));
+
+/**
+ * Undoes everything a loaded plugin left behind. Called both when the user
+ * removes one and when a plugin disappears from the registry underneath us,
+ * so "removed" means the same thing either way.
+ *
+ * The injected script and the flow actions were previously left in place —
+ * uninstalling stopped the mode from appearing but not the plugin from running.
+ */
+export async function forgetPlugin(id: string): Promise<void> {
+  leaveModeIfActive(id);
+  usePlugins.setState((s) => {
+    const updates = { ...s.updates };
+    delete updates[id];
+    const blockedUpdates = { ...s.blockedUpdates };
+    delete blockedUpdates[id];
+    return {
+      updates,
+      blockedUpdates,
+      modes: s.modes.filter((m) => m.id !== id),
+      flowActions: s.flowActions.filter((a) => a.pluginId !== id),
+    };
+  });
+  const { clearPluginTools } = await import("./plugins/mcpBridge");
+  await clearPluginTools(id);
+  const { killPluginProcesses } = await import("./plugins/procApi");
+  await killPluginProcesses(id).catch(() => {});
+  if (typeof document !== "undefined") {
+    document
+      .querySelectorAll(`script[data-trawl-plugin="${CSS.escape(id)}"]`)
+      .forEach((s) => s.remove());
+  }
+  bus.emit("plugin:removed", { id });
+}

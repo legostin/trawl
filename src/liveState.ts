@@ -4,18 +4,37 @@ import { useProjects } from "./projects";
 import { useBreakpoints } from "./breakpoints";
 
 /** What the backend says has changed underneath the window. */
-export type Changed = "rules" | "projects" | "breakpoints";
+export type Changed = "rules" | "projects" | "breakpoints" | "plugins";
 
-const RELOAD: Record<Changed, () => Promise<void>> = {
+const RELOAD: Record<Changed, (id?: string) => Promise<void>> = {
   rules: () => useRules.getState().load(),
   projects: () => useProjects.getState().load(),
   breakpoints: () => useBreakpoints.getState().load(),
+  // Imported lazily: this module is loaded from main.tsx, and reaching the
+  // plugin loader statically would drag the whole UI graph in with it.
+  plugins: async (id) => {
+    const { usePlugins, forgetPlugin } = await import("./plugins");
+    await usePlugins.getState().load();
+    const { loadPlugin, loadEnabledPlugins } = await import("./plugins/loader");
+    if (!id) {
+      await loadEnabledPlugins();
+      return;
+    }
+    const plugin = usePlugins.getState().installed.find((p) => p.id === id);
+    if (!plugin) {
+      // Gone from the registry means it was deleted; nothing to infer from a
+      // second payload field.
+      await forgetPlugin(id);
+      return;
+    }
+    if (plugin.enabled) await loadPlugin(id);
+  },
 };
 
 /** Reload the part of the state the backend says has changed. */
-export function applyChange(what: string): void {
+export function applyChange(what: string, id?: string): void {
   const reload = RELOAD[what as Changed];
-  if (reload) void reload();
+  if (reload) void reload(id);
 }
 
 /**
@@ -25,7 +44,7 @@ export function applyChange(what: string): void {
  * a chat and missing from the list reads as "MCP did not work".
  */
 export function watchExternalChanges(): void {
-  void listen<{ what?: string }>("state-changed", (event) => {
-    if (event.payload?.what) applyChange(event.payload.what);
+  void listen<{ what?: string; id?: string }>("state-changed", (event) => {
+    if (event.payload?.what) applyChange(event.payload.what, event.payload.id);
   });
 }

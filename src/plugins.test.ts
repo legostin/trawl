@@ -76,6 +76,19 @@ describe("usePlugins.checkUpdates", () => {
     });
   });
 
+  it("never asks about a plugin written in-app", async () => {
+    // A local plugin has no repo, so the manifest fetch cannot succeed. It
+    // fails through to the authenticated path, which reads the Keychain — a
+    // prompt on every launch, which the unauthenticated-first fetch exists to
+    // avoid. Not asking at all is the fix.
+    usePlugins.setState({
+      installed: [{ ...plug("mine", "", "0.1.0"), host: "", ref: "", origin: "local" }],
+    });
+    await usePlugins.getState().checkUpdates();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(usePlugins.getState().updates).toEqual({});
+  });
+
   it("does not offer an update at all when versions are equal", async () => {
     usePlugins.setState({ installed: [plug("same", "o/same", "0.2.0")] });
     invoke.mockResolvedValue({ id: "same", version: "0.2.0", apiVersion: "999.0.0" });

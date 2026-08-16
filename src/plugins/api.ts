@@ -31,6 +31,9 @@ export interface FlowAction {
   label: string;
   icon?: React.ComponentType<{ className?: string }>;
   run(flow: Flow): void;
+  /** Stamped by the host at registration; a plugin does not set it. Without it
+   *  an uninstalled plugin's buttons stay in the toolbar. */
+  pluginId?: string;
 }
 
 /** Imperative handle on the host's code editor. */

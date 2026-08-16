@@ -23,6 +23,18 @@ function guardApiVersion(p: Plugin): boolean {
  *  Re-loading replaces any previous injection for the same plugin, so updates and
  *  enable/disable can be applied live (the re-run re-registers the mode). */
 async function loadBundle(id: string): Promise<void> {
+  // `setLoadingPlugin` and `window.__TRAWL__` are single module-level slots, so
+  // two overlapping loads would attribute one plugin's MCP tools to the other
+  // and hand a bundle the wrong host. User-paced clicks never collide; two
+  // agent writes one sentence apart do.
+  const run = chain.then(() => injectBundle(id));
+  chain = run.catch(() => {});
+  return run;
+}
+
+let chain: Promise<void> = Promise.resolve();
+
+async function injectBundle(id: string): Promise<void> {
   const code = await invoke<string>("read_plugin_bundle", { id });
   await clearPluginTools(id);
   // A reload replaces the bundle, so anything the previous injection started
@@ -74,6 +86,9 @@ export async function loadEnabledPlugins(): Promise<void> {
 export async function loadPlugin(id: string): Promise<void> {
   const p = usePlugins.getState().installed.find((x) => x.id === id);
   if (p && !guardApiVersion(p)) return;
+  // Called from a backend event as well as from the panel's buttons, and a
+  // disabled plugin must stay disabled however the call arrived.
+  if (p && !p.enabled) return;
   try {
     await loadBundle(id);
   } catch (e) {

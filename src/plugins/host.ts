@@ -293,7 +293,9 @@ export function makeHost(pluginId: string | null): TrawlHost {
     openUrl: (url: string) => openUrl(url),
     registerMode: (mode: RegisteredMode) => usePlugins.getState().registerMode(mode),
     registerFlowAction: (action: FlowAction) =>
-      usePlugins.getState().registerFlowAction(action),
+      // Stamped here rather than trusted from the plugin, so removal can find
+      // every button a plugin added.
+      usePlugins.getState().registerFlowAction({ ...action, pluginId: pluginId ?? undefined }),
     setMode: (id: string) => useLayout.getState().setMode(id),
     log: (...args) => console.log("[plugin]", ...args),
   };

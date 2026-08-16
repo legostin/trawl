@@ -119,11 +119,16 @@ impl<R: tauri::Runtime> ServerHandler for TrawlMcp<R> {
                 // The window holds its own copy of this state and has no way to
                 // learn that MCP changed it; without this a rule created from a
                 // chat simply is not in the list.
-                if out.is_ok() {
-                    if let Some(what) = core_tools::changed_by(&name) {
-                        use tauri::Emitter;
-                        let _ = app.emit("state-changed", serde_json::json!({ "what": what }));
+                if let (Ok(value), Some(what)) = (out.as_ref(), core_tools::changed_by(&name)) {
+                    use tauri::Emitter;
+                    let mut payload = serde_json::json!({ "what": what });
+                    // A general rule rather than a per-tool special case: a
+                    // result may name the entity it touched, and the window
+                    // then reloads that one instead of everything.
+                    if let Some(id) = value.get("pluginId") {
+                        payload["id"] = id.clone();
                     }
+                    let _ = app.emit("state-changed", payload);
                 }
                 out
             })
