@@ -184,7 +184,7 @@ function ChatBubble({ item }: { item: ChatItem }) {
     case "assistant":
       return <AgentMarkdown text={item.text} />;
     case "tool":
-      return <div className="font-mono text-xs text-muted-foreground">→ {item.name}</div>;
+      return <ToolCall name={item.name} input={item.input} />;
     case "error":
       return (
         <div className="rounded-md border border-http-amber/40 bg-http-amber/10 px-3 py-2">
@@ -192,4 +192,50 @@ function ChatBubble({ item }: { item: ChatItem }) {
         </div>
       );
   }
+}
+
+/**
+ * A tool call, with what it was actually called with.
+ *
+ * The name alone is not enough to know what happened: "save_rule" and
+ * "save_plugin" both mean code was written into the app, and the code is in the
+ * arguments. Collapsed by default so a long conversation stays readable, and
+ * expanded on the calls that carry code, since those are the ones worth seeing
+ * at the moment they happen.
+ */
+function ToolCall({ name, input }: { name: string; input: unknown }) {
+  const args = (input ?? {}) as Record<string, unknown>;
+  const source = pluginSource(name, args);
+  const rest = source
+    ? { ...args, plugin: { ...(args.plugin as object), source: `… ${source.length} bytes, below` } }
+    : args;
+  const hasArgs = Object.keys(args).length > 0;
+
+  return (
+    <div className="text-xs">
+      <details open={Boolean(source)}>
+        <summary className="cursor-pointer list-none font-mono text-muted-foreground marker:content-none">
+          → {name}
+          {hasArgs && <span className="ml-1 opacity-50">▸</span>}
+        </summary>
+        {hasArgs && (
+          <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted/40 p-2 font-mono text-[11px] leading-snug">
+            {JSON.stringify(rest, null, 2)}
+          </pre>
+        )}
+        {source && (
+          <pre className="mt-1 max-h-72 overflow-auto rounded border border-border bg-muted/40 p-2 font-mono text-[11px] leading-snug">
+            {source}
+          </pre>
+        )}
+      </details>
+    </div>
+  );
+}
+
+/** The plugin body a save_plugin call carries, if this is one. */
+function pluginSource(name: string, args: Record<string, unknown>): string | null {
+  if (name !== "save_plugin") return null;
+  const plugin = args.plugin as { source?: unknown } | undefined;
+  return typeof plugin?.source === "string" ? plugin.source : null;
 }
