@@ -1,0 +1,5 @@
+{"type":"system","subtype":"hook_started","hook_name":"SessionStart","session_id":"2f0f77e2-f2a3-4323-b897-5833ab904c62","uuid":"a1"}
+{"type":"system","subtype":"init","session_id":"2f0f77e2-f2a3-4323-b897-5833ab904c62","model":"claude-opus-5","permissionMode":"default","cwd":"/tmp","mcp_servers":[{"name":"trawl","status":"connected"},{"name":"blender","status":"pending"}],"tools":["Read"],"uuid":"a2"}
+{"type":"system","subtype":"thinking_tokens","estimated_tokens":71,"session_id":"2f0f77e2","uuid":"a3"}
+{"type":"assistant","session_id":"2f0f77e2","uuid":"a4","message":{"id":"msg_1","role":"assistant","model":"claude-opus-5","content":[{"type":"thinking","thinking":"The user wants a greeting.","signature":"xx"},{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"output_tokens":75}}}
+{"type":"result","subtype":"success","is_error":false,"result":"hi","session_id":"2f0f77e2-f2a3-4323-b897-5833ab904c62","total_cost_usd":0.01,"usage":{"input_tokens":2,"cache_read_input_tokens":16015,"output_tokens":75},"uuid":"a5"}
