@@ -1,6 +1,28 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-import { parseTrawlLink } from "./links";
+import { parseTrawlLink, allowTrawlLinks } from "./links";
+
+describe("allowTrawlLinks", () => {
+  it("lets our own scheme through, which the markdown renderer would strip", () => {
+    // react-markdown's safe list is http/https/irc/mailto/xmpp; anything else
+    // becomes an empty href, which is why these links did not click.
+    expect(allowTrawlLinks("trawl:flow/42")).toBe("trawl:flow/42");
+    expect(allowTrawlLinks("trawl://artifact/a.csv")).toBe("trawl://artifact/a.csv");
+  });
+
+  it("keeps ordinary links working", () => {
+    expect(allowTrawlLinks("https://example.com/x")).toBe("https://example.com/x");
+    expect(allowTrawlLinks("mailto:a@b.c")).toBe("mailto:a@b.c");
+  });
+
+  it("still strips a scheme that could run code", () => {
+    // The answer is written partly from captured traffic, so this must not
+    // become "allow everything" just to let one scheme through.
+    expect(allowTrawlLinks("javascript:alert(1)")).toBe("");
+    expect(allowTrawlLinks("JaVaScRiPt:alert(1)")).toBe("");
+    expect(allowTrawlLinks("data:text/html;base64,PHNjcmlwdD4=")).toBe("");
+  });
+});
 
 describe("parseTrawlLink", () => {
   it("points at a captured flow", () => {

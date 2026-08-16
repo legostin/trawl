@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { defaultUrlTransform } from "react-markdown";
 import { useFlows } from "../store";
 import { useRules } from "../rules";
 import { useLayout } from "../layout";
@@ -44,6 +45,18 @@ export function parseTrawlLink(href: string | undefined): TrawlLink | null {
     default:
       return null;
   }
+}
+
+/**
+ * Keeps `trawl:` links intact through the markdown renderer.
+ *
+ * react-markdown blanks the href of any scheme outside http/https/irc/mailto/
+ * xmpp, so our own links arrived with nothing to act on. Only that one scheme
+ * is added: the rest of the sanitising still applies, and it has to, because
+ * the text being rendered is written partly from other people's servers.
+ */
+export function allowTrawlLinks(url: string): string {
+  return /^trawl:/i.test(url) ? url : defaultUrlTransform(url);
 }
 
 /** Shows an artifact in the file manager, for when the file is the deliverable. */
