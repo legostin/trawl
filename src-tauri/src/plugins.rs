@@ -102,10 +102,133 @@ pub struct Plugin {
     /// plugins installed before this was recorded).
     #[serde(default)]
     pub api_version: String,
+    /// Where the bundle came from. Absent in registries written before in-app
+    /// authoring existed — everything back then was a repo install.
+    #[serde(default)]
+    pub origin: Origin,
+}
+
+/// How a plugin got here. `Local` means it was written inside the app rather
+/// than fetched, which is why it has no repo and never checks for updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    #[default]
+    Git,
+    Local,
 }
 
 fn default_host() -> String {
     "github.com".to_string()
+}
+
+/// A plugin written in-app, before it becomes a registry record.
+pub struct LocalPluginDraft {
+    pub id: String,
+    pub name: String,
+    pub source: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+}
+
+/// An id that is safe both as a single path component and as a mode id.
+///
+/// This is a security boundary rather than tidiness: the id reaches
+/// `plugins_dir().join(id)` and, on delete, `remove_dir_all`. That was safe
+/// while ids only ever came from a fetched manifest; an id chosen by a model
+/// is the first one that could point somewhere else.
+pub fn validate_plugin_id(id: &str) -> Result<(), String> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid plugin id {id:?}: use 1-64 chars of a-z, 0-9, '-' or '_', starting with a letter or digit"
+        ))
+    }
+}
+
+/// Refuses to let one kind of plugin overwrite the other.
+///
+/// Without it, installing a repo plugin whose manifest id happens to match
+/// would silently replace an agent-written bundle, and vice versa.
+pub fn guard_origin_conflict(file: &PluginsFile, id: &str, want: Origin) -> Result<(), String> {
+    match file.plugins.iter().find(|p| p.id == id) {
+        Some(p) if p.origin != want => Err(match want {
+            Origin::Local => format!("\"{id}\" is installed from a repository — pick another id"),
+            Origin::Git => format!("\"{id}\" was written in this app — remove it first"),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Writes an in-app plugin and registers it. Everything is validated before a
+/// single byte is written, so a rejected plugin leaves nothing behind.
+pub fn save_local_plugin(data_dir: &Path, draft: LocalPluginDraft) -> Result<Plugin, String> {
+    validate_plugin_id(&draft.id)?;
+    let mut file = load_plugins(data_dir).map_err(|e| e.to_string())?;
+    guard_origin_conflict(&file, &draft.id, Origin::Local)?;
+    crate::scripting::validate_plugin_source(&draft.source)?;
+
+    let dir = plugins_dir(data_dir).join(&draft.id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("plugin.js"), &draft.source).map_err(|e| e.to_string())?;
+
+    let existing = file.plugins.iter().find(|p| p.id == draft.id);
+    let plugin = Plugin {
+        id: draft.id.clone(),
+        name: draft.name,
+        // An unnamed version keeps whatever is there: the agent rewriting the
+        // source is not a release.
+        version: draft
+            .version
+            .or_else(|| existing.map(|p| p.version.clone()))
+            .unwrap_or_else(|| "0.1.0".into()),
+        description: draft
+            .description
+            .or_else(|| existing.map(|p| p.description.clone()))
+            .unwrap_or_default(),
+        author: String::new(),
+        repo: String::new(),
+        host: String::new(),
+        git_ref: String::new(),
+        // A rewrite must not re-enable something the user switched off.
+        enabled: existing.map(|p| p.enabled).unwrap_or(true),
+        api_version: String::new(),
+        origin: Origin::Local,
+    };
+    match file.plugins.iter_mut().find(|p| p.id == plugin.id) {
+        Some(e) => *e = plugin.clone(),
+        None => file.plugins.push(plugin.clone()),
+    }
+    save_plugins(data_dir, &file).map_err(|e| e.to_string())?;
+    Ok(plugin)
+}
+
+/// Removes an in-app plugin. Refuses anything the user installed themselves —
+/// the agent may clean up after itself and nothing else.
+pub fn delete_local_plugin(data_dir: &Path, id: &str) -> Result<(), String> {
+    validate_plugin_id(id)?;
+    let mut file = load_plugins(data_dir).map_err(|e| e.to_string())?;
+    match file.plugins.iter().find(|p| p.id == id) {
+        None => return Err(format!("no plugin \"{id}\"")),
+        Some(p) if p.origin != Origin::Local => {
+            return Err(format!("\"{id}\" was installed from a repository"))
+        }
+        Some(_) => {}
+    }
+    file.plugins.retain(|p| p.id != id);
+    save_plugins(data_dir, &file).map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(plugins_dir(data_dir).join(id));
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -453,6 +576,13 @@ fn install_tree(
     }
     let display = if manifest.name.is_empty() { &manifest.id } else { &manifest.name };
     check_api_version(display, &manifest.api_version, host_api_version)?;
+    // Checked before the bundle is fetched, let alone written: an install that
+    // collides with a plugin written in this app must not overwrite it.
+    guard_origin_conflict(
+        &load_plugins(data).map_err(|e| e.to_string())?,
+        &manifest.id,
+        Origin::Git,
+    )?;
     let bundle = http_get_text(
         &content_url(host, repo, git_ref, &manifest.entry, token.is_some()),
         token.as_deref(),
@@ -477,6 +607,7 @@ fn install_tree(
         git_ref: git_ref.to_string(),
         enabled: true,
         api_version: manifest.api_version.clone(),
+        origin: Origin::Git,
     };
     if let Some(e) = file.plugins.iter_mut().find(|p| p.id == plugin.id) {
         *e = plugin;
@@ -909,6 +1040,169 @@ mod tests {
     }
 
     #[test]
+    fn origin_defaults_to_git_for_registries_written_before_local_plugins() {
+        // Every plugin that predates in-app authoring came from a repo.
+        let p: Plugin = serde_json::from_str(
+            r#"{ "id": "a", "name": "A", "version": "1.0.0", "description": "",
+                 "author": "", "repo": "o/r", "ref": "main", "enabled": true }"#,
+        )
+        .unwrap();
+        assert_eq!(p.origin, Origin::Git);
+    }
+
+    #[test]
+    fn validate_plugin_id_rejects_anything_unsafe_as_a_path_component() {
+        // The id reaches plugins_dir().join(id) and, on delete, remove_dir_all.
+        // Until now ids came from a fetched manifest; an agent-chosen one must
+        // not be able to point at a directory of its choosing.
+        for bad in ["../evil", "a/b", "", "A", "-lead", &"x".repeat(200)] {
+            assert!(validate_plugin_id(bad).is_err(), "{bad:?} must be rejected");
+        }
+        for ok in ["a", "http-client", "my_plugin2"] {
+            assert!(validate_plugin_id(ok).is_ok(), "{ok:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn guard_origin_conflict_protects_both_directions() {
+        let mut file = PluginsFile::default();
+        file.plugins.push(local_plugin("mine"));
+        file.plugins.push(git_plugin("theirs"));
+
+        // A repo install must not silently overwrite what the agent wrote,
+        // and the agent must not overwrite what the user installed.
+        assert!(guard_origin_conflict(&file, "mine", Origin::Git).is_err());
+        assert!(guard_origin_conflict(&file, "theirs", Origin::Local).is_err());
+        assert!(guard_origin_conflict(&file, "mine", Origin::Local).is_ok());
+        assert!(guard_origin_conflict(&file, "theirs", Origin::Git).is_ok());
+        assert!(guard_origin_conflict(&file, "unknown", Origin::Local).is_ok());
+    }
+
+    #[test]
+    fn saving_a_local_plugin_writes_the_bundle_and_registers_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = save_local_plugin(
+            tmp.path(),
+            LocalPluginDraft {
+                id: "probe".into(),
+                name: "Probe".into(),
+                source: "(function(){})();".into(),
+                description: None,
+                version: None,
+            },
+        )
+        .unwrap();
+
+        let bundle = plugins_dir(tmp.path()).join("probe").join("plugin.js");
+        assert_eq!(fs::read_to_string(bundle).unwrap(), "(function(){})();");
+        assert_eq!(saved.origin, Origin::Local);
+        assert_eq!(saved.version, "0.1.0");
+        // Nothing to fetch from: an empty host keeps every URL-building path
+        // obviously empty rather than plausibly wrong.
+        assert_eq!(saved.repo, "");
+        assert_eq!(saved.host, "");
+        assert_eq!(saved.git_ref, "");
+        assert!(saved.enabled);
+    }
+
+    #[test]
+    fn saving_again_keeps_the_users_enable_switch_and_the_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let draft = |src: &str| LocalPluginDraft {
+            id: "probe".into(),
+            name: "Probe".into(),
+            source: src.into(),
+            description: None,
+            version: None,
+        };
+        save_local_plugin(tmp.path(), draft("(function(){})();")).unwrap();
+
+        // The user switches it off; the agent then rewrites the source.
+        let mut file = load_plugins(tmp.path()).unwrap();
+        file.plugins[0].enabled = false;
+        file.plugins[0].version = "2.5.0".into();
+        save_plugins(tmp.path(), &file).unwrap();
+
+        let saved = save_local_plugin(tmp.path(), draft("(function(){/*v2*/})();")).unwrap();
+        assert!(!saved.enabled, "a rewrite must not re-enable it");
+        assert_eq!(saved.version, "2.5.0", "an unnamed version is kept");
+    }
+
+    #[test]
+    fn a_source_that_does_not_parse_leaves_nothing_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = save_local_plugin(
+            tmp.path(),
+            LocalPluginDraft {
+                id: "broken".into(),
+                name: "Broken".into(),
+                source: "function ( {".into(),
+                description: None,
+                version: None,
+            },
+        )
+        .unwrap_err();
+        assert!(!err.is_empty());
+        assert!(!plugins_dir(tmp.path()).join("broken").exists());
+        assert!(load_plugins(tmp.path()).unwrap().plugins.is_empty());
+    }
+
+    #[test]
+    fn deleting_a_local_plugin_removes_the_record_and_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        save_local_plugin(
+            tmp.path(),
+            LocalPluginDraft {
+                id: "probe".into(),
+                name: "Probe".into(),
+                source: "(function(){})();".into(),
+                description: None,
+                version: None,
+            },
+        )
+        .unwrap();
+        delete_local_plugin(tmp.path(), "probe").unwrap();
+        assert!(!plugins_dir(tmp.path()).join("probe").exists());
+        assert!(load_plugins(tmp.path()).unwrap().plugins.is_empty());
+    }
+
+    #[test]
+    fn deleting_refuses_a_plugin_the_user_installed_from_a_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut file = PluginsFile::default();
+        file.plugins.push(git_plugin("theirs"));
+        save_plugins(tmp.path(), &file).unwrap();
+        assert!(delete_local_plugin(tmp.path(), "theirs").is_err());
+        assert_eq!(load_plugins(tmp.path()).unwrap().plugins.len(), 1);
+    }
+
+    fn local_plugin(id: &str) -> Plugin {
+        Plugin {
+            id: id.into(),
+            name: id.into(),
+            version: "0.1.0".into(),
+            description: String::new(),
+            author: String::new(),
+            repo: String::new(),
+            host: String::new(),
+            git_ref: String::new(),
+            enabled: true,
+            api_version: String::new(),
+            origin: Origin::Local,
+        }
+    }
+
+    fn git_plugin(id: &str) -> Plugin {
+        Plugin {
+            repo: "o/r".into(),
+            host: "github.com".into(),
+            git_ref: "main".into(),
+            origin: Origin::Git,
+            ..local_plugin(id)
+        }
+    }
+
+    #[test]
     fn registry_defaults_api_version_for_old_files() {
         // plugins.json written before the gate has no apiVersion field.
         let p: Plugin = serde_json::from_str(
@@ -958,6 +1252,7 @@ mod tests {
                 git_ref: "main".into(),
                 enabled: true,
                 api_version: "1.6.0".into(),
+                origin: Origin::Git,
             }],
         };
         save_plugins(&dir, &file).unwrap();

@@ -490,6 +490,42 @@ pub fn extract_path_literals(script: &str) -> Vec<String> {
 
 /// Validates a rule before saving: JS syntax + literal JSONPaths.
 /// `return` is valid in the script (handler phase), so we wrap it in a function.
+/// Parses a plugin bundle without running it.
+///
+/// A plugin is injected as a classic `<script>`, where a body that throws
+/// fires `load`, not `error` — so a broken bundle otherwise fails silently and
+/// looks installed. Catching it here turns it into an error the author can read
+/// at the moment they wrote it.
+pub fn validate_plugin_source(source: &str) -> Result<(), String> {
+    // QuickJS reports ESM syntax as an ordinary parse error, which sends the
+    // author looking for a typo instead of at the real problem.
+    for line in source.lines() {
+        let t = line.trim_start();
+        if t.starts_with("import ") || t.starts_with("export ") || t.starts_with("export{") {
+            return Err(
+                "plugin.js is injected as a classic script, not a module — no import/export. \
+                 Use window.__TRAWL__ and host.react.createElement."
+                    .into(),
+            );
+        }
+    }
+    let rt = Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context: {e}"))?;
+    ctx.with(|c| {
+        let src = format!("(function() {{\n{source}\n}})");
+        match c.eval::<rquickjs::Value, _>(src) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                let msg = match c.catch().into_exception() {
+                    Some(ex) => ex.message().unwrap_or_else(|| ex.to_string()),
+                    None => "syntax error".to_string(),
+                };
+                Err(format!("JS: {msg}"))
+            }
+        }
+    })
+}
+
 pub fn validate_rule_script(script: &str) -> Result<(), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime: {e}"))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context: {e}"))?;
@@ -948,6 +984,26 @@ mod tests {
     async fn syntax_error_becomes_error_result() {
         let res = run("this is not valid )(", r#"{"request":{}}"#).await;
         assert_eq!(res.action, "error");
+    }
+
+    #[test]
+    fn a_plugin_that_parses_is_accepted_without_running() {
+        // Parse-only matters: the body must not execute during validation.
+        assert!(validate_plugin_source("(function(){ window.boom = 1; })();").is_ok());
+    }
+
+    #[test]
+    fn a_plugin_that_does_not_parse_is_refused() {
+        assert!(validate_plugin_source("function ( {").is_err());
+    }
+
+    #[test]
+    fn an_es_module_is_told_what_is_actually_wrong() {
+        // QuickJS calls this a plain parse error, which sends the author
+        // hunting for a typo instead of at the missing build step.
+        let err = validate_plugin_source("import x from \"y\";\n(function(){})();").unwrap_err();
+        assert!(err.contains("classic script"), "got {err}");
+        assert!(err.contains("import/export"), "got {err}");
     }
 
     #[tokio::test]
