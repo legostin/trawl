@@ -28,6 +28,24 @@ interface RulesState {
   saveLibrary: (source: string) => Promise<void>;
 }
 
+/**
+ * Which rule the editor should show.
+ *
+ * The list only holds the active project's rules, but a selection can arrive
+ * from outside it — a link in a chat, most of all — and resolving the selection
+ * against the list means such a rule silently opens nothing. It resolves
+ * against every rule instead, and says when the one on screen belongs
+ * elsewhere, rather than quietly switching the user's project for them.
+ */
+export function pickSelectedRule(
+  rules: Rule[],
+  selectedId: string | null,
+  activeId: string | null,
+): { rule: Rule | null; outOfScope: boolean } {
+  const rule = rules.find((r) => r.id === selectedId) ?? null;
+  return { rule, outOfScope: rule ? (rule.projectId ?? null) !== (activeId ?? null) : false };
+}
+
 export const useRules = create<RulesState>((set) => ({
   rules: [],
   selectedId: null,

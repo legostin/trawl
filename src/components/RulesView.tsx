@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { BookMarked, FileCode2, Plus, Save, Trash2 } from "lucide-react";
-import { useRules, type Phase, type Rule } from "../rules";
+import { AlertTriangle, BookMarked, FileCode2, Plus, Save, Trash2 } from "lucide-react";
+import { useRules, pickSelectedRule, type Phase, type Rule } from "../rules";
 import { useProjects } from "../projects";
 import { useFlows } from "../store";
 import { ScriptEditor, type ScriptEditorApi } from "./ScriptEditor";
@@ -50,6 +50,7 @@ export function RulesView() {
   const { rules, selectedId, library, editingLibrary, load, select, editLibrary, upsert, remove, saveLibrary } =
     useRules();
   const activeId = useProjects((s) => s.activeId);
+  const projects = useProjects((s) => s.projects);
 
   const loadSnippets = useSnippets((s) => s.load);
   useEffect(() => {
@@ -86,7 +87,12 @@ export function RulesView() {
     });
   };
 
-  const selected = scoped.find((r) => r.id === selectedId) ?? null;
+  // Resolved against every rule, not just the visible ones: a selection can
+  // arrive from a link in a chat and point at another project's rule.
+  const { rule: selected, outOfScope } = pickSelectedRule(rules, selectedId, activeId ?? null);
+  const owner = outOfScope
+    ? (projects.find((p) => p.id === selected?.projectId)?.name ?? "another project")
+    : null;
 
   return (
     <div className="flex h-full">
@@ -143,7 +149,27 @@ export function RulesView() {
         {editingLibrary ? (
           <LibraryEditor key="lib" initial={library} onSave={saveLibrary} />
         ) : selected ? (
-          <RuleEditor key={selected.id} rule={selected} onSave={upsert} onDelete={() => void remove(selected.id)} />
+          <div className="flex h-full min-h-0 flex-col">
+            {owner && (
+              // It is not in the list beside it, and without saying why that
+              // reads as a bug rather than as scoping.
+              <div className="flex items-center gap-2 border-b border-http-amber/40 bg-http-amber/10 px-3 py-1.5 text-xs">
+                <AlertTriangle className="size-3.5 shrink-0 text-http-amber" />
+                <span>
+                  This rule belongs to <b>{owner}</b>, not the active project, so it is not in the
+                  list.
+                </span>
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              <RuleEditor
+                key={selected.id}
+                rule={selected}
+                onSave={upsert}
+                onDelete={() => void remove(selected.id)}
+              />
+            </div>
+          </div>
         ) : (
           <EmptyState
             icon={<FileCode2 className="size-8" />}
