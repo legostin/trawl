@@ -691,6 +691,20 @@ pub fn read_plugin_bundle(app: AppHandle, id: String) -> Result<String, String> 
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Records how a plugin's last injection went.
+///
+/// A classic script whose body throws fires `load`, not `error`, so the loader
+/// cannot tell a working bundle from a broken one. Whoever wrote the plugin —
+/// the agent, most of all — otherwise has no way to learn that its code failed.
+#[tauri::command]
+pub fn report_plugin_load(
+    state: tauri::State<'_, crate::commands::AppState>,
+    id: String,
+    error: Option<String>,
+) {
+    state.plugin_load_status.write().unwrap().insert(id, error);
+}
+
 // ── Plugin key/value storage (JSON blobs) ──
 
 /// Sanitize a storage key into a safe single filename component.

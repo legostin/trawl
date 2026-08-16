@@ -75,6 +75,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            plugins::report_plugin_load,
             agent::harness::agent_harnesses,
             agent::agent_send,
             agent::agent_interrupt,

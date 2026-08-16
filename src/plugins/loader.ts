@@ -5,6 +5,10 @@ import { clearPluginTools, setLoadingPlugin } from "./mcpBridge";
 import { makeHost } from "./host";
 import { killPluginProcesses } from "./procApi";
 
+/** Tells the backend how the injection went, so list_plugins can report it. */
+const reportLoad = (id: string, error: string | null) =>
+  invoke<void>("report_plugin_load", { id, error }).catch(() => {});
+
 /** True when the cached bundle can run on this app; otherwise warn instead of
  *  executing it (an incompatible bundle would crash at render with a cryptic
  *  React error — see plugins installed before the apiVersion gate existed). */
@@ -46,6 +50,14 @@ async function injectBundle(id: string): Promise<void> {
   // The bundle captures `window.__TRAWL__` at init; hand it a host that knows
   // which plugin it belongs to.
   window.__TRAWL__ = makeHost(id);
+  // A classic script whose body throws fires `load`, not `error` — so without
+  // catching it here a broken bundle looks like a working one, and the pane it
+  // was meant to add simply never appears.
+  let thrown: string | null = null;
+  const onError = (e: ErrorEvent) => {
+    thrown = e.message || String(e.error);
+  };
+  window.addEventListener("error", onError);
   try {
     document
       .querySelectorAll(`script[data-trawl-plugin="${CSS.escape(id)}"]`)
@@ -58,7 +70,13 @@ async function injectBundle(id: string): Promise<void> {
       script.onerror = () => reject(new Error(`failed to execute plugin bundle "${id}"`));
       document.head.appendChild(script);
     });
+    void reportLoad(id, thrown);
+    if (thrown) throw new Error(thrown);
+  } catch (e) {
+    void reportLoad(id, thrown ?? String(e));
+    throw e;
   } finally {
+    window.removeEventListener("error", onError);
     setLoadingPlugin(null);
     // Back to an unowned host: a late `window.__TRAWL__` read gets an object
     // whose process API refuses to spawn rather than one attributed to whoever
