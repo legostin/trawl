@@ -13,6 +13,9 @@ export interface ScreenInput {
   view: View;
   selected: SelectedFlow | null;
   flowCount: number;
+  project?: { id: string; name: string } | null;
+  /** When the traffic now on screen starts. Null before anything is captured. */
+  sessionStartedMs?: number | null;
 }
 
 const SCREEN_NAMES: Record<string, string> = {
@@ -37,6 +40,17 @@ export function describeScreen(input: ScreenInput): string {
   const name =
     input.mode === "traffic" ? VIEW_NAMES[input.view] : SCREEN_NAMES[input.mode] ?? input.mode;
   lines.push(`screen: ${name}`);
+
+  // Named even when absent: silence here would read as "scoped to something",
+  // when in fact the answers would span every project captured.
+  lines.push(
+    input.project
+      ? `project: ${input.project.name} (${input.project.id})`
+      : "project: no project is active — traffic queries are not narrowed",
+  );
+  if (input.sessionStartedMs != null) {
+    lines.push(`current session starts at: ${input.sessionStartedMs} (unix ms)`);
+  }
 
   if (input.mode === "traffic") {
     lines.push(`flows captured: ${input.flowCount}`);

@@ -20,6 +20,11 @@ use super::{core_tools, McpConfig, McpState};
 #[derive(Clone)]
 pub struct TrawlMcp<R: tauri::Runtime = tauri::Wry> {
     app: tauri::AppHandle<R>,
+    /// Set on the `/mcp-agent` route only. The in-app agent answers about the
+    /// project the user is looking at, so its traffic queries are confined to
+    /// that project; clients on `/mcp` — a terminal session, say — still see
+    /// everything.
+    agent_scope: bool,
 }
 
 fn tool_from(name: String, description: String, schema: Value) -> Tool {
@@ -78,7 +83,14 @@ impl<R: tauri::Runtime> ServerHandler for TrawlMcp<R> {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let name = request.name.to_string();
-        let args = Value::Object(request.arguments.unwrap_or_default());
+        let mut args = Value::Object(request.arguments.unwrap_or_default());
+        if self.agent_scope {
+            let active = crate::commands::data_dir(&self.app)
+                .ok()
+                .and_then(|dir| crate::projects::load_projects(&dir).ok())
+                .and_then(|f| f.active_id);
+            args = core_tools::scope_args_to_project(&name, &args, active.as_deref());
+        }
         let mcp = self.app.state::<McpState>();
         let result = if let Some(tool) = mcp.bridge.find(&name) {
             let app = self.app.clone();
@@ -176,17 +188,39 @@ pub async fn start_server<R: tauri::Runtime>(
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let handler_app = app.clone();
     let service = StreamableHttpService::new(
-        move || Ok(TrawlMcp { app: handler_app.clone() }),
+        move || {
+            Ok(TrawlMcp {
+                app: handler_app.clone(),
+                agent_scope: false,
+            })
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    // The same tools, confined to the active project. rmcp builds its handler
+    // without sight of the request, so the scope rides on the route rather than
+    // on a header.
+    let agent_app = app.clone();
+    let agent_service = StreamableHttpService::new(
+        move || {
+            Ok(TrawlMcp {
+                app: agent_app.clone(),
+                agent_scope: true,
+            })
+        },
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
     let token = cfg.token.clone();
-    let router = axum::Router::new().nest_service("/mcp", service).layer(
-        axum::middleware::from_fn(move |req: Request, next: Next| {
-            let token = token.clone();
-            async move { require_bearer(&token, req, next).await }
-        }),
-    );
+    let router = axum::Router::new()
+        .nest_service("/mcp", service)
+        .nest_service("/mcp-agent", agent_service)
+        .layer(axum::middleware::from_fn(
+            move |req: Request, next: Next| {
+                let token = token.clone();
+                async move { require_bearer(&token, req, next).await }
+            },
+        ));
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let task = tauri::async_runtime::spawn(async move {
         let _ = axum::serve(listener, router)

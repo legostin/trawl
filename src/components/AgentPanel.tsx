@@ -5,6 +5,7 @@ import { describeScreen } from "../agent/screenContext";
 import type { ChatItem } from "../agent/chatItems";
 import { useLayout } from "../layout";
 import { useFlows } from "../store";
+import { useProjects } from "../projects";
 import { Button } from "./ui/button";
 import { AgentMarkdown } from "./AgentMarkdown";
 
@@ -22,6 +23,9 @@ export function AgentPanel() {
   const view = useFlows((s) => s.view);
   const flows = useFlows((s) => s.flows);
   const selectedId = useFlows((s) => s.selectedId);
+  const projects = useProjects((s) => s.projects);
+  const activeId = useProjects((s) => s.activeId);
+  const activeProject = projects.find((p) => p.id === activeId) ?? null;
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -40,6 +44,10 @@ export function AgentPanel() {
       mode,
       view,
       flowCount: flows.length,
+      project: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
+      // The oldest flow still in memory is where this session began; anything
+      // older lives in history and is not what the user is looking at.
+      sessionStartedMs: flows.length ? Math.min(...flows.map((f) => f.timestamp)) : null,
       selected: flow
         ? {
             id: flow.id,

@@ -270,6 +270,35 @@ pub fn changed_by(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Tools that read captured traffic and therefore accept a filter. Everything
+/// else is left alone by the project scope below.
+const TRAFFIC_TOOLS: [&str; 3] = ["query_flows", "flow_count", "aggregate_flows"];
+
+/// Confines a traffic query to one project.
+///
+/// The agent is answering about the project the user is looking at, and without
+/// this it happily reaches into months of unrelated history. An explicit
+/// `projectId` from the caller wins: asking about another project is a
+/// legitimate thing to do deliberately, just not by accident.
+pub fn scope_args_to_project(name: &str, args: &Value, project_id: Option<&str>) -> Value {
+    let Some(project_id) = project_id else {
+        return args.clone();
+    };
+    if !TRAFFIC_TOOLS.contains(&name) {
+        return args.clone();
+    }
+    let mut out = args.clone();
+    let filter = out
+        .as_object_mut()
+        .map(|o| o.entry("filter").or_insert_with(|| json!({})));
+    if let Some(Value::Object(f)) = filter {
+        if !f.contains_key("projectId") {
+            f.insert("projectId".into(), json!(project_id));
+        }
+    }
+    out
+}
+
 pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "get_status" => tool_get_status(deps),
@@ -702,6 +731,42 @@ mod tests {
         );
         f.applied_rules = vec!["r1".into()];
         f
+    }
+
+    #[test]
+    fn the_project_scope_confines_a_traffic_query() {
+        let out = scope_args_to_project("query_flows", &json!({}), Some("p1"));
+        assert_eq!(out["filter"]["projectId"], "p1");
+    }
+
+    #[test]
+    fn the_project_scope_keeps_the_rest_of_the_filter() {
+        let args = json!({"filter": {"statusClass": "5xx"}, "limit": 10});
+        let out = scope_args_to_project("query_flows", &args, Some("p1"));
+        assert_eq!(out["filter"]["statusClass"], "5xx");
+        assert_eq!(out["filter"]["projectId"], "p1");
+        assert_eq!(out["limit"], 10);
+    }
+
+    #[test]
+    fn a_deliberate_project_is_not_overridden() {
+        // Asking about another project on purpose stays possible; the scope
+        // only fills a gap, it does not overrule an intent.
+        let args = json!({"filter": {"projectId": "other"}});
+        let out = scope_args_to_project("query_flows", &args, Some("p1"));
+        assert_eq!(out["filter"]["projectId"], "other");
+    }
+
+    #[test]
+    fn tools_that_do_not_read_traffic_are_left_alone() {
+        let args = json!({"id": "r1"});
+        assert_eq!(scope_args_to_project("save_rule", &args, Some("p1")), args);
+    }
+
+    #[test]
+    fn without_an_active_project_nothing_is_narrowed() {
+        let args = json!({"filter": {"statusClass": "5xx"}});
+        assert_eq!(scope_args_to_project("query_flows", &args, None), args);
     }
 
     #[test]

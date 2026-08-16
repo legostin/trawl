@@ -3,7 +3,9 @@ pub fn mcp_config_json(port: u16, token: &str) -> String {
         "mcpServers": {
             "trawl": {
                 "type": "http",
-                "url": format!("http://127.0.0.1:{port}/mcp"),
+                // The agent route, not /mcp: it answers about the project the
+                // user has open, so the server confines its traffic queries.
+                "url": format!("http://127.0.0.1:{port}/mcp-agent"),
                 "headers": { "Authorization": format!("Bearer {token}") }
             }
         }
@@ -38,7 +40,10 @@ mod tests {
         let json = mcp_config_json(9910, "tok-123");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["mcpServers"]["trawl"]["type"], "http");
-        assert_eq!(v["mcpServers"]["trawl"]["url"], "http://127.0.0.1:9910/mcp");
+        assert_eq!(
+            v["mcpServers"]["trawl"]["url"],
+            "http://127.0.0.1:9910/mcp-agent"
+        );
         assert_eq!(
             v["mcpServers"]["trawl"]["headers"]["Authorization"],
             "Bearer tok-123"

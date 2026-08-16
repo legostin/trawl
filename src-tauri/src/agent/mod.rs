@@ -173,6 +173,11 @@ its UI; each message begins with a <screen> block saying where they are and what
 is selected. That block holds pointers, not data — use the trawl MCP tools to \
 fetch what you need.
 
+Traffic queries are already confined to the active project by the server, so do \
+not widen them by hand. The screen block also says when the current session \
+began: prefer traffic from it, and reach further back only when the question is \
+plainly about history.
+
 You can change Trawl's own state: rules, breakpoints and projects. Those changes \
 take effect immediately and the user sees no confirmation prompt, so make the \
 change they asked for and say what you did. You have no access to their files or \

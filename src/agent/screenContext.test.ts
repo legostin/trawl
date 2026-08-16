@@ -35,6 +35,44 @@ describe("describeScreen", () => {
     expect(out).not.toContain("Traffic capture");
   });
 
+  it("names the active project so the agent knows what it is scoped to", () => {
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 5,
+      project: { id: "p1", name: "Checkout" },
+      sessionStartedMs: null,
+    });
+    expect(out).toContain("Checkout");
+  });
+
+  it("marks where the current session begins, so recent traffic can win", () => {
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 5,
+      project: null,
+      sessionStartedMs: 1786882070269,
+    });
+    expect(out).toContain("1786882070269");
+  });
+
+  it("says so plainly when no project is active, instead of staying silent", () => {
+    // Silence would read as "scoped to something"; the agent should know its
+    // answers span every project.
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 5,
+      project: null,
+      sessionStartedMs: null,
+    });
+    expect(out).toContain("no project");
+  });
+
   it("omits a status that has not arrived yet rather than inventing one", () => {
     const out = describeScreen({
       mode: "traffic",
