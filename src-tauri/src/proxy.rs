@@ -1935,6 +1935,75 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
     }
 
+    // A rule that throws must cost the user its edit, not their traffic.
+    // patch() is fail-closed on purpose — zero matches is an error, and
+    // tryPatch() is the lenient twin — but that contract ends at the script:
+    // the response still has to reach the client untouched.
+    #[tokio::test]
+    async fn a_throwing_response_rule_still_delivers_the_original_response() {
+        let upstream_addr = echo_upstream().await;
+        let store = FlowStore::new(10);
+        let emit: EmitFn = Arc::new(|_e, _f| {});
+        let rules = vec![rule(
+            "missing-path",
+            "*",
+            Phase::Response,
+            "patch(response,'$.nothing.here',1);",
+        )];
+        let (s, r, l, p, bps, icept, pending) = scripting(rules);
+        let ca_dir = temp_ca();
+        let app_event: AppEventFn = Arc::new(|_e, _p| {});
+
+        let handle = start(
+            "127.0.0.1:0".parse().unwrap(),
+            store.clone(),
+            emit,
+            app_event,
+            secret_none(),
+            ca_dir.clone(),
+            s,
+            r,
+            l,
+            p,
+            Arc::new(RwLock::new(vec![])),
+            ca_dir.clone(),
+            None,
+            bps,
+            icept,
+            pending,
+            Arc::new(RwLock::new(0)),
+            Arc::new(RwLock::new(false)),
+        )
+        .await
+        .unwrap();
+        let bound = handle.local_addr();
+
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{bound}")).unwrap())
+            .build()
+            .unwrap();
+        let res = client
+            .get(format!("http://{upstream_addr}/api"))
+            .send()
+            .await
+            .expect("the request must not fail because a rule threw");
+
+        assert_eq!(res.status(), 200);
+        let body = res.text().await.unwrap();
+        assert!(
+            body.contains("GET /api"),
+            "the upstream body must arrive unchanged, got {body:?}"
+        );
+
+        // The failure is still recorded — passing traffic through is not the
+        // same as pretending the rule worked.
+        let flow = store.all().into_iter().next().expect("a flow was stored");
+        let err = flow.error.expect("the script error is kept on the flow");
+        assert!(err.contains("missing-path"), "got {err}");
+
+        handle.stop();
+    }
+
     // Two request-phase rules: one applies cleanly ("ok"), the next throws
     // ("boom"). Both outcomes are reported to the app via AppEventFn as
     // ("rule-applied", ...) / ("rule-error", ...) events.
