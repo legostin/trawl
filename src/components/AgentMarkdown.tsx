@@ -1,6 +1,8 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { FolderOpen } from "lucide-react";
+import { parseTrawlLink, followTrawlLink, revealArtifact } from "../agent/links";
 
 /**
  * Renders an agent answer as Markdown.
@@ -59,18 +61,41 @@ export function AgentMarkdown({ text }: { text: string }) {
 
           // A plain <a> would navigate the whole webview away from the app.
           // Hand the URL to the OS instead, as the plugins panel already does.
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              className="text-primary underline underline-offset-2"
-              onClick={(e) => {
-                e.preventDefault();
-                if (href) void openUrl(href);
-              }}
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            // A trawl: link points at something in this app — a flow, a rule,
+            // a file the agent wrote — and navigates here. Everything else
+            // still leaves for the browser.
+            const target = parseTrawlLink(href);
+            const link = (
+              <a
+                href={href}
+                title={target ? undefined : href}
+                className="text-primary underline underline-offset-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (target) followTrawlLink(target);
+                  else if (href) void openUrl(href);
+                }}
+              >
+                {children}
+              </a>
+            );
+            if (target?.kind !== "artifact") return link;
+            // Opening a file is the common case, but a file you cannot find on
+            // disk is only half delivered.
+            return (
+              <span className="inline-flex items-center gap-1">
+                {link}
+                <button
+                  title="Show in Finder"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => void revealArtifact(target.id)}
+                >
+                  <FolderOpen className="size-3" />
+                </button>
+              </span>
+            );
+          },
         }}
       >
         {text}

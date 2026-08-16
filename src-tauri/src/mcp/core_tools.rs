@@ -136,6 +136,17 @@ pub fn core_tools() -> Vec<ToolDef> {
             ),
         },
         ToolDef {
+            name: "save_artifact",
+            description: "Write a file for the user — a CSV, a report — and get back a link to it. Link to it from your answer as [name](trawl:artifact/name) so they can open it. This is the only place you can write a file.",
+            schema: obj(
+                json!({
+                    "name": { "type": "string", "description": "one file name with an extension, e.g. failing-requests.csv" },
+                    "contents": { "type": "string" }
+                }),
+                &["name", "contents"],
+            ),
+        },
+        ToolDef {
             name: "save_plugin",
             description: "Create or update a plugin written by you and load it into the running app immediately, no restart. `source` is the whole plugin.js and replaces what was there. It must be plain JS calling window.__TRAWL__ — no JSX, no import/export. Call get_plugin_reference first.",
             schema: obj(
@@ -340,6 +351,7 @@ pub fn scope_args_to_project(name: &str, args: &Value, project_id: Option<&str>)
 
 pub fn dispatch(deps: &Deps, name: &str, args: &Value) -> Result<Value, String> {
     match name {
+        "save_artifact" => tool_save_artifact(deps, args),
         "save_plugin" => tool_save_plugin(deps, args),
         "delete_plugin" => tool_delete_plugin(deps, args),
         "list_plugins" => tool_list_plugins(deps, args),
@@ -585,6 +597,23 @@ const PLUGIN_API_DTS: &str = include_str!("../../../src/plugins/api.ts");
 const PLUGIN_GUIDE: &str = include_str!("../../../docs/plugins.md");
 const PLUGIN_AUTHORING: &str = include_str!("../../../docs/agent-plugins.md");
 
+fn tool_save_artifact(deps: &Deps, args: &Value) -> Result<Value, String> {
+    let name = str_arg(args, "name").ok_or("missing name")?;
+    let contents = args
+        .get("contents")
+        .and_then(Value::as_str)
+        .ok_or("missing contents")?;
+    let path = crate::artifacts::save_artifact(&deps.data_dir, &name, contents)?;
+    Ok(json!({
+        "artifact": name,
+        "bytes": contents.len(),
+        "path": path.to_string_lossy(),
+        // Handed back ready to paste: a link the user cannot click is the same
+        // as no artifact at all.
+        "link": format!("trawl:artifact/{name}"),
+    }))
+}
+
 fn tool_save_plugin(deps: &Deps, args: &Value) -> Result<Value, String> {
     let raw = args.get("plugin").cloned().ok_or("missing plugin")?;
     let id = raw
@@ -825,9 +854,15 @@ mod tests {
         // The window keeps its own copy of this state; a tool that writes
         // without saying so leaves the user looking at a list that is missing
         // what they just created.
+        // save_artifact writes a file for the user, not state the window
+        // mirrors — there is no list for it to be missing from. Exempted here
+        // rather than renamed, so the exception is stated instead of hidden
+        // behind a verb chosen to dodge this check.
+        const WRITES_NOTHING_THE_WINDOW_SHOWS: [&str; 1] = ["save_artifact"];
         let writes: Vec<&str> = core_tools()
             .iter()
             .map(|t| t.name)
+            .filter(|n| !WRITES_NOTHING_THE_WINDOW_SHOWS.contains(n))
             .filter(|n| {
                 n.starts_with("save_")
                     || n.starts_with("delete_")

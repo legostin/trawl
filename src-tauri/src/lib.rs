@@ -1,4 +1,5 @@
 mod agent;
+mod artifacts;
 mod atomicfile;
 mod breakpoints;
 mod ca;
@@ -76,6 +77,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             plugins::report_plugin_load,
+            artifacts::open_artifact,
+            artifacts::reveal_artifact,
             agent::harness::agent_harnesses,
             agent::agent_send,
             agent::agent_interrupt,
