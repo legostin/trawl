@@ -15,6 +15,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { useFlows } from "../store";
+import { useLayout } from "../layout";
 import { useToast } from "../toast";
 import {
   getSetupInfo,
@@ -48,6 +49,9 @@ export function SetupPanel() {
   const [chromeLaunched, setChromeLaunched] = useState(false);
   const running = useFlows((s) => s.running);
   const httpsSeen = useFlows((s) => s.flows.some((f) => f.url.scheme === "https"));
+  // AppShell keeps every panel mounted and only hides it, so "mounted" is not "on screen".
+  // Both polls below would otherwise run for the whole life of the app.
+  const visible = useLayout((s) => s.mode === "setup");
 
   // Re-read proxy state right after a toggle so the button flips without waiting for the poll.
   const refreshProxy = useCallback(() => {
@@ -66,6 +70,7 @@ export function SetupPanel() {
   // The LAN IP changes under us when the machine joins another network, so keep re-reading it.
   // A failed poll leaves the last known info in place; the next tick recovers.
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     const tick = async () => {
       try {
@@ -81,11 +86,11 @@ export function SetupPanel() {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [visible]);
 
   // Live status polling for scenarios that go through the system proxy.
   useEffect(() => {
-    if (scenario !== "mac" && scenario !== "ios") {
+    if (!visible || (scenario !== "mac" && scenario !== "ios")) {
       setProxyOn(null);
       setSimBooted(null);
       return;
@@ -113,7 +118,7 @@ export function SetupPanel() {
       alive = false;
       clearInterval(id);
     };
-  }, [scenario]);
+  }, [scenario, visible]);
 
   const ip = info?.lanIp ?? "<no network>";
   const port = info?.port ?? DEFAULT_PORT;
