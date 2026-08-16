@@ -1,5 +1,52 @@
 use crate::agent::events::{AgentEvent, Usage};
+use crate::agent::mcp_config::read_only_tools;
 use serde_json::Value;
+
+/// Everything that differs between one launch of the harness and the next.
+#[derive(Debug, Clone)]
+pub struct LaunchConfig {
+    /// Session to continue; `None` starts a fresh one.
+    pub resume: Option<String>,
+    pub cwd: String,
+    pub mcp_config_path: String,
+    pub system_prompt: String,
+}
+
+pub fn build_args(cfg: &LaunchConfig) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+
+    args.push("--mcp-config".into());
+    args.push(cfg.mcp_config_path.clone());
+    args.push("--append-system-prompt".into());
+    args.push(cfg.system_prompt.clone());
+
+    // Phase 1 has no approval channel, so the harness must never reach a point
+    // where it would need one: only non-mutating Trawl tools, nothing else.
+    args.push("--allowedTools".into());
+    args.push(
+        read_only_tools()
+            .iter()
+            .map(|t| format!("mcp__trawl__{t}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+
+    if let Some(id) = &cfg.resume {
+        args.push("--resume".into());
+        args.push(id.clone());
+    }
+    args
+}
 
 /// One line of `claude --output-format stream-json` becomes zero or more UI
 /// events. Unknown event types yield nothing: the harness emits hook,
@@ -174,6 +221,49 @@ mod tests {
                 message: "rate limited".into()
             }]
         );
+    }
+
+    fn cfg() -> LaunchConfig {
+        LaunchConfig {
+            resume: None,
+            cwd: "/tmp/agent".into(),
+            mcp_config_path: "/tmp/agent/mcp.json".into(),
+            system_prompt: "You are inside Trawl.".into(),
+        }
+    }
+
+    #[test]
+    fn a_first_message_starts_a_session_without_resume() {
+        let args = build_args(&cfg());
+        assert!(!args.iter().any(|a| a == "--resume"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--mcp-config" && w[1] == "/tmp/agent/mcp.json"));
+    }
+
+    #[test]
+    fn a_later_message_resumes_the_same_session() {
+        let mut c = cfg();
+        c.resume = Some("sess-1".into());
+        let args = build_args(&c);
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--resume" && w[1] == "sess-1"));
+    }
+
+    #[test]
+    fn phase_one_allows_only_tools_that_change_nothing() {
+        let args = build_args(&cfg());
+        let i = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("allowlist");
+        let allowed = &args[i + 1];
+        assert!(allowed.contains("mcp__trawl__query_flows"));
+        // save_rule mutates; send_request fires real traffic. Neither belongs
+        // in a phase that has no way to ask the user first.
+        assert!(!allowed.contains("save_rule"));
+        assert!(!allowed.contains("send_request"));
     }
 
     #[test]
