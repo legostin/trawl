@@ -79,22 +79,69 @@ impl ProcState {
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static LOGIN_PATH: OnceLock<Option<String>> = OnceLock::new();
 
+/// Markers around the answer, so anything an rc file prints on its way up —
+/// version-manager banners, MOTDs, `nvm use` chatter — cannot be mistaken for
+/// a PATH.
+const PATH_BEGIN: &str = "__TRAWL_PATH_BEGIN__";
+const PATH_END: &str = "__TRAWL_PATH_END__";
+
+/// An rc file can hang (waiting on input, a slow network mount, a prompt
+/// framework). Detection must not hang with it.
+const SHELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+fn extract_path(stdout: &str) -> Option<String> {
+    let start = stdout.find(PATH_BEGIN)? + PATH_BEGIN.len();
+    let rest = &stdout[start..];
+    let path = rest[..rest.find(PATH_END)?].trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+/// Ask `shell` for the PATH it would give a person at a terminal.
+///
+/// `-i` is the load-bearing flag: `.zshrc` and `.bashrc` are read **only** by
+/// interactive shells, and that is where `nvm`, `~/.local/bin` and
+/// `~/.npm-global/bin` are normally added. A GUI app has no terminal PATH to
+/// fall back on, so a non-interactive login shell silently loses all of them.
+fn shell_path(shell: &str, args: &[&str], extra_env: &[(&str, &str)]) -> Option<String> {
+    let script = format!("printf %s%s%s '{PATH_BEGIN}' \"$PATH\" '{PATH_END}'");
+    let mut cmd = Command::new(shell);
+    cmd.args(args)
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        // Its own group, so a hung rc file's children die with it.
+        .process_group(0);
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+
+    let child = cmd.spawn().ok()?;
+    let pid = child.id() as i32;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(SHELL_TIMEOUT) {
+        Ok(Ok(out)) => extract_path(&String::from_utf8_lossy(&out.stdout)),
+        Ok(Err(_)) => None,
+        Err(_) => {
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            None
+        }
+    }
+}
+
 /// The PATH a terminal would have. Resolved once by asking the login shell;
 /// `None` when that fails, in which case the inherited PATH is used as-is.
 pub fn login_path() -> Option<String> {
     LOGIN_PATH
         .get_or_init(|| {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-            let out = Command::new(&shell)
-                .args(["-lc", "printf %s \"$PATH\""])
-                .output()
-                .ok()?;
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if path.is_empty() {
-                None
-            } else {
-                Some(path)
-            }
+            // A non-interactive login shell is the fallback, not the answer: it
+            // misses `.zshrc`, but an rc file that refuses to run interactively
+            // should still leave us better off than the app's own PATH.
+            shell_path(&shell, &["-ilc"], &[]).or_else(|| shell_path(&shell, &["-lc"], &[]))
         })
         .clone()
 }
@@ -343,6 +390,60 @@ mod tests {
     fn login_path_is_resolved_or_absent() {
         // Either the login shell answered, or we fall back — never an empty string.
         assert!(login_path().map(|p| !p.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn the_answer_is_read_from_between_the_markers() {
+        let out = format!("nvm: now using node v22\n{PATH_BEGIN}/opt/bin:/usr/bin{PATH_END}");
+        assert_eq!(extract_path(&out), Some("/opt/bin:/usr/bin".into()));
+    }
+
+    #[test]
+    fn chatter_without_markers_is_not_a_path() {
+        // An rc file that greets the user must not be parsed as an answer.
+        assert_eq!(extract_path("Welcome back!\n"), None);
+        assert_eq!(extract_path(&format!("{PATH_BEGIN}  {PATH_END}")), None);
+    }
+
+    /// The bug this guards: `~/.zshrc` is read *only* by interactive shells, and
+    /// that is where `nvm`, `~/.local/bin` and `~/.npm-global/bin` are usually
+    /// added. Run from a terminal the app inherits those anyway, so a
+    /// non-interactive login shell looks fine in dev and loses every one of them
+    /// in a packaged `.app`.
+    #[test]
+    fn a_path_set_only_in_zshrc_is_found() {
+        if !std::path::Path::new("/bin/zsh").exists() {
+            return; // No zsh on this machine — nothing to prove.
+        }
+        let dir = tmpdir("zdotdir");
+        std::fs::write(dir.join(".zshenv"), "").unwrap();
+        std::fs::write(dir.join(".zprofile"), "").unwrap();
+        std::fs::write(
+            dir.join(".zshrc"),
+            "export PATH=/opt/only-from-zshrc:$PATH\n",
+        )
+        .unwrap();
+        let env = [("ZDOTDIR", dir.to_str().unwrap())];
+        let has_it = |p: Option<String>| {
+            p.unwrap_or_default()
+                .split(':')
+                .any(|d| d == "/opt/only-from-zshrc")
+        };
+
+        assert!(
+            has_it(shell_path("/bin/zsh", &["-ilc"], &env)),
+            "an interactive login shell must see .zshrc"
+        );
+        assert!(
+            !has_it(shell_path("/bin/zsh", &["-lc"], &env)),
+            "a non-interactive login shell never reads .zshrc — that was the bug"
+        );
+    }
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("trawl-childproc-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
     }
 
     #[test]
