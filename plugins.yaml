@@ -17,8 +17,8 @@ plugins:
     repo: legostin/trawl-plugin-schema-check
     tags: [testing, schema, diff]
 
-# Hidden from the catalog for now. Commented out rather than deleted so it can
-# come back unchanged; anyone who already installed it keeps it and can still
+# Hidden from the catalog for now. Commented out rather than deleted so they
+# come back unchanged; anyone who already installed one keeps it and can still
 # update — the catalog only decides what is offered.
 #  - id: devices
 #    name: Devices
@@ -27,9 +27,9 @@ plugins:
 #    repo: legostin/trawl-plugin-devices
 #    tags: [testing, browser, playwright, automation]
 
-  - id: notifications
-    name: Notifications
-    description: Subscribe to any core or plugin event and deliver messages to Telegram — templates with payload hints, JS conditions, throttling, and notify() from rule scripts.
-    author: legostin
-    repo: legostin/trawl-plugin-notifications
-    tags: [telegram, notifications, events]
+#  - id: notifications
+#    name: Notifications
+#    description: Subscribe to any core or plugin event and deliver messages to Telegram — templates with payload hints, JS conditions, throttling, and notify() from rule scripts.
+#    author: legostin
+#    repo: legostin/trawl-plugin-notifications
+#    tags: [telegram, notifications, events]
