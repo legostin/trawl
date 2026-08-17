@@ -17,12 +17,15 @@ plugins:
     repo: legostin/trawl-plugin-schema-check
     tags: [testing, schema, diff]
 
-  - id: devices
-    name: Devices
-    description: Test-automation devices — record browser scenarios and replay them with Playwright, with each step linked to its captured traffic.
-    author: legostin
-    repo: legostin/trawl-plugin-devices
-    tags: [testing, browser, playwright, automation]
+# Hidden from the catalog for now. Commented out rather than deleted so it can
+# come back unchanged; anyone who already installed it keeps it and can still
+# update — the catalog only decides what is offered.
+#  - id: devices
+#    name: Devices
+#    description: Test-automation devices — record browser scenarios and replay them with Playwright, with each step linked to its captured traffic.
+#    author: legostin
+#    repo: legostin/trawl-plugin-devices
+#    tags: [testing, browser, playwright, automation]
 
   - id: notifications
     name: Notifications
