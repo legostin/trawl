@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.11.0";
+export const HOST_API_VERSION = "1.12.0";
 
 export interface RegisteredMode {
   id: string;
@@ -33,6 +33,15 @@ export interface FlowAction {
   run(flow: Flow): void;
   /** Stamped by the host at registration; a plugin does not set it. Without it
    *  an uninstalled plugin's buttons stay in the toolbar. */
+  pluginId?: string;
+}
+
+/** A section a plugin renders inside the request-detail card, as its own tab. */
+export interface FlowPanel {
+  id: string;
+  label: string;
+  component: React.ComponentType<{ flow: Flow }>;
+  /** Stamped by the host at registration; a plugin does not set it. */
   pluginId?: string;
 }
 
@@ -312,6 +321,8 @@ export interface TrawlHost {
   registerMode(mode: RegisteredMode): void;
   /** Add an action button to the request-detail toolbar. */
   registerFlowAction(action: FlowAction): void;
+  /** Add a tab to the request-detail card. Requires host API 1.12.0. */
+  registerFlowPanel(panel: FlowPanel): void;
   /** Open a URL in the system's default browser. */
   openUrl(url: string): Promise<void>;
   /** Switch the active top-level mode (e.g. to open this plugin's mode). */

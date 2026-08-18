@@ -3,7 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { load as loadYaml } from "js-yaml";
 import { useLayout } from "./layout";
 import { bus } from "./plugins/bus";
-import { HOST_API_VERSION, type FlowAction, type RegisteredMode } from "./plugins/api";
+import {
+  HOST_API_VERSION,
+  type FlowAction,
+  type FlowPanel,
+  type RegisteredMode,
+} from "./plugins/api";
 
 export { HOST_API_VERSION };
 
@@ -104,6 +109,8 @@ interface PluginsState {
   reloads: number;
   /** Action buttons registered into the request-detail toolbar. */
   flowActions: FlowAction[];
+  /** Panels registered into the request-detail card, one tab each. */
+  flowPanels: FlowPanel[];
   /** pluginId → newer version available in its repo (from the last check). */
   updates: Record<string, string>;
   /** pluginId → newer version that this app can't run yet (needs a newer host API). */
@@ -116,6 +123,8 @@ interface PluginsState {
   registerMode: (mode: RegisteredMode) => void;
   /** Add/replace an action button in the request-detail toolbar. */
   registerFlowAction: (action: FlowAction) => void;
+  /** Add/replace a panel in the request-detail card. */
+  registerFlowPanel: (panel: FlowPanel) => void;
   /** Remove a plugin's registered mode from the UI (hot disable). */
   unregisterMode: (id: string) => void;
   /** Fetch each installed plugin's manifest and record newer versions. */
@@ -129,6 +138,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   modes: [],
   reloads: 0,
   flowActions: [],
+  flowPanels: [],
   updates: {},
   blockedUpdates: {},
   load: async () => set({ installed: await invoke<Plugin[]>("list_plugins") }),
@@ -166,6 +176,12 @@ export const usePlugins = create<PluginsState>((set, get) => ({
       modes: s.modes.some((m) => m.id === mode.id)
         ? s.modes.map((m) => (m.id === mode.id ? mode : m))
         : [...s.modes, mode],
+    })),
+  registerFlowPanel: (panel) =>
+    set((s) => ({
+      flowPanels: s.flowPanels.some((p) => p.id === panel.id)
+        ? s.flowPanels.map((p) => (p.id === panel.id ? panel : p))
+        : [...s.flowPanels, panel],
     })),
   registerFlowAction: (action) =>
     set((s) => ({
@@ -237,6 +253,7 @@ export async function forgetPlugin(id: string): Promise<void> {
       blockedUpdates,
       modes: s.modes.filter((m) => m.id !== id),
       flowActions: s.flowActions.filter((a) => a.pluginId !== id),
+      flowPanels: s.flowPanels.filter((p) => p.pluginId !== id),
     };
   });
   const { clearPluginTools } = await import("./plugins/mcpBridge");

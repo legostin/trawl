@@ -41,6 +41,7 @@ import {
   type EnvVar,
   type EventParam,
   type FlowAction,
+  type FlowPanel,
   type RegisteredMode,
   type RuleDraft,
   type TrawlHost,
@@ -292,6 +293,8 @@ export function makeHost(pluginId: string | null): TrawlHost {
     },
     openUrl: (url: string) => openUrl(url),
     registerMode: (mode: RegisteredMode) => usePlugins.getState().registerMode(mode),
+    registerFlowPanel: (panel: FlowPanel) =>
+      usePlugins.getState().registerFlowPanel({ ...panel, pluginId: pluginId ?? undefined }),
     registerFlowAction: (action: FlowAction) =>
       // Stamped here rather than trusted from the plugin, so removal can find
       // every button a plugin added.

@@ -140,3 +140,27 @@ describe("usePlugins.remove", () => {
     expect(clearPluginTools).toHaveBeenCalledWith("my-plugin");
   });
 });
+
+describe("flow panels", () => {
+  beforeEach(() => usePlugins.setState({ flowPanels: [] }));
+
+  it("registers a panel", () => {
+    const component = () => null;
+    usePlugins.getState().registerFlowPanel({ id: "openapi", label: "OpenAPI", component });
+    expect(usePlugins.getState().flowPanels.map((p) => p.id)).toEqual(["openapi"]);
+  });
+
+  it("replaces a panel with the same id instead of duplicating it", () => {
+    // A plugin reloading its bundle re-registers; two tabs would be a bug.
+    const component = () => null;
+    const state = usePlugins.getState();
+    state.registerFlowPanel({ id: "openapi", label: "OpenAPI", component });
+    state.registerFlowPanel({ id: "openapi", label: "OpenAPI v2", component });
+    expect(usePlugins.getState().flowPanels).toHaveLength(1);
+    expect(usePlugins.getState().flowPanels[0].label).toBe("OpenAPI v2");
+  });
+
+  it("the host API version advertises the panel API", () => {
+    expect(HOST_API_VERSION).toBe("1.12.0");
+  });
+});
