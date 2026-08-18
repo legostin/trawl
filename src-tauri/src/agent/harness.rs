@@ -38,6 +38,34 @@ fn is_executable(p: &std::path::Path) -> bool {
     }
 }
 
+/// Where the usual installers put things, checked only after the PATH.
+const WELL_KNOWN: [&str; 5] = [
+    ".local/bin",
+    ".npm-global/bin",
+    ".bun/bin",
+    ".volta/bin",
+    ".yarn/bin",
+];
+
+/// The PATH first, then the handful of places a harness is normally installed.
+/// The login shell can fail to answer at all — a broken rc file, a minimal
+/// container — and "install it" is the wrong thing to say to someone who
+/// already did.
+pub fn find_anywhere(name: &str, path: &str, home: Option<&std::path::Path>) -> Option<String> {
+    if let Some(hit) = find_on_path(name, path) {
+        return Some(hit);
+    }
+    let home: std::path::PathBuf = match home {
+        Some(h) => h.to_path_buf(),
+        None => std::env::var_os("HOME")?.into(),
+    };
+    WELL_KNOWN
+        .iter()
+        .map(|dir| home.join(dir).join(name))
+        .find(|candidate| is_executable(candidate))
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 /// The PATH a terminal would have, since a GUI app does not inherit one.
 fn search_path() -> String {
     crate::childproc::login_path()
@@ -53,7 +81,7 @@ pub fn agent_harnesses() -> Vec<HarnessAvailability> {
         .map(|(id, label)| HarnessAvailability {
             id,
             label,
-            path: find_on_path(id, &path),
+            path: find_anywhere(id, &path, None),
         })
         .collect()
 }
@@ -74,6 +102,36 @@ mod tests {
         std::fs::write(&p, "#!/bin/sh\n").unwrap();
         let mode = if executable { 0o755 } else { 0o644 };
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn a_harness_outside_the_path_is_still_found_in_a_well_known_place() {
+        // The login shell can fail entirely (a broken rc file, a minimal
+        // container). These are where npm, nvm and the official installers put
+        // things, so looking there beats telling the user to install what they
+        // already have.
+        let home = tmpdir("wellknown");
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        put(&bin, "claude", true);
+        assert_eq!(
+            find_anywhere("claude", "/nowhere", Some(&home)),
+            Some(bin.join("claude").to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn the_path_still_wins_over_a_well_known_place() {
+        let home = tmpdir("pathwins");
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        put(&bin, "codex", true);
+        let on_path = tmpdir("pathwins-path");
+        put(&on_path, "codex", true);
+        assert_eq!(
+            find_anywhere("codex", &on_path.display().to_string(), Some(&home)),
+            Some(on_path.join("codex").to_string_lossy().to_string())
+        );
     }
 
     #[test]
