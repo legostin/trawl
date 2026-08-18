@@ -23,6 +23,7 @@ import { InterceptEditor } from "./InterceptEditor";
 import { BodyViewer } from "./BodyViewer";
 import { EmptyState } from "./EmptyState";
 import { TabBar } from "./ui/tabs";
+import { flowTabs, resolveTab, type FlowTab } from "./flowTabs";
 import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
 import { bodyToText } from "@/lib/body";
@@ -32,7 +33,6 @@ import { CookiesTable } from "./CookiesTable";
 import { bodyLength, formatBytes, durationMs, formatDuration, formatClock } from "@/lib/format";
 import type { Flow } from "@/types";
 
-type Tab = "overview" | "request" | "response" | "timing";
 
 function headerValue(headers: [string, string][], name: string): string | undefined {
   return headers.find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
@@ -87,7 +87,11 @@ export function FlowDetail() {
   const upsertBreakpoint = useBreakpoints((s) => s.upsert);
   const activeId = useProjects((s) => s.activeId);
   const flowActions = usePlugins((s) => s.flowActions);
-  const [tab, setTab] = useState<Tab>("overview");
+  const flowPanels = usePlugins((s) => s.flowPanels);
+  const [tab, setTab] = useState<FlowTab>("overview");
+  const tabs = flowTabs(flowPanels);
+  // A plugin disabled while its tab was open must not leave a blank card.
+  const active = resolveTab(tab, tabs);
 
   const createRule = async (rule: Rule) => {
     await upsertRule({ ...rule, projectId: activeId ?? null });
@@ -191,19 +195,10 @@ export function FlowDetail() {
         <div className="mt-1.5 break-all font-mono text-xs text-muted-foreground">{url}</div>
       </div>
 
-      <TabBar<Tab>
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          { value: "overview", label: "Overview" },
-          { value: "request", label: "Request" },
-          { value: "response", label: "Response" },
-          { value: "timing", label: "Timing" },
-        ]}
-      />
+      <TabBar<FlowTab> value={active} onChange={setTab} tabs={tabs} />
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === "overview" && (
+        {active === "overview" && (
           <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 text-xs">
             <dt className="text-muted-foreground">Method</dt>
             <dd>
@@ -243,11 +238,11 @@ export function FlowDetail() {
           </dl>
         )}
 
-        {tab === "request" && <RequestPanel flow={flow} />}
+        {active === "request" && <RequestPanel flow={flow} />}
 
-        {tab === "response" && <ResponsePanel flow={flow} />}
+        {active === "response" && <ResponsePanel flow={flow} />}
 
-        {tab === "timing" && (
+        {active === "timing" && (
           <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 p-3 font-mono text-xs">
             <dt className="text-muted-foreground">sent</dt>
             <dd>{flow.timings.sent ?? "—"}</dd>
@@ -259,6 +254,19 @@ export function FlowDetail() {
             <dd>{formatDuration(dur)}</dd>
           </dl>
         )}
+
+        {active.startsWith("plugin:") &&
+          (() => {
+            const panel = flowPanels.find((p) => `plugin:${p.id}` === active);
+            if (!panel) return null;
+            // Plugin-supplied and rendered in core chrome: a throw here would
+            // otherwise take the whole window down with it.
+            return (
+              <PluginErrorBoundary key={panel.id} fallback={() => null}>
+                <panel.component flow={flow} />
+              </PluginErrorBoundary>
+            );
+          })()}
       </div>
     </div>
   );
