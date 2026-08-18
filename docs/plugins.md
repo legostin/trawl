@@ -125,6 +125,7 @@ interface TrawlHost {
 
   registerMode(mode): void;        // add a top-level mode + sidebar entry
   registerFlowAction(action): void;// add a button to the request toolbar
+  registerFlowPanel(panel): void;  // add a tab to the request-detail card (1.12.0)
   openUrl(url): Promise<void>;     // open in the system browser
   setMode(id): void;               // switch the active top-level mode
   log(...args): void;              // console log, prefixed [plugin]
@@ -146,6 +147,12 @@ host.registerFlowAction({
   label: "To client",
   icon: MyIcon,
   run: (flow) => { /* ... */ host.setMode("http-client"); },
+});
+
+host.registerFlowPanel({
+  id: "openapi",
+  label: "OpenAPI",                // a tab in the request-detail card (1.12.0)
+  component: ({ flow }) => <MyPanel flow={flow} />,
 });
 ```
 
@@ -354,6 +361,31 @@ Rules:
 - **Capture the host during initialization** (`const host = window.__TRAWL__` at
   the top level of your bundle). That is the object that knows which plugin you
   are; a host read later cannot spawn.
+
+## Request-detail panels
+
+Requires host API `1.12.0`. A panel becomes an extra tab in the request-detail
+card, next to Overview / Request / Response / Timing, and receives the `Flow`
+being viewed:
+
+```ts
+host.registerFlowPanel({
+  id: "openapi",
+  label: "OpenAPI",
+  component: ({ flow }) => <Verdict flow={flow} />,
+});
+```
+
+The tab exists only while the plugin is enabled, and its contents are wrapped in
+an error boundary — a throwing panel loses its own tab, not the window. If the
+active tab belongs to a plugin that is then disabled, the card falls back to
+Overview rather than going blank.
+
+Feature-detect so your plugin still loads on an older app:
+
+```ts
+if (host.registerFlowPanel) host.registerFlowPanel({ /* ... */ });
+```
 
 ## Events
 
