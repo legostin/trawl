@@ -10,6 +10,13 @@ plugins:
     repo: legostin/trawl-plugin-http-client
     tags: [http, client, requests]
 
+  - id: openapi
+    name: OpenAPI
+    description: OpenAPI/Swagger specs inside Trawl — browse them, check captured traffic against them, and act on them with coverage, drift, try-it, mocks and MCP tools.
+    author: legostin
+    repo: legostin/trawl-plugin-openapi
+    tags: [openapi, swagger, schema, coverage]
+
   - id: schema-check
     name: Schema Check
     description: Compare responses of saved/captured requests against reference templates — structural JSON diffs, ignore masks, live traffic checks, and history.
