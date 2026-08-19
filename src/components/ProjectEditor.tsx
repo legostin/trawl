@@ -1,10 +1,61 @@
 import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, X } from "lucide-react";
 import { useProjects, type Project } from "../projects";
 import { Button } from "./ui/button";
 import { EnvList } from "./EnvList";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
+
+/** The repository the agent works in, and how much it may do there. */
+function CodeFolder({
+  dir,
+  write,
+  onChange,
+}: {
+  dir: string | null;
+  write: boolean;
+  onChange: (dir: string | null, write: boolean) => void;
+}) {
+  const pick = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, title: "Project code" });
+    if (typeof picked === "string") onChange(picked, write);
+  };
+
+  return (
+    <section className="mt-4">
+      <h3 className="text-xs font-medium">Agent code folder</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        The built-in agent works in this folder, so it can read the code behind the traffic it
+        sees. Without one it only sees traffic.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void pick()}>
+          {dir ? "Change…" : "Choose folder…"}
+        </Button>
+        {dir && (
+          <>
+            <span className="truncate font-mono text-xs text-muted-foreground" title={dir}>
+              {dir}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => onChange(null, false)}>
+              Clear
+            </Button>
+          </>
+        )}
+      </div>
+      {dir && (
+        <label className="mt-2 flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={write} onChange={(e) => onChange(dir, e.target.checked)} />
+          Let the agent edit files here
+          <span className="text-muted-foreground">
+            — off by default; it can always read. Running commands is never granted.
+          </span>
+        </label>
+      )}
+    </section>
+  );
+}
 
 export function ProjectEditor() {
   const editorOpen = useProjects((s) => s.editorOpen);
@@ -154,6 +205,11 @@ function ProjectForm({
           env={draft.env}
           onChange={(env) => patch({ env })}
           hint="Available in scripts as env.KEY; scripts can also write to them (values persist across requests)."
+        />
+        <CodeFolder
+          dir={draft.codeDir ?? null}
+          write={draft.codeWrite ?? false}
+          onChange={(codeDir, codeWrite) => commit({ codeDir, codeWrite })}
         />
       </div>
     </div>

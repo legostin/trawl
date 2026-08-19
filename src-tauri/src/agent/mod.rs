@@ -37,6 +37,10 @@ impl Session {
 #[derive(Default)]
 pub struct AgentState {
     pub session: Session,
+    /// The folder the running session belongs to. Claude keys its sessions by
+    /// working directory, so changing folders must start a fresh one rather
+    /// than resume someone else's.
+    pub session_cwd: Mutex<Option<String>>,
     /// The turn in flight, so a second send can be refused and an interrupt has
     /// something to kill.
     pub running: Mutex<Option<std::process::Child>>,
@@ -71,6 +75,19 @@ async fn ensure_mcp_running(app: &AppHandle) -> Result<crate::mcp::McpConfig, St
     Ok(cfg)
 }
 
+/// The active project's code folder and whether the agent may write in it.
+///
+/// Read straight from `projects.json` at launch time rather than cached: the
+/// user can change the folder between two messages, and the second one must
+/// land in the new place.
+fn project_workspace(data_dir: &std::path::Path) -> Option<(String, bool)> {
+    let file = crate::projects::load_projects(data_dir).ok()?;
+    let active = file.active_id.as_ref()?;
+    let project = file.projects.iter().find(|p| &p.id == active)?;
+    let dir = project.code_dir.as_ref()?.trim().to_string();
+    (!dir.is_empty()).then_some((dir, project.code_write))
+}
+
 /// Sends one user message and streams the harness's answer as `agent-event`s.
 /// Returns once the process is running; the turn completes in the pump thread.
 #[tauri::command]
@@ -91,13 +108,44 @@ pub async fn agent_send(
 
     // app_data_dir() is what every other module here uses; do not introduce a
     // second location for app state.
-    let dir = crate::commands::data_dir(&app)?.join("agent");
+    let data = crate::commands::data_dir(&app)?;
+    let dir = data.join("agent");
+
+    // The active project may lend the agent its repository. Without one the
+    // agent works in its own folder and sees only traffic, exactly as before.
+    let (cwd, code) = match project_workspace(&data) {
+        Some((path, write)) => {
+            if !std::path::Path::new(&path).is_dir() {
+                return Err(format!(
+                    "the project's code folder is gone: {path}. Pick it again in the project settings."
+                ));
+            }
+            let access = if write {
+                claude::CodeAccess::Write
+            } else {
+                claude::CodeAccess::Read
+            };
+            (path, access)
+        }
+        None => (dir.to_string_lossy().to_string(), claude::CodeAccess::None),
+    };
+
+    // A session belongs to the folder it started in.
+    {
+        let state = app.state::<AgentState>();
+        let mut last = state.session_cwd.lock().unwrap();
+        if last.as_deref() != Some(cwd.as_str()) {
+            state.session.reset();
+            *last = Some(cwd.clone());
+        }
+    }
     let mcp_path = mcp_config::write_mcp_config_file(&dir, cfg.port, &cfg.token)
         .map_err(|e| format!("could not write the MCP config: {e}"))?;
 
     let launch = claude::LaunchConfig {
         resume: app.state::<AgentState>().session.resume_arg(),
-        cwd: dir.to_string_lossy().to_string(),
+        cwd,
+        code,
         mcp_config_path: mcp_path.to_string_lossy().to_string(),
         system_prompt: SYSTEM_PROMPT.to_string(),
     };

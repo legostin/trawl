@@ -1607,6 +1607,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ca_dir);
         let (s, r, l, p, bps, icept, pending) = scripting(vec![]);
         *p.write().unwrap() = Some(crate::projects::Project {
+            code_dir: None,
+            code_write: false,
             id: "p1".into(),
             name: "p1".into(),
             include_hosts: vec!["example.com".into()],
@@ -2863,6 +2865,8 @@ mod tests {
 
     fn project(id: &str, include: &[&str]) -> crate::projects::Project {
         crate::projects::Project {
+            code_dir: None,
+            code_write: false,
             id: id.into(),
             name: id.into(),
             include_hosts: include.iter().map(|s| s.to_string()).collect(),

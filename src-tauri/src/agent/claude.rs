@@ -9,6 +9,42 @@ pub struct LaunchConfig {
     pub cwd: String,
     pub mcp_config_path: String,
     pub system_prompt: String,
+    /// What the agent may do with the files in `cwd`.
+    pub code: CodeAccess,
+}
+
+/// How much of the project's code the agent is trusted with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeAccess {
+    /// No folder is bound: the agent sees traffic and nothing else.
+    #[default]
+    None,
+    /// Read the repository, change nothing.
+    Read,
+    /// Read and edit.
+    Write,
+}
+
+/// The tools the agent is granted.
+///
+/// The Trawl server is named as a server rather than tool by tool: that is what
+/// reaches tools contributed by plugins, which no list kept here would know
+/// about. File tools are added by access level, and a tool outside this list is
+/// refused automatically in non-interactive mode — the limit holds by itself
+/// rather than on the model's good behaviour.
+///
+/// `Bash` is in no list on purpose. A command is not bounded by the working
+/// directory the way a file tool is, and this UI still has no channel to ask
+/// the user about one.
+pub fn allowed_tools(code: CodeAccess) -> String {
+    let mut tools = vec!["mcp__trawl"];
+    if code != CodeAccess::None {
+        tools.extend_from_slice(&["Read", "Grep", "Glob"]);
+    }
+    if code == CodeAccess::Write {
+        tools.extend_from_slice(&["Edit", "Write"]);
+    }
+    tools.join(",")
 }
 
 pub fn build_args(cfg: &LaunchConfig) -> Vec<String> {
@@ -29,13 +65,8 @@ pub fn build_args(cfg: &LaunchConfig) -> Vec<String> {
     args.push("--append-system-prompt".into());
     args.push(cfg.system_prompt.clone());
 
-    // The whole Trawl server, named as a server rather than tool by tool: that
-    // is what reaches tools contributed by plugins, which no list kept here
-    // would know about. Nothing outside it is granted, and that omission is
-    // what keeps the agent off the disk and out of a shell — there is no
-    // approval channel yet to ask for either.
     args.push("--allowedTools".into());
-    args.push("mcp__trawl".into());
+    args.push(allowed_tools(cfg.code));
 
     if let Some(id) = &cfg.resume {
         args.push("--resume".into());
@@ -143,6 +174,33 @@ fn truncate(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn without_a_folder_the_agent_gets_traffic_and_nothing_else() {
+        assert_eq!(allowed_tools(CodeAccess::None), "mcp__trawl");
+    }
+
+    #[test]
+    fn reading_adds_the_tools_that_only_look() {
+        assert_eq!(allowed_tools(CodeAccess::Read), "mcp__trawl,Read,Grep,Glob");
+    }
+
+    #[test]
+    fn writing_adds_the_tools_that_change_files() {
+        assert_eq!(
+            allowed_tools(CodeAccess::Write),
+            "mcp__trawl,Read,Grep,Glob,Edit,Write"
+        );
+    }
+
+    #[test]
+    fn no_level_ever_grants_a_shell() {
+        // A command is not bounded by the working directory, and there is no
+        // way to ask the user about one yet.
+        for level in [CodeAccess::None, CodeAccess::Read, CodeAccess::Write] {
+            assert!(!allowed_tools(level).contains("Bash"), "{level:?} granted Bash");
+        }
+    }
+
     const HELLO: &str = include_str!("fixtures/claude-hello.jsonl");
 
     fn parse_all(s: &str) -> Vec<AgentEvent> {
@@ -221,6 +279,7 @@ mod tests {
 
     fn cfg() -> LaunchConfig {
         LaunchConfig {
+            code: CodeAccess::None,
             resume: None,
             cwd: "/tmp/agent".into(),
             mcp_config_path: "/tmp/agent/mcp.json".into(),

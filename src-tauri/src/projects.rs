@@ -25,6 +25,12 @@ pub struct Project {
     /// Переменные окружения проекта, доступные в скриптах как env.KEY.
     #[serde(default)]
     pub env: Vec<EnvVar>,
+    /// Репозиторий, в котором работает агент. Пусто — агент кода не видит.
+    #[serde(default)]
+    pub code_dir: Option<String>,
+    /// Разрешена ли агенту правка файлов. По умолчанию нет.
+    #[serde(default)]
+    pub code_write: bool,
 }
 
 /// Матч хоста: голый домен ловит сам домен и поддомены; с `*` — как glob.
@@ -205,6 +211,8 @@ mod tests {
 
     fn proj(include: &[&str], exclude: &[&str]) -> Project {
         Project {
+            code_dir: None,
+            code_write: false,
             id: "p1".into(),
             name: "test".into(),
             include_hosts: include.iter().map(|s| s.to_string()).collect(),
@@ -358,6 +366,8 @@ mod tests {
     fn upsert_remove_and_set_active_project() {
         let dir = tempfile::tempdir().unwrap();
         let p = Project {
+            code_dir: None,
+            code_write: false,
             id: "p1".into(), name: "P".into(),
             include_hosts: vec!["example.com".into()],
             exclude_hosts: vec![], env: vec![],

@@ -21,6 +21,10 @@ export interface Project {
   includeHosts: string[];
   excludeHosts: string[];
   env: EnvVar[];
+  /** Repository the built-in agent works in. Empty: it sees traffic only. */
+  codeDir?: string | null;
+  /** Whether the agent may edit files there. Off unless turned on. */
+  codeWrite?: boolean;
 }
 
 /** Mirrors backend host_matches: bare domain also matches subdomains; `*` = glob. */

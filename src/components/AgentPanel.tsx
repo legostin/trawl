@@ -10,6 +10,20 @@ import { Button } from "./ui/button";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { CopyableCommand } from "./CopyableCommand";
 
+/** Where the agent is looking, and how much it may do there. Shown in the
+ *  header so "it was reading the wrong repository" is never a late discovery. */
+function CodeFolderNote() {
+  const active = useProjects((s) => s.projects.find((p) => p.id === s.activeId) ?? null);
+  const dir = active?.codeDir?.trim();
+  if (!dir) return null;
+  const name = dir.split("/").filter(Boolean).pop() ?? dir;
+  return (
+    <span className="truncate text-xs font-normal text-muted-foreground" title={dir}>
+      {name} · {active?.codeWrite ? "can edit" : "read-only"}
+    </span>
+  );
+}
+
 export function AgentPanel() {
   const items = useAgent((s) => s.items);
   const running = useAgent((s) => s.running);
@@ -72,7 +86,10 @@ export function AgentPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col border-l border-border">
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-sm font-medium">
-        <span>Agent</span>
+        <span className="flex items-baseline gap-2">
+          Agent
+          <CodeFolderNote />
+        </span>
         <div className="flex items-center gap-1">
           {running ? (
             <Button variant="ghost" size="sm" onClick={() => void interrupt()}>
