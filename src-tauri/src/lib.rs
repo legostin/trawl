@@ -26,8 +26,56 @@ mod store;
 
 use commands::AppState;
 
+/// How many descriptors the app asks for. A proxy holding a few hundred live
+/// sockets is ordinary; 8192 leaves room for that plus the database, the
+/// config files and whatever a plugin opens, and stays well under macOS's
+/// per-process ceiling (`kern.maxfilesperproc`, 184320 by default).
+const WANTED_FILES: u64 = 8192;
+
+/// Raise the descriptor limit at startup.
+///
+/// launchd hands a GUI app a soft limit of **256**, while a terminal gives it
+/// a million. Trawl's proxy alone holds a couple of hundred sockets, so under
+/// launchd the very next open — the MCP config, the database, a plugin's
+/// file — fails with "Too many open files". The hard limit is unlimited, so
+/// this is ours to raise; it never lowers a limit that is already generous.
+#[cfg(unix)]
+fn raise_file_limit() {
+    unsafe {
+        let mut lim: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return;
+        }
+        let hard = lim.rlim_max;
+        let target = if hard == libc::RLIM_INFINITY {
+            WANTED_FILES as libc::rlim_t
+        } else {
+            std::cmp::min(WANTED_FILES as libc::rlim_t, hard)
+        };
+        if lim.rlim_cur >= target {
+            return;
+        }
+        lim.rlim_cur = target;
+        let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
+    }
+}
+
+#[cfg(unix)]
+fn file_limit() -> u64 {
+    unsafe {
+        let mut lim: libc::rlimit = std::mem::zeroed();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            return 0;
+        }
+        lim.rlim_cur as u64
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(unix)]
+    raise_file_limit();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -168,4 +216,40 @@ pub fn run() {
                 childproc::kill_all(&app.state::<childproc::ProcState>());
             }
         });
+}
+
+
+#[cfg(all(test, unix))]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn the_descriptor_limit_is_raised_from_what_launchd_gives_a_gui_app() {
+        // Reproduce the real condition rather than asserting against a
+        // terminal's generous limit: launchd starts a GUI app at 256, which a
+        // few hundred live proxy sockets exhaust on their own — that is the
+        // "Too many open files" seen only when Trawl is opened from Finder.
+        unsafe {
+            let mut lim: libc::rlimit = std::mem::zeroed();
+            assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim), 0);
+            let restore = lim;
+            lim.rlim_cur = 256;
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &lim), 0);
+            assert_eq!(file_limit(), 256, "the launchd condition did not take");
+
+            raise_file_limit();
+            let raised = file_limit();
+
+            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &restore);
+            assert!(raised >= WANTED_FILES, "soft limit stayed at {raised}");
+        }
+    }
+
+    #[test]
+    fn raising_is_idempotent_and_never_lowers() {
+        raise_file_limit();
+        let first = file_limit();
+        raise_file_limit();
+        assert_eq!(file_limit(), first);
+    }
 }
