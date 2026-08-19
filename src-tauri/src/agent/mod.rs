@@ -102,7 +102,7 @@ pub async fn agent_send(
         system_prompt: SYSTEM_PROMPT.to_string(),
     };
 
-    let mut cmd = Command::new("claude");
+    let mut cmd = Command::new(crate::childproc::resolve_program("claude"));
     cmd.args(claude::build_args(&launch))
         .current_dir(&launch.cwd)
         .stdin(Stdio::piped())

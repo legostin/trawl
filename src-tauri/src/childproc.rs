@@ -146,6 +146,25 @@ pub fn login_path() -> Option<String> {
         .clone()
 }
 
+/// Turn a bare program name into an absolute path.
+///
+/// `Command::new("claude")` resolves the name against the PATH of *this*
+/// process; `cmd.env("PATH", …)` only populates the child's environment and has
+/// no say in that lookup. A GUI app therefore fails to start a program it can
+/// see perfectly well — the "could not start claude: No such file or directory"
+/// people were getting. Resolving here keeps the launcher and the detector
+/// looking in exactly the same places.
+///
+/// A name that is already a path is left alone, and an unknown one is returned
+/// unchanged so the spawn error still names what was asked for.
+pub fn resolve_program(name: &str) -> String {
+    if name.contains('/') {
+        return name.to_string();
+    }
+    let path = login_path().or_else(|| std::env::var("PATH").ok()).unwrap_or_default();
+    crate::agent::harness::find_anywhere(name, &path, None).unwrap_or_else(|| name.to_string())
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -160,7 +179,7 @@ pub fn spawn(
     plugin_id: &str,
     req: SpawnRequest,
 ) -> Result<ProcessInfo> {
-    let mut cmd = Command::new(&req.command);
+    let mut cmd = Command::new(resolve_program(&req.command));
     cmd.args(&req.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -385,6 +404,31 @@ pub fn plugin_kill_processes(state: State<'_, ProcState>, plugin_id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_program_name_is_resolved_to_an_absolute_path() {
+        // `Command::new("claude")` searches the PATH of *this* process, and
+        // `cmd.env("PATH", …)` only sets the child's environment — it does not
+        // change that lookup. A GUI app therefore fails to start a program it
+        // can see perfectly well, which is exactly what "could not start
+        // claude: No such file or directory" was.
+        let resolved = resolve_program("sh");
+        assert!(
+            resolved.starts_with('/'),
+            "expected an absolute path, got {resolved}"
+        );
+    }
+
+    #[test]
+    fn a_path_that_is_already_a_path_is_left_alone() {
+        assert_eq!(resolve_program("/bin/sh"), "/bin/sh");
+        assert_eq!(resolve_program("./local-tool"), "./local-tool");
+    }
+
+    #[test]
+    fn an_unknown_program_is_returned_unchanged_so_the_error_names_it() {
+        assert_eq!(resolve_program("definitely-not-installed-xyz"), "definitely-not-installed-xyz");
+    }
 
     #[test]
     fn login_path_is_resolved_or_absent() {
