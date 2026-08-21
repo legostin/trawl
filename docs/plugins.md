@@ -128,6 +128,7 @@ interface TrawlHost {
   registerFlowPanel(panel): void;  // add a tab to the request-detail card (1.12.0)
   openUrl(url): Promise<void>;     // open in the system browser
   setMode(id): void;               // switch the active top-level mode
+  openFlow(id): void;              // show one captured request (1.14.0)
   log(...args): void;              // console log, prefixed [plugin]
 }
 ```

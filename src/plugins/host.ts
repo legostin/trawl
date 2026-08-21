@@ -301,6 +301,10 @@ export function makeHost(pluginId: string | null): TrawlHost {
       // Stamped here rather than trusted from the plugin, so removal can find
       // every button a plugin added.
       usePlugins.getState().registerFlowAction({ ...action, pluginId: pluginId ?? undefined }),
+    openFlow: (id: number) => {
+      useFlows.getState().select(id);
+      useLayout.getState().setMode("traffic");
+    },
     setMode: (id: string) => useLayout.getState().setMode(id),
     log: (...args) => console.log("[plugin]", ...args),
   };

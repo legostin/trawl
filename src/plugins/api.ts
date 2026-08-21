@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.13.0";
+export const HOST_API_VERSION = "1.14.0";
 
 export interface RegisteredMode {
   id: string;
@@ -341,6 +341,9 @@ export interface TrawlHost {
   openUrl(url: string): Promise<void>;
   /** Switch the active top-level mode (e.g. to open this plugin's mode). */
   setMode(id: string): void;
+  /** Show one captured request: switches to the traffic view and selects it.
+   *  A plugin that lists flows can then lead back to them. Requires 1.14.0. */
+  openFlow(id: number): void;
   log(...args: unknown[]): void;
 }
 
