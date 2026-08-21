@@ -241,6 +241,20 @@ host.util.bodyText(flow.request);   // decoded body text
 host.util.buildCurl(flow);          // cURL string
 ```
 
+`Toolbar` is a row of buttons that survives a narrow window: whatever does not
+fit moves into a "⋯" menu instead of being clipped. Give the ones that must stay
+a higher `priority` (host API 1.13.0):
+
+```ts
+<host.ui.Toolbar
+  items={[
+    { id: "refresh", label: "Refresh", onClick: refresh, priority: 2 },
+    { id: "add", label: "Add spec", onClick: add, priority: 1 },
+    { id: "remove", label: "Remove", onClick: remove },
+  ]}
+/>
+```
+
 Use the themed form components (`Button`, `Input`, `Select`) and badges (`MethodBadge`, `StatusBadge`) to keep plugins styled consistently with the host. `BodyViewer` and `HeadersTable` render request/response bodies and headers respectively; `ScriptEditor` is a Monaco-backed code editor wired to the host's completion setup.
 
 ---

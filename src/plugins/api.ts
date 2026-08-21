@@ -14,7 +14,7 @@ export type { EventInfo, EventMeta, EventParam } from "./bus";
 /** Version of the host↔plugin API this app provides (`window.__TRAWL__.version`).
  *  Bump when the contract below grows; plugin manifests declare the version they
  *  need via `apiVersion`, and the installer refuses plugins that need a newer one. */
-export const HOST_API_VERSION = "1.12.0";
+export const HOST_API_VERSION = "1.13.0";
 
 export interface RegisteredMode {
   id: string;
@@ -86,7 +86,21 @@ export interface TrawlEditor {
 }
 
 /** Reusable host UI components (so plugins render bodies/headers consistently). */
+export interface ToolbarItem {
+  id: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  /** Higher stays visible longer when the row runs out of room. */
+  priority?: number;
+}
+
 export interface TrawlUi {
+  /** A row of buttons that moves what does not fit into a "⋯" menu instead of
+   *  letting it be clipped. Requires host API 1.13.0. */
+  Toolbar: React.ComponentType<{ items: ToolbarItem[]; className?: string }>;
   BodyViewer: React.ComponentType<{ msg: HttpMessage | ResponseMessage | null }>;
   HeadersTable: React.ComponentType<{ headers: [string, string][]; emptyText?: string }>;
   MethodBadge: React.ComponentType<{ method: string; className?: string }>;

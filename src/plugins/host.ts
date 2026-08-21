@@ -25,6 +25,7 @@ import { HeadersTable } from "@/components/HeadersTable";
 import { MethodBadge, StatusBadge } from "@/components/badges";
 import { ScriptEditor } from "@/components/ScriptEditor";
 import { Button } from "@/components/ui/button";
+import { Toolbar } from "@/components/ui/toolbar";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { analyzeJson, fieldsToType } from "@/lib/analyze";
@@ -272,6 +273,7 @@ export function makeHost(pluginId: string | null): TrawlHost {
     dialog: dialogApi(),
     process: processApi(pluginId),
     ui: {
+      Toolbar,
       BodyViewer,
       HeadersTable,
       MethodBadge,

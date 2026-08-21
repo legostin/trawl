@@ -23,6 +23,7 @@ import { InterceptEditor } from "./InterceptEditor";
 import { BodyViewer } from "./BodyViewer";
 import { EmptyState } from "./EmptyState";
 import { TabBar } from "./ui/tabs";
+import { Toolbar } from "./ui/toolbar";
 import { flowTabs, resolveTab, type FlowTab } from "./flowTabs";
 import { Button } from "./ui/button";
 import { buildCurl } from "@/lib/curl";
@@ -134,16 +135,20 @@ export function FlowDetail() {
             <span className="truncate text-xs text-http-red">{flow.error ?? "error"}</span>
           )}
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            {flowActions.map((a) => (
-              // Plugin-supplied, rendered in core chrome: a throwing icon here
-              // would take the window down with it.
-              <PluginErrorBoundary key={a.id} fallback={() => null}>
-                <Button variant="outline" size="sm" title={a.label} onClick={() => a.run(flow)}>
-                  {a.icon && <a.icon />}
-                  {a.label}
-                </Button>
-              </PluginErrorBoundary>
-            ))}
+            {/* Plugin-supplied and rendered in core chrome: a throwing icon
+                here would take the window down with it. The row is a toolbar
+                because these buttons arrive from however many plugins are
+                installed, and three today is six tomorrow. */}
+            <PluginErrorBoundary fallback={() => null}>
+              <Toolbar
+                items={flowActions.map((a) => ({
+                  id: a.id,
+                  label: a.label,
+                  icon: a.icon,
+                  onClick: () => a.run(flow),
+                }))}
+              />
+            </PluginErrorBoundary>
             <ProjectAction host={flow.url.host} />
             <Button
               variant="outline"

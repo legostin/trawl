@@ -160,7 +160,9 @@ describe("flow panels", () => {
     expect(usePlugins.getState().flowPanels[0].label).toBe("OpenAPI v2");
   });
 
-  it("the host API version advertises the panel API", () => {
-    expect(HOST_API_VERSION).toBe("1.12.0");
+  it("the host API version is at least the one that introduced panels", () => {
+    // Pinned to an exact version this broke on every later bump, which says
+    // nothing about panels; what matters is that 1.12.0 has been reached.
+    expect(cmpVersions(HOST_API_VERSION, "1.12.0")).toBeGreaterThanOrEqual(0);
   });
 });
