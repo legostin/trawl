@@ -1,11 +1,44 @@
 import { useEffect, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, X } from "lucide-react";
 import { useProjects, type Project } from "../projects";
 import { Button } from "./ui/button";
 import { EnvList } from "./EnvList";
 import { Input } from "./ui/input";
 import { cn } from "@/lib/utils";
+
+/** Hand this one project to a colleague. Variable values stay behind. */
+function ExportProject({ id, name }: { id: string; name: string }) {
+  const [note, setNote] = useState<string | null>(null);
+
+  const run = async () => {
+    const path = await saveDialog({
+      defaultPath: `${name.replace(/[^\w.-]+/g, "-").toLowerCase() || "project"}.trawl.json`,
+    });
+    if (!path) return;
+    try {
+      await invoke("export_config", { path, projectId: id });
+      setNote(`Written to ${path}`);
+    } catch (e) {
+      setNote(String(e));
+    }
+  };
+
+  return (
+    <section className="mt-4">
+      <h3 className="text-xs font-medium">Share this project</h3>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Its hosts, rules and breakpoints in one file. Variable values stay on this machine —
+        only their names travel.
+      </p>
+      <Button className="mt-2" variant="outline" size="sm" onClick={() => void run()}>
+        Export project…
+      </Button>
+      {note && <p className="mt-2 text-xs text-muted-foreground">{note}</p>}
+    </section>
+  );
+}
 
 /** The repository the agent works in, and how much it may do there. */
 function CodeFolder({
@@ -206,6 +239,7 @@ function ProjectForm({
           onChange={(env) => patch({ env })}
           hint="Available in scripts as env.KEY; scripts can also write to them (values persist across requests)."
         />
+        <ExportProject id={draft.id} name={draft.name} />
         <CodeFolder
           dir={draft.codeDir ?? null}
           write={draft.codeWrite ?? false}

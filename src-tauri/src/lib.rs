@@ -14,6 +14,7 @@ mod mcp;
 mod model;
 mod net;
 mod plugins;
+mod portable;
 mod projects;
 mod proxy;
 mod rules;
@@ -125,6 +126,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             plugins::report_plugin_load,
+            portable::export_config,
+            portable::import_config,
             artifacts::open_artifact,
             artifacts::reveal_artifact,
             agent::harness::agent_harnesses,
