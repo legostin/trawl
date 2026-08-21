@@ -75,7 +75,8 @@ export function Toolbar({ items, className }: { items: ToolbarItem[]; className?
   useLayoutEffect(() => {
     const node = measure.current;
     if (!node) return;
-    setWidths([...node.children].map((c) => (c as HTMLElement).offsetWidth + 8));
+    // gap-1 is 4px, and every button but the first carries one.
+    setWidths([...node.children].map((c, i) => (c as HTMLElement).offsetWidth + (i === 0 ? 0 : 4)));
   }, [signature]);
 
   useEffect(() => {
@@ -119,7 +120,17 @@ export function Toolbar({ items, className }: { items: ToolbarItem[]; className?
   );
 
   return (
-    <div ref={row} className={cn("relative flex min-w-0 items-center gap-1", className)}>
+    // `w-full` and `overflow-hidden` are what make the measurement honest: the
+    // row then reports the width it was *given*, not the width its content
+    // would like. Without them a row that spills past its parent measures as
+    // if it fitted, and the menu appears far too late — or never.
+    <div
+      ref={row}
+      className={cn(
+        "relative flex w-full min-w-0 items-center justify-end gap-1 overflow-hidden",
+        className,
+      )}
+    >
       {/* Off-screen twin: the real row is what the user sees, this is what the
           measurements come from, so hiding a button never changes its width. */}
       <div
