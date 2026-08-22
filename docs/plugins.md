@@ -402,6 +402,27 @@ Feature-detect so your plugin still loads on an older app:
 if (host.registerFlowPanel) host.registerFlowPanel({ /* ... */ });
 ```
 
+## Telling the agent what is on screen
+
+Requires host API `1.15.0`. The built-in agent is given a short block about the
+current screen; a plugin's mode is opaque to the host, so the plugin says its
+own part:
+
+```ts
+host.registerScreenContext(() =>
+  selected ? `spec ${spec.title} · endpoint ${key} · ${stats.calls} calls` : null,
+);
+```
+
+The host **asks** at the moment a message is sent, rather than the plugin
+pushing a value it would have to keep fresh — a pushed one goes stale on the
+first navigation nobody thought about. Return `null` when there is nothing
+worth saying.
+
+Keep it short and cheap: each plugin's contribution is clipped, the whole block
+is capped, the active mode's plugin goes first, and a callback that throws is
+skipped.
+
 ## Events
 
 The bus is symmetric: the host emits app events, and plugins can `emit`/`on`

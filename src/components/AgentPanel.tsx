@@ -6,9 +6,35 @@ import type { ChatItem } from "../agent/chatItems";
 import { useLayout } from "../layout";
 import { useFlows } from "../store";
 import { useProjects } from "../projects";
+import { usePlugins } from "../plugins";
 import { Button } from "./ui/button";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { CopyableCommand } from "./CopyableCommand";
+
+/**
+ * Ask every plugin what it has on screen, the active mode's first.
+ *
+ * Pulled here rather than pushed by the plugins: a value they had to remember
+ * to update would go stale on the first navigation nobody thought about. A
+ * plugin that throws is skipped — its silence is better than a lost message.
+ */
+function collectPluginContexts(mode: string) {
+  const contexts = usePlugins.getState().screenContexts;
+  const ordered = [
+    ...contexts.filter((c) => c.pluginId === mode),
+    ...contexts.filter((c) => c.pluginId !== mode),
+  ];
+  const out: { pluginId: string; text: string }[] = [];
+  for (const { pluginId, describe } of ordered) {
+    try {
+      const text = describe();
+      if (text) out.push({ pluginId, text });
+    } catch {
+      // A plugin's bug must not cost the user their message.
+    }
+  }
+  return out;
+}
 
 /** Where the agent is looking, and how much it may do there. Shown in the
  *  header so "it was reading the wrong repository" is never a late discovery. */
@@ -63,6 +89,7 @@ export function AgentPanel() {
     const context = describeScreen({
       mode,
       view,
+      plugins: collectPluginContexts(mode),
       flowCount: flows.length,
       project: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
       // The oldest flow still in memory is where this session began; anything

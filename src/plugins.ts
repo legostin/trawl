@@ -111,6 +111,8 @@ interface PluginsState {
   flowActions: FlowAction[];
   /** Panels registered into the request-detail card, one tab each. */
   flowPanels: FlowPanel[];
+  /** What each plugin will say about its screen, asked at send time. */
+  screenContexts: { pluginId: string; describe: () => string | null }[];
   /** pluginId → newer version available in its repo (from the last check). */
   updates: Record<string, string>;
   /** pluginId → newer version that this app can't run yet (needs a newer host API). */
@@ -125,6 +127,8 @@ interface PluginsState {
   registerFlowAction: (action: FlowAction) => void;
   /** Add/replace a panel in the request-detail card. */
   registerFlowPanel: (panel: FlowPanel) => void;
+  /** Add/replace what a plugin tells the agent about its screen. */
+  registerScreenContext: (pluginId: string, describe: () => string | null) => void;
   /** Remove a plugin's registered mode from the UI (hot disable). */
   unregisterMode: (id: string) => void;
   /** Fetch each installed plugin's manifest and record newer versions. */
@@ -139,6 +143,7 @@ export const usePlugins = create<PluginsState>((set, get) => ({
   reloads: 0,
   flowActions: [],
   flowPanels: [],
+  screenContexts: [],
   updates: {},
   blockedUpdates: {},
   load: async () => set({ installed: await invoke<Plugin[]>("list_plugins") }),
@@ -176,6 +181,13 @@ export const usePlugins = create<PluginsState>((set, get) => ({
       modes: s.modes.some((m) => m.id === mode.id)
         ? s.modes.map((m) => (m.id === mode.id ? mode : m))
         : [...s.modes, mode],
+    })),
+  registerScreenContext: (pluginId, describe) =>
+    set((st) => ({
+      screenContexts: [
+        ...st.screenContexts.filter((c) => c.pluginId !== pluginId),
+        { pluginId, describe },
+      ],
     })),
   registerFlowPanel: (panel) =>
     set((s) => ({
@@ -254,6 +266,7 @@ export async function forgetPlugin(id: string): Promise<void> {
       modes: s.modes.filter((m) => m.id !== id),
       flowActions: s.flowActions.filter((a) => a.pluginId !== id),
       flowPanels: s.flowPanels.filter((p) => p.pluginId !== id),
+      screenContexts: s.screenContexts.filter((c) => c.pluginId !== id),
     };
   });
   const { clearPluginTools } = await import("./plugins/mcpBridge");

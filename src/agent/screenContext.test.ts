@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-import { describeScreen } from "./screenContext";
+import { PLUGIN_CAP, PLUGINS_TOTAL_CAP, describeScreen } from "./screenContext";
 
 describe("describeScreen", () => {
   it("names the screen even when nothing is selected", () => {
@@ -82,5 +82,58 @@ describe("describeScreen", () => {
     });
     expect(out).toContain("POST https://api.test/slow");
     expect(out).not.toContain("→");
+  });
+});
+
+describe("what plugins add", () => {
+  it("names the plugin beside what it says", () => {
+    const out = describeScreen({
+      mode: "openapi",
+      view: "traffic",
+      selected: null,
+      flowCount: 0,
+      plugins: [{ pluginId: "openapi", text: "endpoint: GET /pet/{petId} · 3 violations" }],
+    });
+    expect(out).toContain("plugin openapi: endpoint: GET /pet/{petId} · 3 violations");
+  });
+
+  it("clips one plugin that says too much", () => {
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 0,
+      plugins: [{ pluginId: "chatty", text: "x".repeat(PLUGIN_CAP + 500) }],
+    });
+    expect(out).toContain("truncated");
+    expect(out.length).toBeLessThan(PLUGIN_CAP + 300);
+  });
+
+  it("stops adding plugins once the block is full, and says which were left out", () => {
+    // The prompt belongs to the user's question, not to whoever registered most.
+    const plugins = Array.from({ length: 8 }, (_, i) => ({
+      pluginId: `p${i}`,
+      text: "y".repeat(PLUGIN_CAP),
+    }));
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 0,
+      plugins,
+    });
+    expect(out).toContain("omitted — the screen block is full");
+    expect(out.length).toBeLessThan(PLUGINS_TOTAL_CAP + 800);
+  });
+
+  it("says nothing at all when no plugin has anything to say", () => {
+    const out = describeScreen({
+      mode: "traffic",
+      view: "traffic",
+      selected: null,
+      flowCount: 0,
+      plugins: [{ pluginId: "quiet", text: "   " }],
+    });
+    expect(out).not.toContain("plugin quiet");
   });
 });
